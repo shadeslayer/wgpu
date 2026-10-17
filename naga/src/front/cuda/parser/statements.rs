@@ -287,22 +287,14 @@ impl<'a> Parser<'a> {
     fn shared_array_size(&mut self) -> Result<(NonZeroU32, Span), ParseError> {
         let token = self.lexer.next()?;
         let invalid = || ParseError {
-            message: String::from("shared array extent must be a positive decimal integer literal"),
+            message: String::from("shared array extent must be a positive integer literal"),
             span: token.span,
         };
         let TokenKind::Number(text) = token.kind else {
             return Err(invalid());
         };
-        let digits = text.strip_suffix(['u', 'U']).unwrap_or(text);
-        if digits.is_empty()
-            || !digits.bytes().all(|byte| byte.is_ascii_digit())
-            || (digits.len() > 1 && digits.starts_with('0'))
-        {
-            return Err(invalid());
-        }
-        let size = digits
-            .parse::<u32>()
-            .ok()
+        let size = number::parse_integer(text)
+            .and_then(|literal| u32::try_from(literal).ok())
             .and_then(NonZeroU32::new)
             .ok_or_else(invalid)?;
         Ok((size, token.span))

@@ -151,9 +151,14 @@ Line and block comments are accepted. Expression nesting, conditional reference
 nesting, and generated expression depth are bounded; line continuations and
 trigraphs are unsupported.
 
-Decimal 32-bit integer literals without a suffix are `int`; the `u`/`U` suffix makes
-them `unsigned int`. Floating literals require the `f`/`F` suffix, such as
-`2.0f`. Arithmetic promotes booleans to `int`; a `float` operand makes the common
+Integer literals support decimal, leading-zero octal, `0x`/`0X` hexadecimal, and
+`0b`/`0B` binary notation. Apostrophes may separate digits, as in `1'000` or
+`0xffff'ffff`. Unsuffixed decimal literals must fit `int`; unsuffixed nondecimal
+literals use `int` when they fit and otherwise `unsigned int`. The `u`/`U` suffix
+selects `unsigned int`. Values requiring more than 32 bits and long or size
+suffixes remain unsupported. Floating literals require the `f`/`F` suffix, such
+as `2.0f`; hexadecimal floats and separators in floating literals are unsupported.
+Arithmetic promotes booleans to `int`; a `float` operand makes the common
 type `float`, and mixed signed/unsigned integer operands use `unsigned int`.
 Assignments and initializers convert to the destination type. C-style casts,
 `static_cast`, and single-token functional casts such as `int(value)` are
@@ -178,7 +183,7 @@ the right operand.
 
 Static `__shared__` declarations support `float`, `int`, and `unsigned int`
 scalars and fixed one-dimensional arrays inside the kernel. Array extents must
-be positive decimal integer literals, optionally suffixed with `u` or `U`.
+be positive integer literals using the same bases, separators, and suffix rules.
 Shared variables become workgroup storage without resource bindings; names obey
 the surrounding block scope, and each workgroup has its own storage. Declarations
 cannot contain initializers, following NVIDIA's

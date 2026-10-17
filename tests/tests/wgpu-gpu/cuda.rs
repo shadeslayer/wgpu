@@ -17,6 +17,7 @@ pub fn all_tests(tests: &mut Vec<GpuTestInitializer>) {
         CUDA_VOID_FUNCTIONS,
         CUDA_CONDITIONALS,
         CUDA_SCALAR_ALIASES,
+        CUDA_INTEGER_LITERALS,
     ]);
 }
 
@@ -716,5 +717,79 @@ static CUDA_SCALAR_ALIASES: GpuTestConfiguration = GpuTestConfiguration::new()
                 [sentinel; 10]
             };
             assert_eq!(values, &expected, "thread {index}");
+        }
+    });
+
+#[apply(gpu_test!)]
+static CUDA_INTEGER_LITERALS: GpuTestConfiguration = GpuTestConfiguration::new()
+    .parameters(TestParameters::default().test_features_limits())
+    .run_async(|ctx| async move {
+        let length = 70u32;
+        let sentinel = 0x1357_9bdfu32;
+        let values = [
+            0,
+            1,
+            2,
+            3,
+            i32::MAX as u32,
+            0x8000_0000,
+            0x8000_0001,
+            u32::MAX,
+        ];
+        let input: [u32; 128] = std::array::from_fn(|index| values[index % values.len()]);
+        let buffers = [
+            buffer(
+                &ctx,
+                bytemuck::cast_slice(&[sentinel; 128 * 18]),
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            ),
+            buffer(
+                &ctx,
+                bytemuck::cast_slice(&input),
+                wgpu::BufferUsages::STORAGE,
+            ),
+            buffer(
+                &ctx,
+                bytemuck::cast_slice(&[length, 0, 0, 0]),
+                wgpu::BufferUsages::UNIFORM,
+            ),
+        ];
+        let result = run_kernel(
+            &ctx,
+            include_str!("../../../naga/tests/in/cuda/integer-literals.cu"),
+            &buffers,
+            0,
+            2,
+        )
+        .await;
+        let actual: &[u32] = bytemuck::cast_slice(&result);
+        for (index, row) in actual.as_chunks::<18>().0.iter().enumerate() {
+            let expected = if index < length as usize {
+                let value = input[index];
+                let shift = value & 3;
+                [
+                    value ^ 0xff,
+                    value & 0xff,
+                    value & 0xf0,
+                    value.wrapping_add(1000),
+                    0x8000_0000u32 >> shift,
+                    (i32::MIN >> shift) as u32,
+                    u32::MAX ^ value,
+                    u32::from(value < 0x8000_0000),
+                    u32::from((value as i32) < i32::MAX),
+                    0x8000_0000u32 >> shift,
+                    value.wrapping_add(255),
+                    value.wrapping_add(28),
+                    value.wrapping_add(15),
+                    u32::MAX.wrapping_sub(value),
+                    0xdead_beef ^ value,
+                    u32::from(i32::MIN < value as i32),
+                    value.wrapping_add(32),
+                    value.wrapping_add(28),
+                ]
+            } else {
+                [sentinel; 18]
+            };
+            assert_eq!(row, &expected, "thread {index}");
         }
     });

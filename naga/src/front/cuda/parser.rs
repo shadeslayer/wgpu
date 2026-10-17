@@ -25,7 +25,7 @@ use crate::{
 
 use super::{
     lexer::{Lexer, TokenKind},
-    Options, ParseError,
+    number, Options, ParseError,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -434,42 +434,11 @@ impl<'a> Parser<'a> {
             message: String::from("unsupported or out-of-range numeric literal"),
             span,
         };
-        let (literal, scalar) = if let Some(body) = text.strip_suffix(['f', 'F']) {
-            if !body.contains(['.', 'e', 'E']) {
-                return Err(invalid());
-            }
-            let value = body.parse::<f32>().map_err(|_| invalid())?;
-            if !value.is_finite() {
-                return Err(invalid());
-            }
-            (Literal::F32(value), Scalar::F32)
-        } else {
-            let (body, unsigned) = match text.strip_suffix(['u', 'U']) {
-                Some(body) => (body, true),
-                None => (text, false),
-            };
-            if body.is_empty()
-                || !body.bytes().all(|byte| byte.is_ascii_digit())
-                || (body.len() > 1 && body.starts_with('0'))
-            {
-                return Err(invalid());
-            }
-            if unsigned {
-                (
-                    Literal::U32(body.parse().map_err(|_| invalid())?),
-                    Scalar::U32,
-                )
-            } else {
-                (
-                    Literal::I32(body.parse().map_err(|_| invalid())?),
-                    Scalar::I32,
-                )
-            }
-        };
+        let literal = number::parse(text).ok_or_else(invalid)?;
         let handle = self.append(Expression::Literal(literal), span)?;
         Ok(Value {
             handle,
-            scalar,
+            scalar: literal.scalar(),
             span,
         })
     }

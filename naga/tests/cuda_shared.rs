@@ -214,7 +214,7 @@ fn cuda_shared_extent_errors_retain_source_spans() {
         "4294967296u",
         "1.0f",
         "size",
-        "010",
+        "08",
     ] {
         let source = format!(
             "__global__ void bad(unsigned int size) {{ __shared__ int values[{extent}]; }}"
@@ -240,7 +240,7 @@ fn cuda_shared_storage_rejects_unsupported_declarations_and_uses() {
         "__shared__ int values[-1];",
         "__shared__ int values[+1];",
         "__shared__ int values[1 + 1];",
-        "__shared__ int values[0x10];",
+        "__shared__ int values[0x];",
         "__shared__ int values[1UL];",
         "__shared__ int first, second;",
         "__shared__ __shared__ int value;",

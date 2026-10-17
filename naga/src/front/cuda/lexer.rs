@@ -171,7 +171,19 @@ fn consume_token(input: &str) -> Result<(TokenKind<'_>, &str), ParseError> {
     {
         let is_number_part = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '_');
         let (mut number, mut rest) = consume_any(input, is_number_part);
-        while (number.ends_with('e') || number.ends_with('E')) && rest.starts_with(['+', '-']) {
+        loop {
+            let exponent_sign = number
+                .strip_suffix(['e', 'E', 'p', 'P'])
+                .is_some_and(|prefix| !prefix.ends_with('\''))
+                && rest.starts_with(['+', '-']);
+            let separator = rest.starts_with('\'')
+                && rest
+                    .as_bytes()
+                    .get(1)
+                    .is_some_and(|c| c.is_ascii_alphanumeric() || *c == b'_');
+            if !exponent_sign && !separator {
+                break;
+            }
             rest = consume_any(&rest[1..], is_number_part).1;
             number = &input[..input.len() - rest.len()];
         }
@@ -228,6 +240,88 @@ mod tests {
             if token.kind == TokenKind::End {
                 return Ok(tokens);
             }
+        }
+    }
+
+    #[test]
+    fn cuda_scanner_integer_separators_remain_inside_preprocessing_numbers() {
+        let source = "1'000 0'77u 0xF'FU 0B1'010 1'0.0f 1'bad";
+        let tokens = lex(source).unwrap();
+        let numbers: alloc::vec::Vec<_> = tokens
+            .iter()
+            .filter_map(|token| match token.kind {
+                TokenKind::Number(text) => {
+                    assert_eq!(&source[token.span.to_range().unwrap()], text);
+                    Some(text)
+                }
+                TokenKind::End => None,
+                other => panic!("unexpected token: {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            numbers,
+            ["1'000", "0'77u", "0xF'FU", "0B1'010", "1'0.0f", "1'bad"]
+        );
+    }
+
+    #[test]
+    fn cuda_scanner_preprocessing_numbers_include_binary_exponent_signs() {
+        for text in [
+            "0x1e+2", "0X1E-2", "0x1p+2f", "0X1P-2F", "1p+2", "1P-2", "1e+2foo", "1e+2p-3",
+        ] {
+            let mut lexer = Lexer::new(text).unwrap();
+            let token = lexer.next().unwrap();
+            assert_eq!(token.kind, TokenKind::Number(text), "{text}");
+            assert_eq!(&text[token.span.to_range().unwrap()], text);
+            assert_eq!(lexer.next().unwrap().kind, TokenKind::End);
+        }
+    }
+
+    #[test]
+    fn cuda_scanner_number_boundaries_preserve_comments_and_operators() {
+        let source = "0x1e/* 漢 */+2 0x1f+3 1e-2f-4 0b1<<2";
+        let kinds: alloc::vec::Vec<_> = lex(source)
+            .unwrap()
+            .iter()
+            .map(|token| token.kind)
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                TokenKind::Number("0x1e"),
+                TokenKind::Symbol('+'),
+                TokenKind::Number("2"),
+                TokenKind::Number("0x1f"),
+                TokenKind::Symbol('+'),
+                TokenKind::Number("3"),
+                TokenKind::Number("1e-2f"),
+                TokenKind::Symbol('-'),
+                TokenKind::Number("4"),
+                TokenKind::Number("0b1"),
+                TokenKind::Operator("<<"),
+                TokenKind::Number("2"),
+                TokenKind::End,
+            ]
+        );
+    }
+
+    #[test]
+    fn cuda_scanner_quoted_exponent_digits_do_not_join_following_signs() {
+        for (source, number, operator) in [("0x1'e+2", "0x1'e", '+'), ("0x1'E-2", "0x1'E", '-')] {
+            let tokens = lex(source).unwrap();
+            assert_eq!(
+                tokens
+                    .iter()
+                    .map(|token| token.kind)
+                    .collect::<alloc::vec::Vec<_>>(),
+                [
+                    TokenKind::Number(number),
+                    TokenKind::Symbol(operator),
+                    TokenKind::Number("2"),
+                    TokenKind::End
+                ]
+            );
+            assert_eq!(&source[tokens[0].span.to_range().unwrap()], number);
         }
     }
 

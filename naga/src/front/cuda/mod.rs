@@ -3,6 +3,7 @@
 use alloc::string::String;
 
 mod lexer;
+mod number;
 mod parser;
 
 /// Options supplied by the CUDA kernel's launch configuration.

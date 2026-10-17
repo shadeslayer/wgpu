@@ -110,7 +110,7 @@ fn cuda_rejects_unsupported_or_invalid_source() {
         "__global__ void bad(unsigned int *out) { out[0.5f] = 1u; }",
         "__global__ void bad(unsigned int *out) { out[0] = threadIdx.x ? 1u 2u; }",
         "__global__ void bad(unsigned int *out) { out[0] = 4294967296u; }",
-        "__global__ void bad(unsigned int *out) { out[0] = 01u; }",
+        "__global__ void bad(unsigned int *out) { out[0] = 08u; }",
         "__global__ void bad(unsigned int *out) { switch (threadIdx.x) { case 0: out[0] = 1u; } }",
         "__global__ void bad(unsigned int *out) { out[0] = atomicAdd(out, 1u); }",
         "__global__ void bad(unsigned int *out) { return 1u; }",
