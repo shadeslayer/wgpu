@@ -165,7 +165,7 @@ fn cuda_scalar_parameters_reject_unsupported_forms() {
         "__global__ void bad(double value) {}",
         "__global__ void bad(int value = 1) {}",
         "__global__ void bad(const int const value) {}",
-        "__global__ void bad(int value) { value = 1u; }",
+        "__global__ void bad(int value) { value = 1.0; }",
         "__global__ void bad(int value) { int x = value[0]; }",
     ] {
         assert!(parse_str(source, &Options::default()).is_err(), "{source}");

@@ -1,5 +1,6 @@
 use alloc::{format, string::String, vec::Vec};
 
+mod conversions;
 mod expressions;
 mod statements;
 
@@ -395,6 +396,7 @@ impl<'a> Parser<'a> {
     ) -> Result<Handle<Expression>, ParseError> {
         let depth = match expression {
             Expression::Unary { expr: operand, .. }
+            | Expression::As { expr: operand, .. }
             | Expression::AccessIndex { base: operand, .. }
             | Expression::Load { pointer: operand } => {
                 self.expression_graph_depths[operand.index()] + 1

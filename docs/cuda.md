@@ -75,7 +75,7 @@ as 32-bit values at byte offsets 0, 4, and 8. The library equivalent is
 ## Source subset
 
 Supported expressions include indexed buffer reads, initialized scalar locals,
-parentheses, same-type arithmetic and comparisons, and the logical operators
+parentheses, arithmetic and comparisons with scalar conversions, and the logical operators
 `!`, `&&`, and `||`. Logical operators preserve short-circuit evaluation. Numeric
 conditions are false when equal to zero; boolean locals and `true`/`false`
 literals are supported.
@@ -89,8 +89,12 @@ depth are bounded; line continuations and trigraphs are unsupported.
 
 Decimal integer literals without a suffix are `int`; the `u`/`U` suffix makes
 them `unsigned int`. Floating literals require the `f`/`F` suffix, such as
-`2.0f`. Implicit numeric conversions are not implemented: mixed-type arithmetic
-and assignments produce errors. Use matching types in this initial subset.
+`2.0f`. Arithmetic promotes booleans to `int`; a `float` operand makes the common
+type `float`, and mixed signed/unsigned integer operands use `unsigned int`.
+Assignments and initializers convert to the destination type. C-style casts,
+`static_cast`, and single-token functional casts such as `int(value)` are
+supported for these scalar types. Float-to-integer conversions truncate toward
+zero within the destination range; unsigned negation wraps modulo 2^32.
 
 Unsupported syntax produces a parse error with a source span. This includes
 preprocessor directives and includes, host code and launch syntax,
@@ -101,8 +105,7 @@ and inline PTX. No CUDA runtime ABI or NVIDIA device code is generated.
 ## Further increments
 
 Add each capability with a failing acceptance test and rejection tests before
-changing the parser or lowering. Useful next increments are numeric conversions,
-explicit casts, loops,
+changing the parser or lowering. Useful next increments are loops,
 device functions, shared storage and barriers. Each increment must preserve
 validation and backend compatibility; CUDA-specific features need an explicit
 portable representation or an unsupported-feature diagnostic.

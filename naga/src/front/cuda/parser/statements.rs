@@ -116,17 +116,7 @@ impl<'a> Parser<'a> {
         }
         self.expect_symbol('=')?;
         let value = self.expression(0)?;
-        let value = if scalar == Scalar::BOOL {
-            self.truthy(value)?
-        } else {
-            value
-        };
-        if value.scalar != scalar {
-            return Err(ParseError {
-                message: String::from("assignment requires matching scalar types"),
-                span: value.span,
-            });
-        }
+        let value = self.convert_value(value, scalar)?;
         let end = self.expect_symbol(';')?;
         self.function.body.push(
             Statement::Store {
@@ -146,17 +136,7 @@ impl<'a> Parser<'a> {
         self.check_name(name, span)?;
         self.expect_symbol('=')?;
         let value = self.expression(0)?;
-        let value = if scalar == Scalar::BOOL {
-            self.truthy(value)?
-        } else {
-            value
-        };
-        if value.scalar != scalar {
-            return Err(ParseError {
-                message: String::from("initializer requires a matching scalar type"),
-                span: value.span,
-            });
-        }
+        let value = self.convert_value(value, scalar)?;
         let end = self.expect_symbol(';')?;
         let ty = self.scalar_handle(scalar, span);
         let local = self.function.local_variables.append(

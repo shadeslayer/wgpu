@@ -4,7 +4,11 @@ use wgpu_test::{
 };
 
 pub fn all_tests(tests: &mut Vec<GpuTestInitializer>) {
-    tests.extend([CUDA_SCALAR_PARAMETER, CUDA_GUARDED_VECTOR_ADD]);
+    tests.extend([
+        CUDA_SCALAR_PARAMETER,
+        CUDA_GUARDED_VECTOR_ADD,
+        CUDA_NUMERIC_CONVERSIONS,
+    ]);
 }
 
 fn buffer(ctx: &TestingContext, contents: &[u8], usage: wgpu::BufferUsages) -> wgpu::Buffer {
@@ -169,5 +173,42 @@ static CUDA_GUARDED_VECTOR_ADD: GpuTestConfiguration = GpuTestConfiguration::new
                 sentinel
             };
             assert_eq!(value, expected, "element {index}");
+        }
+    });
+
+#[apply(gpu_test!)]
+static CUDA_NUMERIC_CONVERSIONS: GpuTestConfiguration = GpuTestConfiguration::new()
+    .parameters(TestParameters::default().test_features_limits())
+    .run_async(|ctx| async move {
+        let buffers = [buffer(
+            &ctx,
+            bytemuck::cast_slice(&[99u32; 64 * 8]),
+            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+        )];
+        let result = run_kernel(
+            &ctx,
+            "__global__ void conversions(unsigned int *out) {
+                unsigned int base = threadIdx.x * 8u;
+                out[base + 0u] = -1u;
+                out[base + 1u] = true + true;
+                out[base + 2u] = unsigned(-3 < 1u);
+                out[base + 3u] = static_cast<unsigned int>((float)7 / 2);
+                out[base + 4u] = unsigned((int)3.75f + 2);
+                out[base + 5u] = bool(-0.5f);
+                out[base + 6u] = (int)-2.75f + 10u;
+                out[base + 7u] = float(3u) + 0.75f;
+            }",
+            &buffers,
+            0,
+            1,
+        )
+        .await;
+        let actual: &[u32] = bytemuck::cast_slice(&result);
+        for (invocation, values) in actual.chunks_exact(8).enumerate() {
+            assert_eq!(
+                values,
+                &[u32::MAX, 2, 0, 3, 5, 1, 8, 3],
+                "thread {invocation}"
+            );
         }
     });

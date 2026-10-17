@@ -41,21 +41,9 @@ impl Parser<'_> {
                 continue;
             }
             let right = self.expression(precedence + 1)?;
-            if left.scalar != right.scalar {
-                return Err(ParseError {
-                    message: String::from("binary operands require matching scalar types"),
-                    span: left.span.until(&right.span),
-                });
-            }
+            let (converted_left, right) = self.usual_arithmetic(left, right)?;
+            left = converted_left;
             let span = left.span.until(&right.span);
-            if left.scalar == Scalar::BOOL
-                && !matches!(operator, BinaryOperator::Equal | BinaryOperator::NotEqual)
-            {
-                return Err(ParseError {
-                    message: String::from("this operator requires numeric operands"),
-                    span,
-                });
-            }
             let scalar = match operator {
                 BinaryOperator::Equal
                 | BinaryOperator::NotEqual
@@ -85,6 +73,20 @@ impl Parser<'_> {
     fn primary(&mut self) -> Result<Value, ParseError> {
         let token = self.current();
         if self.take_symbol('(') {
+            let start = self.position;
+            if matches!(
+                self.current().kind,
+                TokenKind::Ident("const" | "bool" | "int" | "unsigned" | "float")
+            ) {
+                let target = self.cast_type()?;
+                if self.take_symbol(')') {
+                    let value = self.expression(7)?;
+                    let mut value = self.convert_value(value, target)?;
+                    value.span = token.span.until(&value.span);
+                    return Ok(value);
+                }
+                self.position = start;
+            }
             let value = self.expression(0)?;
             self.expect_symbol(')')?;
             return Ok(value);
@@ -107,29 +109,25 @@ impl Parser<'_> {
                     span,
                 });
             }
-            if value.scalar == Scalar::BOOL {
-                return Err(ParseError {
-                    message: String::from("unary arithmetic requires a numeric operand"),
-                    span: token.span.until(&value.span),
-                });
-            }
+            let value = self.promote_integral(value)?;
             if token.kind == TokenKind::Symbol('+') {
                 return Ok(value);
             }
-            if value.scalar.kind == ScalarKind::Uint {
-                return Err(ParseError {
-                    message: String::from("unsigned negation is unsupported"),
-                    span: token.span.until(&value.span),
-                });
-            }
             let span = token.span.until(&value.span);
-            let handle = self.append(
+            let expression = if value.scalar == Scalar::U32 {
+                let zero = self.append(Expression::Literal(Literal::U32(0)), span)?;
+                Expression::Binary {
+                    op: BinaryOperator::Subtract,
+                    left: zero,
+                    right: value.handle,
+                }
+            } else {
                 Expression::Unary {
                     op: UnaryOperator::Negate,
                     expr: value.handle,
-                },
-                span,
-            )?;
+                }
+            };
+            let handle = self.append(expression, span)?;
             return Ok(Value {
                 handle,
                 scalar: value.scalar,
@@ -143,6 +141,32 @@ impl Parser<'_> {
             }
             TokenKind::Ident(name) => {
                 self.advance();
+                if name == "static_cast" {
+                    self.expect_symbol('<')?;
+                    let target = self.cast_type()?;
+                    self.expect_symbol('>')?;
+                    self.expect_symbol('(')?;
+                    let value = self.expression(0)?;
+                    let end = self.expect_symbol(')')?;
+                    let mut value = self.convert_value(value, target)?;
+                    value.span = token.span.until(&end);
+                    return Ok(value);
+                }
+                let functional_target = match name {
+                    "bool" => Some(Scalar::BOOL),
+                    "int" => Some(Scalar::I32),
+                    "unsigned" => Some(Scalar::U32),
+                    "float" => Some(Scalar::F32),
+                    _ => None,
+                };
+                if let Some(target) = functional_target {
+                    self.expect_symbol('(')?;
+                    let value = self.expression(0)?;
+                    let end = self.expect_symbol(')')?;
+                    let mut value = self.convert_value(value, target)?;
+                    value.span = token.span.until(&end);
+                    return Ok(value);
+                }
                 if matches!(name, "true" | "false") {
                     let handle = self.append(
                         Expression::Literal(Literal::Bool(name == "true")),
