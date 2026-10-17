@@ -1,4 +1,4 @@
-use alloc::{format, string::String, vec::Vec};
+use alloc::{format, string::String};
 
 use crate::{front::consume_any, Span};
 
@@ -93,11 +93,10 @@ impl<'a> Lexer<'a> {
     }
 
     pub(super) fn expect_span(&mut self, expected: TokenKind<'_>) -> Result<Span, ParseError> {
-        let token = self.peek()?;
-        if self.next_if(expected)? {
+        let token = self.next()?;
+        if token.kind == expected {
             return Ok(token.span);
         }
-        self.next()?;
         let message = match expected {
             TokenKind::Ident(text) | TokenKind::Operator(text) => format!("expected `{text}`"),
             TokenKind::Symbol(symbol) => format!("expected `{symbol}`"),
@@ -217,23 +216,21 @@ fn consume_token(input: &str) -> Result<(TokenKind<'_>, &str), ParseError> {
     })
 }
 
-pub(super) fn lex(source: &str) -> Result<Vec<Token<'_>>, ParseError> {
-    let mut lexer = Lexer::new(source)?;
-    let mut tokens = Vec::new();
-    loop {
-        let token = lexer.peek()?;
-        if token.kind == TokenKind::End {
-            lexer.expect_span(TokenKind::End)?;
-            tokens.push(token);
-            return Ok(tokens);
-        }
-        tokens.push(lexer.next()?);
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{lex, Lexer, TokenKind};
+    use super::{Lexer, ParseError, Token, TokenKind};
+
+    fn lex(source: &str) -> Result<alloc::vec::Vec<Token<'_>>, ParseError> {
+        let mut lexer = Lexer::new(source)?;
+        let mut tokens = alloc::vec::Vec::new();
+        loop {
+            let token = lexer.next()?;
+            tokens.push(token);
+            if token.kind == TokenKind::End {
+                return Ok(tokens);
+            }
+        }
+    }
 
     #[test]
     fn cuda_scanner_is_lazy_and_repeats_lexical_errors() {

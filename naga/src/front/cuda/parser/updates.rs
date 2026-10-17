@@ -38,7 +38,7 @@ impl Parser<'_> {
         operator: Option<BinaryOperator>,
     ) -> Result<Value, ParseError> {
         let lvalue = self.mutable_lvalue(left)?;
-        self.advance();
+        self.lexer.next()?;
         let left_body = core::mem::take(&mut self.function.body);
         let right = self.expression(0)?;
         let right = self.rvalue(right)?;

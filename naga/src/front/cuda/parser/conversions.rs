@@ -144,7 +144,7 @@ impl Parser<'_> {
     }
 
     pub(super) fn cast_type(&mut self) -> Result<Scalar, ParseError> {
-        let is_const = self.take_ident("const");
+        let is_const = self.take_ident("const")?;
         let scalar = self.scalar_type()?;
         self.const_suffix(is_const)?;
         Ok(scalar)

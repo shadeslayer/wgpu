@@ -43,8 +43,8 @@ impl Parser<'_> {
         self.expect_symbol('(')?;
         self.symbol_table.push_scope();
         let parent = core::mem::take(&mut self.function.body);
-        if !self.take_symbol(';') {
-            if self.starts_declaration() {
+        if !self.take_symbol(';')? {
+            if self.starts_declaration()? {
                 self.local_declaration()?;
             } else {
                 self.expression(0)?;
@@ -52,18 +52,18 @@ impl Parser<'_> {
             }
         }
         let mut init = core::mem::take(&mut self.function.body);
-        if !self.take_symbol(';') {
+        if !self.take_symbol(';')? {
             self.loop_condition()?;
             self.expect_symbol(';')?;
         }
         let mut body = core::mem::take(&mut self.function.body);
-        if !self.take_symbol(')') {
+        if !self.take_symbol(')')? {
             self.expression(0)?;
             self.expect_symbol(')')?;
         }
         let continuing = core::mem::take(&mut self.function.body);
         self.loop_depth += 1;
-        let result = if self.take_symbol('{') {
+        let result = if self.take_symbol('{')? {
             self.block_contents()
         } else {
             self.statement()

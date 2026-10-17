@@ -49,5 +49,5 @@ pub fn parse_str(source: &str, options: &Options) -> Result<crate::Module, Parse
             span: crate::Span::UNDEFINED,
         });
     }
-    parser::Parser::new(lexer::lex(source)?, options).parse()
+    parser::Parser::new(lexer::Lexer::new(source)?, options).parse()
 }

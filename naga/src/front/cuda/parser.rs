@@ -14,7 +14,7 @@ use crate::{
 };
 
 use super::{
-    lexer::{Token, TokenKind},
+    lexer::{Lexer, TokenKind},
     Options, ParseError,
 };
 
@@ -47,8 +47,7 @@ struct Value {
 }
 
 pub(super) struct Parser<'a> {
-    tokens: Vec<Token<'a>>,
-    position: usize,
+    lexer: Lexer<'a>,
     module: Module,
     function: Function,
     symbol_table: SymbolTable<&'a str, Symbol>,
@@ -61,10 +60,9 @@ pub(super) struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
-    pub fn new(tokens: Vec<Token<'a>>, options: &Options) -> Self {
+    pub fn new(lexer: Lexer<'a>, options: &Options) -> Self {
         Self {
-            tokens,
-            position: 0,
+            lexer,
             module: Module::default(),
             function: Function::default(),
             symbol_table: SymbolTable::default(),
@@ -78,24 +76,24 @@ impl<'a> Parser<'a> {
     }
 
     pub fn parse(mut self) -> Result<Module, ParseError> {
-        if self.take_ident("extern") {
-            if self.current().kind != TokenKind::String("C") {
-                return Err(self.error("expected `\"C\"` after `extern`"));
+        if self.take_ident("extern")? {
+            if self.lexer.peek()?.kind != TokenKind::String("C") {
+                return self.fail("expected `\"C\"` after `extern`");
             }
-            self.advance();
+            self.lexer.next()?;
         }
         self.expect_ident("__global__")?;
         self.expect_ident("void")?;
         let (name, name_span) = self.identifier()?;
         self.check_name(name, name_span)?;
         self.expect_symbol('(')?;
-        if !self.take_symbol(')') {
-            if self.take_ident("void") {
+        if !self.take_symbol(')')? {
+            if self.take_ident("void")? {
                 self.expect_symbol(')')?;
             } else {
                 loop {
                     self.parameter()?;
-                    if self.take_symbol(')') {
+                    if self.take_symbol(')')? {
                         break;
                     }
                     self.expect_symbol(',')?;
@@ -104,8 +102,8 @@ impl<'a> Parser<'a> {
         }
         self.expect_symbol('{')?;
         self.block_contents()?;
-        if self.current().kind != TokenKind::End {
-            return Err(self.error("only one CUDA kernel is supported"));
+        if self.lexer.peek()?.kind != TokenKind::End {
+            return self.fail("only one CUDA kernel is supported");
         }
         self.module.entry_points.push(EntryPoint {
             name: String::from(name),
@@ -122,13 +120,13 @@ impl<'a> Parser<'a> {
     }
 
     fn parameter(&mut self) -> Result<(), ParseError> {
-        let is_const = self.take_ident("const");
+        let is_const = self.take_ident("const")?;
         let scalar = self.scalar_type()?;
         let is_const = self.const_suffix(is_const)?;
         if scalar == Scalar::BOOL {
-            return Err(self.error("boolean kernel parameters are unsupported"));
+            return self.fail("boolean kernel parameters are unsupported");
         }
-        let is_pointer = self.take_symbol('*');
+        let is_pointer = self.take_symbol('*')?;
         let (name, span) = self.identifier()?;
         self.check_name(name, span)?;
         if !is_pointer {
@@ -368,23 +366,23 @@ impl<'a> Parser<'a> {
     }
 
     fn scalar_type(&mut self) -> Result<Scalar, ParseError> {
-        if self.take_ident("bool") {
+        if self.take_ident("bool")? {
             Ok(Scalar::BOOL)
-        } else if self.take_ident("float") {
+        } else if self.take_ident("float")? {
             Ok(Scalar::F32)
-        } else if self.take_ident("int") {
+        } else if self.take_ident("int")? {
             Ok(Scalar::I32)
-        } else if self.take_ident("unsigned") {
-            self.take_ident("int");
+        } else if self.take_ident("unsigned")? {
+            self.take_ident("int")?;
             Ok(Scalar::U32)
         } else {
-            Err(self.error("expected `float`, `int`, or `unsigned int`"))
+            self.fail("expected `float`, `int`, or `unsigned int`")
         }
     }
 
     fn const_suffix(&mut self, prefix: bool) -> Result<bool, ParseError> {
-        let span = self.current().span;
-        let suffix = self.take_ident("const");
+        let span = self.lexer.peek()?.span;
+        let suffix = self.take_ident("const")?;
         if prefix && suffix {
             Err(ParseError {
                 message: String::from("duplicate const qualifier"),
@@ -586,65 +584,39 @@ impl<'a> Parser<'a> {
         self.symbol_table.lookup(name).copied()
     }
 
-    fn current(&self) -> Token<'a> {
-        self.tokens[self.position]
-    }
-
-    fn advance(&mut self) {
-        if self.current().kind != TokenKind::End {
-            self.position += 1;
-        }
-    }
-
-    fn take_symbol(&mut self, symbol: char) -> bool {
-        if self.current().kind == TokenKind::Symbol(symbol) {
-            self.advance();
-            true
-        } else {
-            false
-        }
+    fn take_symbol(&mut self, symbol: char) -> Result<bool, ParseError> {
+        self.lexer.next_if(TokenKind::Symbol(symbol))
     }
 
     fn expect_symbol(&mut self, symbol: char) -> Result<Span, ParseError> {
-        let span = self.current().span;
-        if self.take_symbol(symbol) {
-            Ok(span)
-        } else {
-            Err(self.error(&format!("expected `{symbol}`")))
-        }
+        self.lexer.expect_span(TokenKind::Symbol(symbol))
     }
 
-    fn take_ident(&mut self, identifier: &str) -> bool {
-        if self.current().kind == TokenKind::Ident(identifier) {
-            self.advance();
-            true
-        } else {
-            false
-        }
+    fn take_ident(&mut self, identifier: &str) -> Result<bool, ParseError> {
+        self.lexer.next_if(TokenKind::Ident(identifier))
     }
 
     fn expect_ident(&mut self, identifier: &str) -> Result<(), ParseError> {
-        if self.take_ident(identifier) {
-            Ok(())
-        } else {
-            Err(self.error(&format!("expected `{identifier}`")))
-        }
+        self.lexer.expect_span(TokenKind::Ident(identifier))?;
+        Ok(())
     }
 
     fn identifier(&mut self) -> Result<(&'a str, Span), ParseError> {
-        let token = self.current();
+        let token = self.lexer.next()?;
         if let TokenKind::Ident(name) = token.kind {
-            self.advance();
             Ok((name, token.span))
         } else {
-            Err(self.error("expected an identifier"))
+            Err(ParseError {
+                message: String::from("expected an identifier"),
+                span: token.span,
+            })
         }
     }
 
-    fn error(&self, message: &str) -> ParseError {
-        ParseError {
+    fn fail<T>(&mut self, message: &str) -> Result<T, ParseError> {
+        Err(ParseError {
             message: String::from(message),
-            span: self.current().span,
-        }
+            span: self.lexer.peek()?.span,
+        })
     }
 }
