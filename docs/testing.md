@@ -96,7 +96,8 @@ The CLI integration tests live in `naga-cli/tests/cuda.rs` and run with
 `cargo nextest run -p naga-cli --test cuda`.
 
 GPU tests in `tests/tests/wgpu-gpu/cuda.rs` run generated WGSL through the available
-backends and check scalar uniform parameters and guarded vector addition. Run
+backends and check scalar uniform parameters, guarded vector addition, numeric
+conversions, and loop execution. Run
 them with `cargo xtask test -E 'binary(wgpu-gpu) & test(wgpu_gpu::cuda)'`.
 
 ## `naga` Example Tests

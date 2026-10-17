@@ -2,6 +2,7 @@ use alloc::{format, string::String, vec::Vec};
 
 mod conversions;
 mod expressions;
+mod loops;
 mod statements;
 mod updates;
 
@@ -52,6 +53,7 @@ pub(super) struct Parser<'a> {
     function: Function,
     scopes: Vec<FastHashMap<&'a str, Symbol>>,
     statement_depth: u32,
+    loop_depth: u32,
     builtin_arguments: [Option<Handle<Expression>>; 3],
     workgroup_size: [u32; 3],
     expression_depth: u32,
@@ -67,6 +69,7 @@ impl<'a> Parser<'a> {
             function: Function::default(),
             scopes: alloc::vec![FastHashMap::default()],
             statement_depth: 0,
+            loop_depth: 0,
             builtin_arguments: [None; 3],
             workgroup_size: options.workgroup_size,
             expression_depth: 0,

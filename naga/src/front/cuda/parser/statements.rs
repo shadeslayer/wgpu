@@ -19,7 +19,7 @@ impl<'a> Parser<'a> {
         Ok(terminated)
     }
 
-    fn scoped_statement(&mut self) -> Result<(crate::Block, bool), ParseError> {
+    pub(super) fn scoped_statement(&mut self) -> Result<(crate::Block, bool), ParseError> {
         let compound = self.take_symbol('{');
         self.scopes.push(FastHashMap::default());
         let parent = core::mem::take(&mut self.function.body);
@@ -33,7 +33,7 @@ impl<'a> Parser<'a> {
         result.map(|terminated| (body, terminated))
     }
 
-    fn statement(&mut self) -> Result<bool, ParseError> {
+    pub(super) fn statement(&mut self) -> Result<bool, ParseError> {
         self.statement_depth += 1;
         if self.statement_depth > 64 {
             return Err(self.error("CUDA statement nesting limit exceeded"));
@@ -81,6 +81,34 @@ impl<'a> Parser<'a> {
                 .push(Statement::Return { value: None }, start.until(&end));
             return Ok(true);
         }
+        if self.take_ident("for") {
+            self.for_loop(start)?;
+            return Ok(false);
+        }
+        if self.take_ident("while") {
+            self.while_loop(start)?;
+            return Ok(false);
+        }
+        if self.take_ident("do") {
+            self.do_loop(start)?;
+            return Ok(false);
+        }
+        if self.take_ident("break") || self.take_ident("continue") {
+            if self.loop_depth == 0 {
+                return Err(ParseError {
+                    message: String::from("jump requires an enclosing loop"),
+                    span: start,
+                });
+            }
+            let statement = if self.tokens[self.position - 1].kind == TokenKind::Ident("break") {
+                Statement::Break
+            } else {
+                Statement::Continue
+            };
+            let end = self.expect_symbol(';')?;
+            self.function.body.push(statement, start.until(&end));
+            return Ok(true);
+        }
         if self.starts_declaration() {
             self.local_declaration()?;
             return Ok(false);
@@ -90,14 +118,14 @@ impl<'a> Parser<'a> {
         Ok(false)
     }
 
-    fn starts_declaration(&self) -> bool {
+    pub(super) fn starts_declaration(&self) -> bool {
         matches!(
             self.current().kind,
             TokenKind::Ident("const" | "bool" | "float" | "int" | "unsigned")
         ) && self.tokens[self.position + 1].kind != TokenKind::Symbol('(')
     }
 
-    fn local_declaration(&mut self) -> Result<(), ParseError> {
+    pub(super) fn local_declaration(&mut self) -> Result<(), ParseError> {
         let is_const = self.take_ident("const");
         let scalar = self.scalar_type()?;
         let is_const = self.const_suffix(is_const)?;

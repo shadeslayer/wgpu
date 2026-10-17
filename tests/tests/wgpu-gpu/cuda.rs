@@ -8,6 +8,7 @@ pub fn all_tests(tests: &mut Vec<GpuTestInitializer>) {
         CUDA_SCALAR_PARAMETER,
         CUDA_GUARDED_VECTOR_ADD,
         CUDA_NUMERIC_CONVERSIONS,
+        CUDA_LOOPS,
         CUDA_UPDATES,
     ]);
 }
@@ -209,6 +210,82 @@ static CUDA_NUMERIC_CONVERSIONS: GpuTestConfiguration = GpuTestConfiguration::ne
             assert_eq!(
                 values,
                 &[u32::MAX, 2, 0, 3, 5, 1, 8, 3],
+                "thread {invocation}"
+            );
+        }
+    });
+
+#[apply(gpu_test!)]
+static CUDA_LOOPS: GpuTestConfiguration = GpuTestConfiguration::new()
+    .parameters(TestParameters::default().test_features_limits())
+    .run_async(|ctx| async move {
+        let buffers = [buffer(
+            &ctx,
+            bytemuck::cast_slice(&[99i32; 64 * 10]),
+            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+        )];
+        let result = run_kernel(
+            &ctx,
+            "__global__ void loops(int *out) {
+                unsigned int base = threadIdx.x * 10u;
+                int sum = 0;
+                for (int i = 0; i < 8; i++) {
+                    if (i == 2) continue;
+                    if (i == 6) break;
+                    sum += i;
+                }
+                out[base] = sum;
+                sum = 0;
+                int i = 0;
+                while (i++ < 4) {
+                    if (i == 2) continue;
+                    sum += 10;
+                }
+                out[base + 1u] = sum;
+                out[base + 2u] = i;
+                sum = 0;
+                do {
+                    sum += 100;
+                    if (sum < 200) continue;
+                } while (sum < 250);
+                out[base + 3u] = sum;
+                do { sum += 100; break; } while (++i);
+                out[base + 4u] = i;
+                sum = 0;
+                for (int row = 0; row < 3; ++row) {
+                    for (int col = 0; col < 4; ++col) {
+                        if (col == 1) continue;
+                        if (row == 1) break;
+                        sum += col;
+                    }
+                }
+                out[base + 5u] = sum;
+                sum = 0;
+                for (;;) { ++sum; if (sum == 3) break; }
+                out[base + 6u] = sum;
+                for (int i = 0; i < 2; ++i) {}
+                out[base + 7u] = i;
+                sum = 0;
+                while (false) { sum = 40; }
+                for (;false;) { sum = 50; }
+                do { ++sum; } while (false);
+                out[base + 8u] = sum;
+                for (int k = 0; k < 3; ++k) {
+                    if (threadIdx.x < 32u) return;
+                }
+                out[base + 9u] = 19;
+            }",
+            &buffers,
+            0,
+            1,
+        )
+        .await;
+        let actual: &[i32] = bytemuck::cast_slice(&result);
+        for (invocation, values) in actual.chunks_exact(10).enumerate() {
+            let tail = if invocation < 32 { 99 } else { 19 };
+            assert_eq!(
+                values,
+                &[13, 30, 5, 300, 5, 10, 3, 5, 1, tail],
                 "thread {invocation}"
             );
         }

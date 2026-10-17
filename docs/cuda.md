@@ -80,10 +80,14 @@ parentheses, arithmetic and comparisons with scalar conversions, and the logical
 conditions are false when equal to zero; boolean locals and `true`/`false`
 literals are supported.
 
-Statements include local declarations, assignments, indexed buffer stores,
-scoped blocks, `if`/`else`, and `return;`. Nested blocks support local shadowing.
-Statements after a guaranteed return are still checked for source errors and
-then omitted from the generated body.
+Statements include local declarations, expression statements, scoped blocks,
+`if`/`else`, `for`, `while`, `do`/`while`, `break`, `continue`, and `return;`.
+Loop conditions are scalar expressions; `for` initializers can declare one
+initialized scalar or evaluate an expression. Empty `for` clauses are supported.
+`continue` executes a `for` loop's update before testing the condition again,
+and checks a `do`/`while` condition before the next iteration. A `for` initializer
+is scoped to the loop. Nested blocks support local shadowing. Statements after a
+guaranteed jump are still checked for source errors and then omitted.
 Line and block comments are accepted. Expression nesting and generated expression
 depth are bounded; line continuations and trigraphs are unsupported.
 
@@ -96,16 +100,22 @@ Assignments and initializers convert to the destination type. C-style casts,
 supported for these scalar types. Float-to-integer conversions truncate toward
 zero within the destination range; unsigned negation wraps modulo 2^32.
 
+Assignments are expressions and associate right to left. Compound assignments
+`+=`, `-=`, `*=`, and `/=` evaluate the indexed destination once; both prefix
+and postfix `++`/`--` are supported on mutable numeric values. Assignment evaluates
+its right operand before its left operand. Logical short-circuiting also applies
+to assignments and updates inside the right operand.
+
 Unsupported syntax produces a parse error with a source span. This includes
 preprocessor directives and includes, host code and launch syntax,
-general pointer operations, device functions and calls, loops and switches,
+general pointer operations, device functions and calls, switches,
 shared memory, atomics, synchronization, templates, double precision,
 and inline PTX. No CUDA runtime ABI or NVIDIA device code is generated.
 
 ## Further increments
 
 Add each capability with a failing acceptance test and rejection tests before
-changing the parser or lowering. Useful next increments are loops,
-device functions, shared storage and barriers. Each increment must preserve
+changing the parser or lowering. Useful next increments are device functions,
+shared storage and barriers. Each increment must preserve
 validation and backend compatibility; CUDA-specific features need an explicit
 portable representation or an unsupported-feature diagnostic.
