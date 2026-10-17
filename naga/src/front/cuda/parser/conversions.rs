@@ -39,18 +39,22 @@ impl Parser<'_> {
         left: ScalarExpression,
         right: ScalarExpression,
     ) -> Result<(Value, Value), ParseError> {
-        let scalars = [left.scalar(), right.scalar()];
-        let common = if scalars.contains(&Scalar::F32) {
+        let common = Self::arithmetic_scalar(left.scalar(), right.scalar());
+        Ok((
+            self.convert_value(left, common)?,
+            self.convert_value(right, common)?,
+        ))
+    }
+
+    pub(super) fn arithmetic_scalar(left: Scalar, right: Scalar) -> Scalar {
+        let scalars = [left, right];
+        if scalars.contains(&Scalar::F32) {
             Scalar::F32
         } else if scalars.contains(&Scalar::U32) {
             Scalar::U32
         } else {
             Scalar::I32
-        };
-        Ok((
-            self.convert_value(left, common)?,
-            self.convert_value(right, common)?,
-        ))
+        }
     }
 
     pub(super) fn promote_integral(

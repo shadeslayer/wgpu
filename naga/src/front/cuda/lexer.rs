@@ -109,8 +109,7 @@ impl<'a> Lexer<'a> {
         })
     }
 
-    #[cfg(test)]
-    fn span_from(&self, offset: usize) -> Span {
+    pub(super) fn span_from(&self, offset: usize) -> Span {
         Span::from(offset..self.last_end_offset)
     }
 }
@@ -207,7 +206,7 @@ fn consume_token(input: &str) -> Result<(TokenKind<'_>, &str), ParseError> {
             span: Span::from(0..2),
         });
     }
-    if "(){}[],;=.+-*/<>!%~&|^".contains(character) {
+    if "(){}[],;=.+-*/<>!%~&|^?:".contains(character) {
         return Ok((TokenKind::Symbol(character), &input[1..]));
     }
     Err(ParseError {

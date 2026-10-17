@@ -11,7 +11,8 @@ impl Parser<'_> {
     }
 
     pub(super) fn discard_expression(&mut self) -> Result<(), ParseError> {
-        self.expression_result(0).map(|_| ())
+        let result = self.expression_result(0)?;
+        self.discard_result(result)
     }
 
     pub(super) fn expression_result(
@@ -30,6 +31,7 @@ impl Parser<'_> {
     }
 
     fn expression_inner(&mut self, minimum_precedence: u8) -> Result<ExpressionResult, ParseError> {
+        let start = self.lexer.peek()?.span.to_range().unwrap().start;
         let mut left = self.primary()?;
         loop {
             let (operator, precedence) = match self.lexer.peek()?.kind {
@@ -75,6 +77,9 @@ impl Parser<'_> {
             left = self.binary_value(operator, left_value, right)?.into();
         }
         if minimum_precedence == 0 {
+            if self.take_symbol('?')? {
+                left = self.conditional(left, start)?;
+            }
             let operator = match self.lexer.peek()?.kind {
                 TokenKind::Symbol('=') => Some(None),
                 TokenKind::Operator("+=") => Some(Some(BinaryOperator::Add)),
@@ -281,7 +286,7 @@ impl Parser<'_> {
                 };
                 Ok(ExpressionResult::Scalar(ScalarExpression::Reference(
                     ReferenceValue {
-                        pointer,
+                        reference: Reference::Pointer(pointer),
                         writable,
                         scalar,
                         span,

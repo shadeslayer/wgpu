@@ -15,6 +15,7 @@ pub fn all_tests(tests: &mut Vec<GpuTestInitializer>) {
         CUDA_BARRIERS,
         CUDA_DEVICE_FUNCTIONS,
         CUDA_VOID_FUNCTIONS,
+        CUDA_CONDITIONALS,
     ]);
 }
 
@@ -571,6 +572,93 @@ static CUDA_VOID_FUNCTIONS: GpuTestConfiguration = GpuTestConfiguration::new()
                 [3, 4, 5, 9, 3, 10]
             } else {
                 [sentinel; 6]
+            };
+            assert_eq!(values, &expected, "thread {index}");
+        }
+    });
+
+#[apply(gpu_test!)]
+static CUDA_CONDITIONALS: GpuTestConfiguration = GpuTestConfiguration::new()
+    .parameters(TestParameters::default().test_features_limits())
+    .run_async(|ctx| async move {
+        let length = 70u32;
+        let sentinel = -9876i32;
+        let input_a: [i32; 128] = std::array::from_fn(|index| index as i32 + 100);
+        let input_b: [i32; 128] = std::array::from_fn(|index| index as i32 * -3 + 17);
+        let buffers = [
+            buffer(
+                &ctx,
+                bytemuck::cast_slice(&[sentinel; 128 * 25]),
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            ),
+            buffer(
+                &ctx,
+                bytemuck::cast_slice(&input_a),
+                wgpu::BufferUsages::STORAGE,
+            ),
+            buffer(
+                &ctx,
+                bytemuck::cast_slice(&input_b),
+                wgpu::BufferUsages::STORAGE,
+            ),
+            buffer(
+                &ctx,
+                bytemuck::cast_slice(&[length, 0, 0, 0]),
+                wgpu::BufferUsages::UNIFORM,
+            ),
+        ];
+        let result = run_kernel(
+            &ctx,
+            include_str!("../../../naga/tests/in/cuda/conditionals.cu"),
+            &buffers,
+            0,
+            2,
+        )
+        .await;
+        let actual: &[i32] = bytemuck::cast_slice(&result);
+        for (index, values) in actual.as_chunks::<25>().0.iter().enumerate() {
+            let expected = if index < length as usize {
+                let choose_a = index % 2 == 0;
+                [
+                    if choose_a {
+                        input_a[index]
+                    } else {
+                        input_b[index]
+                    },
+                    if choose_a { 13 } else { 15 },
+                    if choose_a { 45 } else { 36 },
+                    if choose_a { 55 } else { 37 },
+                    if choose_a { 10 } else { 1 },
+                    if choose_a { 75 } else { 37 },
+                    if choose_a { 95 } else { 39 },
+                    10,
+                    10,
+                    if choose_a { 1105 } else { 311 },
+                    0,
+                    if choose_a { 17 } else { 1 },
+                    14,
+                    if index % 4 == 0 {
+                        546
+                    } else if choose_a {
+                        276
+                    } else {
+                        249
+                    },
+                    if choose_a { 1520 } else { 1025 },
+                    if choose_a { sentinel } else { 30 },
+                    if choose_a { 30 } else { 25 },
+                    if choose_a { 1 } else { 3 },
+                    if choose_a { -1 } else { 2 },
+                    i32::from(choose_a),
+                    if choose_a { 1 } else { 2 },
+                    if choose_a { 4 } else { 8 },
+                    if choose_a { 4 } else { 6 },
+                    // The frontend chooses left-to-right argument capture.
+                    if choose_a { 33 } else { 73 },
+                    if choose_a { 303 } else { 33 },
+                ]
+            } else {
+                [sentinel; 25]
             };
             assert_eq!(values, &expected, "thread {index}");
         }

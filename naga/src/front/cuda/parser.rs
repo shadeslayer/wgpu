@@ -1,21 +1,23 @@
 use alloc::{format, string::String, vec::Vec};
 
 mod barriers;
+mod conditionals;
 mod context;
 mod conversions;
 mod expressions;
 mod functions;
 mod loops;
+mod references;
 mod statements;
 mod updates;
 
 use context::{FunctionContext, FunctionKind};
 
 use crate::{
-    front::SymbolTable, AddressSpace, ArraySize, BinaryOperator, Binding, BuiltIn, EntryPoint,
-    Expression, FastHashMap, Function, FunctionArgument, GlobalVariable, Handle, Literal,
-    LocalVariable, Module, ResourceBinding, Scalar, ScalarKind, ShaderStage, Span, Statement,
-    StorageAccess, StructMember, Type, TypeInner, UnaryOperator, VectorSize,
+    front::SymbolTable, AddressSpace, Arena, ArraySize, BinaryOperator, Binding, BuiltIn,
+    EntryPoint, Expression, FastHashMap, Function, FunctionArgument, GlobalVariable, Handle,
+    Literal, LocalVariable, Module, ResourceBinding, Scalar, ScalarKind, ShaderStage, Span,
+    Statement, StorageAccess, StructMember, Type, TypeInner, UnaryOperator, VectorSize,
 };
 
 use super::{
@@ -39,10 +41,31 @@ enum Symbol {
 
 #[derive(Debug)]
 struct ReferenceValue {
-    pointer: Handle<Expression>,
+    reference: Reference,
     writable: bool,
     scalar: Scalar,
     span: Span,
+}
+
+#[derive(Debug)]
+enum Reference {
+    Pointer(Handle<Expression>),
+    Conditional(Handle<Option<ConditionalReference>>),
+}
+
+#[derive(Debug)]
+struct ReferenceBranch {
+    body: crate::Block,
+    reference: ReferenceValue,
+}
+
+#[derive(Debug)]
+struct ConditionalReference {
+    // Keep branch-local addresses in their blocks until the reference is consumed.
+    condition: Handle<Expression>,
+    accept: ReferenceBranch,
+    reject: ReferenceBranch,
+    depth: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -97,7 +120,7 @@ impl ExpressionResult {
         match self {
             Self::Scalar(value) => Ok(value),
             Self::Void(span) => Err(ParseError {
-                message: String::from("void helper call cannot be used as a value"),
+                message: String::from("void expression cannot be used as a value"),
                 span,
             }),
         }

@@ -113,6 +113,15 @@ parentheses, arithmetic and comparisons with scalar conversions, and the logical
 conditions are false when equal to zero; boolean locals and `true`/`false`
 literals are supported.
 
+Conditional expressions `condition ? accept : reject` evaluate the condition
+once and only evaluate the selected arm. They associate right to left. Matching
+scalar lvalue arms preserve their reference, including for assignment, compound
+assignment, and prefix/postfix updates; a const arm prevents modification.
+Discarding a reference preserves its side effects without reading the selected
+storage value. Other scalar arms use a common arithmetic type, with matching
+boolean arms retaining `bool`. Both arms may be void in discarded expressions
+or void returns; mixing void and scalar arms is unsupported.
+
 Statements include local declarations, expression statements, scoped blocks,
 `if`/`else`, `for`, `while`, `do`/`while`, `break`, `continue`, and `return`.
 Loop conditions are scalar expressions; `for` initializers can declare one
@@ -121,8 +130,9 @@ initialized scalar or evaluate an expression. Empty `for` clauses are supported.
 and checks a `do`/`while` condition before the next iteration. A `for` initializer
 is scoped to the loop. Nested blocks support local shadowing. Statements after a
 guaranteed jump are still checked for source errors and then omitted.
-Line and block comments are accepted. Expression nesting and generated expression
-depth are bounded; line continuations and trigraphs are unsupported.
+Line and block comments are accepted. Expression nesting, conditional reference
+nesting, and generated expression depth are bounded; line continuations and
+trigraphs are unsupported.
 
 Decimal 32-bit integer literals without a suffix are `int`; the `u`/`U` suffix makes
 them `unsigned int`. Floating literals require the `f`/`F` suffix, such as

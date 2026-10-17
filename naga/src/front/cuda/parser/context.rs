@@ -16,6 +16,7 @@ pub(super) struct FunctionContext<'a> {
     pub(super) builtin_arguments: [Option<Handle<Expression>>; 3],
     pub(super) expression_depth: u32,
     pub(super) expression_graph_depths: Vec<u32>,
+    pub(super) conditional_references: Arena<Option<ConditionalReference>>,
 }
 
 impl FunctionContext<'_> {
@@ -33,6 +34,7 @@ impl FunctionContext<'_> {
             builtin_arguments: [None; 3],
             expression_depth: 0,
             expression_graph_depths: Vec::new(),
+            conditional_references: Arena::new(),
         }
     }
 }
