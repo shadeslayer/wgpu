@@ -91,7 +91,7 @@ guaranteed jump are still checked for source errors and then omitted.
 Line and block comments are accepted. Expression nesting and generated expression
 depth are bounded; line continuations and trigraphs are unsupported.
 
-Decimal integer literals without a suffix are `int`; the `u`/`U` suffix makes
+Decimal 32-bit integer literals without a suffix are `int`; the `u`/`U` suffix makes
 them `unsigned int`. Floating literals require the `f`/`F` suffix, such as
 `2.0f`. Arithmetic promotes booleans to `int`; a `float` operand makes the common
 type `float`, and mixed signed/unsigned integer operands use `unsigned int`.
@@ -100,11 +100,21 @@ Assignments and initializers convert to the destination type. C-style casts,
 supported for these scalar types. Float-to-integer conversions truncate toward
 zero within the destination range; unsigned negation wraps modulo 2^32.
 
+Remainder `%`, bitwise `~`, `&`, `|`, and `^`, and shifts `<<` and `>>` accept
+integer and boolean operands, with booleans promoted to `int`. Shift operands
+are promoted independently, and the result has the promoted left operand's type.
+For either shift operator, the left operand is evaluated before the right.
+Signed right shifts are arithmetic, matching C++20. Source operations with
+undefined C++ behavior have no specified result, including integer division or
+remainder by zero, `INT_MIN / -1`, `INT_MIN % -1`, and shift counts outside
+`0..=31`.
+
 Assignments are expressions and associate right to left. Compound assignments
-`+=`, `-=`, `*=`, and `/=` evaluate the indexed destination once; both prefix
-and postfix `++`/`--` are supported on mutable numeric values. Assignment evaluates
-its right operand before its left operand. Logical short-circuiting also applies
-to assignments and updates inside the right operand.
+`+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, and `>>=` evaluate the
+indexed destination once; both prefix and postfix `++`/`--` are supported on
+mutable numeric values. Assignment evaluates its right operand before its left
+operand. Logical short-circuiting also applies to assignments and updates inside
+the right operand.
 
 Unsupported syntax produces a parse error with a source span. This includes
 preprocessor directives and includes, host code and launch syntax,

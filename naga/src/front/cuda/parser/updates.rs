@@ -46,21 +46,7 @@ impl Parser<'_> {
         self.function.body.extend_block(left_body);
         let value = if let Some(op) = operator {
             let previous_value = self.rvalue(left)?;
-            let (previous_value, right) = self.usual_arithmetic(previous_value, right)?;
-            let handle = self.append(
-                Expression::Binary {
-                    op,
-                    left: previous_value.handle,
-                    right: right.handle,
-                },
-                span,
-            )?;
-            Value {
-                handle,
-                scalar: previous_value.scalar,
-                span,
-                lvalue: None,
-            }
+            self.binary_value(op, previous_value, right)?
         } else {
             right
         };

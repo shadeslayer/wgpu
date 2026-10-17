@@ -318,7 +318,7 @@ fn cuda_rejects_names_outside_their_block_scope() {
         "__global__ void bad(bool *out) {}",
         "__global__ void bad(bool value) {}",
         "__global__ void bad(int *out) { if (true ? 1 : 0) out[0] = 1; }",
-        "__global__ void bad(int *out) { if (true << false) out[0] = 1; }",
+        "__global__ void bad(int *out) { if (true ? false : true) out[0] = 1; }",
     ] {
         assert!(parse_str(source, &Options::default()).is_err(), "{source}");
     }

@@ -10,6 +10,7 @@ pub fn all_tests(tests: &mut Vec<GpuTestInitializer>) {
         CUDA_NUMERIC_CONVERSIONS,
         CUDA_LOOPS,
         CUDA_UPDATES,
+        CUDA_INTEGER_OPERATORS,
     ]);
 }
 
@@ -338,6 +339,77 @@ static CUDA_UPDATES: GpuTestConfiguration = GpuTestConfiguration::new()
             assert_eq!(
                 values,
                 &[1, 3, 2, 2, 1, 9, 4, 12, 12, 14, 99, 1, 2, 10, 21, 2],
+                "thread {invocation}"
+            );
+        }
+    });
+
+#[apply(gpu_test!)]
+static CUDA_INTEGER_OPERATORS: GpuTestConfiguration = GpuTestConfiguration::new()
+    .parameters(TestParameters::default().test_features_limits())
+    .run_async(|ctx| async move {
+        let buffers = [buffer(
+            &ctx,
+            bytemuck::cast_slice(&[99u32; 64 * 16]),
+            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+        )];
+        let result = run_kernel(
+            &ctx,
+            "__global__ void integer_ops(unsigned int *out) {
+                unsigned int base = threadIdx.x * 16u;
+                out[base] = -7 % 3;
+                out[base + 1u] = 7 % -3;
+                out[base + 2u] = ~0u;
+                out[base + 3u] = ~true;
+                out[base + 4u] = 1 << 31;
+                out[base + 5u] = -8 >> 1u;
+                out[base + 6u] = -8u >> 1;
+                out[base + 7u] = 1 | 2 ^ 3 & 6;
+                out[base + 8u] = 8 >> 1 + 1;
+                out[base + 9u] = 1 << 2 < 5;
+                int i = 1;
+                out[base + 10u] = i << (i = 2);
+                i = 1;
+                out[base + 11u] = i <<= (i = 2);
+                int value = 37;
+                value %= 5;
+                value |= 8;
+                value ^= 3;
+                value &= 7;
+                value <<= 4;
+                value >>= 2;
+                out[base + 12u] = value;
+                out[base + 13u] = (true | false) + (true & false);
+                out[base + 14u] = 4294967295u << 1;
+                out[base + 15u] = -7 % -3;
+            }",
+            &buffers,
+            0,
+            1,
+        )
+        .await;
+        let actual: &[u32] = bytemuck::cast_slice(&result);
+        for (invocation, values) in actual.chunks_exact(16).enumerate() {
+            assert_eq!(
+                values,
+                &[
+                    u32::MAX,
+                    1,
+                    u32::MAX,
+                    u32::MAX - 1,
+                    1 << 31,
+                    u32::MAX - 3,
+                    2_147_483_644,
+                    1,
+                    2,
+                    1,
+                    4,
+                    8,
+                    4,
+                    1,
+                    u32::MAX - 1,
+                    u32::MAX,
+                ],
                 "thread {invocation}"
             );
         }

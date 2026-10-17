@@ -1,5 +1,7 @@
 use super::*;
 
+const UNARY_PRECEDENCE: u8 = 11;
+
 impl Parser<'_> {
     pub(super) fn expression(&mut self, minimum_precedence: u8) -> Result<Value, ParseError> {
         self.expression_depth += 1;
@@ -20,16 +22,22 @@ impl Parser<'_> {
             let (operator, precedence) = match self.current().kind {
                 TokenKind::Operator("||") => (BinaryOperator::LogicalOr, 1),
                 TokenKind::Operator("&&") => (BinaryOperator::LogicalAnd, 2),
-                TokenKind::Operator("==") => (BinaryOperator::Equal, 3),
-                TokenKind::Operator("!=") => (BinaryOperator::NotEqual, 3),
-                TokenKind::Symbol('<') => (BinaryOperator::Less, 4),
-                TokenKind::Symbol('>') => (BinaryOperator::Greater, 4),
-                TokenKind::Operator("<=") => (BinaryOperator::LessEqual, 4),
-                TokenKind::Operator(">=") => (BinaryOperator::GreaterEqual, 4),
-                TokenKind::Symbol('+') => (BinaryOperator::Add, 5),
-                TokenKind::Symbol('-') => (BinaryOperator::Subtract, 5),
-                TokenKind::Symbol('*') => (BinaryOperator::Multiply, 6),
-                TokenKind::Symbol('/') => (BinaryOperator::Divide, 6),
+                TokenKind::Symbol('|') => (BinaryOperator::InclusiveOr, 3),
+                TokenKind::Symbol('^') => (BinaryOperator::ExclusiveOr, 4),
+                TokenKind::Symbol('&') => (BinaryOperator::And, 5),
+                TokenKind::Operator("==") => (BinaryOperator::Equal, 6),
+                TokenKind::Operator("!=") => (BinaryOperator::NotEqual, 6),
+                TokenKind::Symbol('<') => (BinaryOperator::Less, 7),
+                TokenKind::Symbol('>') => (BinaryOperator::Greater, 7),
+                TokenKind::Operator("<=") => (BinaryOperator::LessEqual, 7),
+                TokenKind::Operator(">=") => (BinaryOperator::GreaterEqual, 7),
+                TokenKind::Operator("<<") => (BinaryOperator::ShiftLeft, 8),
+                TokenKind::Operator(">>") => (BinaryOperator::ShiftRight, 8),
+                TokenKind::Symbol('+') => (BinaryOperator::Add, 9),
+                TokenKind::Symbol('-') => (BinaryOperator::Subtract, 9),
+                TokenKind::Symbol('*') => (BinaryOperator::Multiply, 10),
+                TokenKind::Symbol('/') => (BinaryOperator::Divide, 10),
+                TokenKind::Symbol('%') => (BinaryOperator::Modulo, 10),
                 _ => break,
             };
             if precedence < minimum_precedence {
@@ -43,33 +51,14 @@ impl Parser<'_> {
                 left = self.logical(left, operator, precedence)?;
                 continue;
             }
+            if matches!(
+                operator,
+                BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight
+            ) {
+                left = self.rvalue(left)?;
+            }
             let right = self.expression(precedence + 1)?;
-            let (converted_left, right) = self.usual_arithmetic(left, right)?;
-            left = converted_left;
-            let span = left.span.until(&right.span);
-            let scalar = match operator {
-                BinaryOperator::Equal
-                | BinaryOperator::NotEqual
-                | BinaryOperator::Less
-                | BinaryOperator::LessEqual
-                | BinaryOperator::Greater
-                | BinaryOperator::GreaterEqual => Scalar::BOOL,
-                _ => left.scalar,
-            };
-            let handle = self.append(
-                Expression::Binary {
-                    op: operator,
-                    left: left.handle,
-                    right: right.handle,
-                },
-                span,
-            )?;
-            left = Value {
-                handle,
-                scalar,
-                span,
-                lvalue: None,
-            };
+            left = self.binary_value(operator, left, right)?;
         }
         if minimum_precedence == 0 {
             let operator = match self.current().kind {
@@ -78,6 +67,12 @@ impl Parser<'_> {
                 TokenKind::Operator("-=") => Some(Some(BinaryOperator::Subtract)),
                 TokenKind::Operator("*=") => Some(Some(BinaryOperator::Multiply)),
                 TokenKind::Operator("/=") => Some(Some(BinaryOperator::Divide)),
+                TokenKind::Operator("%=") => Some(Some(BinaryOperator::Modulo)),
+                TokenKind::Operator("&=") => Some(Some(BinaryOperator::And)),
+                TokenKind::Operator("|=") => Some(Some(BinaryOperator::InclusiveOr)),
+                TokenKind::Operator("^=") => Some(Some(BinaryOperator::ExclusiveOr)),
+                TokenKind::Operator("<<=") => Some(Some(BinaryOperator::ShiftLeft)),
+                TokenKind::Operator(">>=") => Some(Some(BinaryOperator::ShiftRight)),
                 _ => None,
             };
             if let Some(operator) = operator {
@@ -101,7 +96,7 @@ impl Parser<'_> {
         let token = self.current();
         if let TokenKind::Operator(operator @ ("++" | "--")) = token.kind {
             self.advance();
-            let value = self.expression(7)?;
+            let value = self.expression(UNARY_PRECEDENCE)?;
             let span = token.span.until(&value.span);
             return self.update(value, operator == "++", false, span);
         }
@@ -113,7 +108,7 @@ impl Parser<'_> {
             ) {
                 let target = self.cast_type()?;
                 if self.take_symbol(')') {
-                    let value = self.expression(7)?;
+                    let value = self.expression(UNARY_PRECEDENCE)?;
                     let mut value = self.convert_value(value, target)?;
                     value.span = token.span.until(&value.span);
                     return Ok(value);
@@ -124,8 +119,12 @@ impl Parser<'_> {
             self.expect_symbol(')')?;
             return Ok(value);
         }
-        if self.take_symbol('-') || self.take_symbol('+') || self.take_symbol('!') {
-            let value = self.expression(7)?;
+        if self.take_symbol('-')
+            || self.take_symbol('+')
+            || self.take_symbol('!')
+            || self.take_symbol('~')
+        {
+            let value = self.expression(UNARY_PRECEDENCE)?;
             if token.kind == TokenKind::Symbol('!') {
                 let value = self.truthy(value)?;
                 let span = token.span.until(&value.span);
@@ -139,6 +138,23 @@ impl Parser<'_> {
                 return Ok(Value {
                     handle,
                     scalar: Scalar::BOOL,
+                    span,
+                    lvalue: None,
+                });
+            }
+            if token.kind == TokenKind::Symbol('~') {
+                let value = self.integral_operand(value)?;
+                let span = token.span.until(&value.span);
+                let handle = self.append(
+                    Expression::Unary {
+                        op: UnaryOperator::BitwiseNot,
+                        expr: value.handle,
+                    },
+                    span,
+                )?;
+                return Ok(Value {
+                    handle,
+                    scalar: value.scalar,
                     span,
                     lvalue: None,
                 });

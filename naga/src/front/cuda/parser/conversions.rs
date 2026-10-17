@@ -63,6 +63,86 @@ impl Parser<'_> {
         }
     }
 
+    pub(super) fn integral_operand(&mut self, value: Value) -> Result<Value, ParseError> {
+        if value.scalar.kind == ScalarKind::Float {
+            return Err(ParseError {
+                message: String::from("operator requires integral operands"),
+                span: value.span,
+            });
+        }
+        self.promote_integral(value)
+    }
+
+    pub(super) fn binary_value(
+        &mut self,
+        operator: BinaryOperator,
+        left: Value,
+        right: Value,
+    ) -> Result<Value, ParseError> {
+        let span = left.span.until(&right.span);
+        let (left, right) = match operator {
+            BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight => {
+                let left = self.integral_operand(left)?;
+                let right = self.integral_operand(right)?;
+                let mut right = self.convert_value(right, Scalar::U32)?;
+                if operator == BinaryOperator::ShiftLeft {
+                    // Keep wrapping shifts out of WGSL constant evaluation.
+                    let ty = self.scalar_handle(Scalar::U32, right.span);
+                    let local = self.function.local_variables.append(
+                        LocalVariable {
+                            name: None,
+                            ty,
+                            init: None,
+                        },
+                        right.span,
+                    );
+                    let pointer = self.append(Expression::LocalVariable(local), right.span)?;
+                    self.function.body.push(
+                        Statement::Store {
+                            pointer,
+                            value: right.handle,
+                        },
+                        right.span,
+                    );
+                    right.handle = self.append(Expression::Load { pointer }, right.span)?;
+                }
+                (left, right)
+            }
+            BinaryOperator::Modulo
+            | BinaryOperator::And
+            | BinaryOperator::InclusiveOr
+            | BinaryOperator::ExclusiveOr => {
+                let left = self.integral_operand(left)?;
+                let right = self.integral_operand(right)?;
+                self.usual_arithmetic(left, right)?
+            }
+            _ => self.usual_arithmetic(left, right)?,
+        };
+        let scalar = match operator {
+            BinaryOperator::Equal
+            | BinaryOperator::NotEqual
+            | BinaryOperator::Less
+            | BinaryOperator::LessEqual
+            | BinaryOperator::Greater
+            | BinaryOperator::GreaterEqual => Scalar::BOOL,
+            _ => left.scalar,
+        };
+        let handle = self.append(
+            Expression::Binary {
+                op: operator,
+                left: left.handle,
+                right: right.handle,
+            },
+            span,
+        )?;
+        Ok(Value {
+            handle,
+            scalar,
+            span,
+            lvalue: None,
+        })
+    }
+
     pub(super) fn cast_type(&mut self) -> Result<Scalar, ParseError> {
         let is_const = self.take_ident("const");
         let scalar = self.scalar_type()?;
