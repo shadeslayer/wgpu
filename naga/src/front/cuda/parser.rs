@@ -4,6 +4,7 @@ mod barriers;
 mod conditionals;
 mod context;
 mod conversions;
+mod declarations;
 mod expressions;
 mod functions;
 mod loops;
@@ -540,7 +541,18 @@ impl<'a> Parser<'a> {
     }
 
     fn check_name(&self, name: &str, span: Span) -> Result<(), ParseError> {
-        if matches!(
+        if Self::reserved_name(name) {
+            Err(ParseError {
+                message: format!("duplicate or reserved name `{name}`"),
+                span,
+            })
+        } else {
+            Ok(())
+        }
+    }
+
+    fn reserved_name(name: &str) -> bool {
+        matches!(
             name,
             "threadIdx"
                 | "blockIdx"
@@ -651,14 +663,6 @@ impl<'a> Parser<'a> {
             "__launch_bounds__",
         ]
         .contains(&name)
-        {
-            Err(ParseError {
-                message: format!("duplicate or reserved name `{name}`"),
-                span,
-            })
-        } else {
-            Ok(())
-        }
     }
 
     fn insert_symbol(

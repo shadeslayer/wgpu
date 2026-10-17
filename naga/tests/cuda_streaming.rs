@@ -57,7 +57,7 @@ fn cuda_cast_checkpoints_and_declaration_lookahead_preserve_parsing() {
     let source = "__global__ void casts(int *out) {
         int value = (int(3.5f));
         int(7.0f);
-        unsigned(value);
+        (unsigned(value));
         for (int(0); false; unsigned(value)) {}
         out[0] = ((unsigned(value))) + (int)(value + 1);
         while (true) { if (value) break; continue; }

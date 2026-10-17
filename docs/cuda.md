@@ -124,6 +124,9 @@ or void returns; mixing void and scalar arms is unsupported.
 
 Statements include local declarations, expression statements, scoped blocks,
 `if`/`else`, `for`, `while`, `do`/`while`, `break`, `continue`, and `return`.
+At statement start, C++ parses `int(value);` as a declaration. Parenthesized
+declarators are unsupported; use `int value = ...;` for a local declaration or
+`(int(value));` for a discarded cast expression.
 Loop conditions are scalar expressions; `for` initializers can declare one
 initialized scalar or evaluate an expression. Empty `for` clauses are supported.
 `continue` executes a `for` loop's update before testing the condition again,

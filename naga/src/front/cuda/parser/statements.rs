@@ -159,7 +159,17 @@ impl<'a> Parser<'a> {
         }
         let mut lookahead = self.lexer.clone();
         lookahead.next()?;
-        Ok(lookahead.peek()?.kind != TokenKind::Symbol('('))
+        let next = lookahead.peek()?;
+        if next.kind != TokenKind::Symbol('(') {
+            return Ok(true);
+        }
+        if declarations::parenthesized_declaration(lookahead)? {
+            return Err(ParseError {
+                message: String::from("parenthesized declarators are unsupported"),
+                span: next.span,
+            });
+        }
+        Ok(false)
     }
 
     pub(super) fn local_declaration(&mut self) -> Result<(), ParseError> {
