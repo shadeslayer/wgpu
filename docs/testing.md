@@ -29,6 +29,7 @@ This is a table of contents, in the form of the repository's directory structure
   - [features](#example-tests)
 - naga
   - tests
+    - [cuda](#naga-cuda-frontend-tests)
     - [example_wgsl](#naga-example-tests)
     - [snapshot](#naga-snapshot-tests)
     - [spirv-capabilities](#naga-spirv-capabilities-test)
@@ -83,6 +84,16 @@ examples are within tolerance of the expected output.
 
 Examples written in `examples/standalone` do not have tests, as
 they should be easy to copy into a standalone project.
+
+## `naga` CUDA Frontend Tests
+
+- Located in: `naga/tests/cuda.rs` and `naga/tests/cuda_adversarial.rs`
+- Run with `cargo nextest run -p naga --test cuda --test cuda_adversarial`
+- Verify the supported CUDA source subset, rejection of unsupported syntax,
+  arithmetic semantics, parser depth limits, and output from every shader backend.
+
+The CLI integration tests live in `naga-cli/tests/cuda.rs` and run with
+`cargo nextest run -p naga-cli --test cuda`.
 
 ## `naga` Example Tests
 

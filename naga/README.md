@@ -16,6 +16,7 @@ The shader translation library for the needs of [wgpu](https://github.com/gfx-rs
 | SPIR-V (binary) | :white_check_mark: | spv-in  |                                     |
 | WGSL            | :white_check_mark: | wgsl-in | Fully validated                     |
 | GLSL            | :ok:               | glsl-in | GLSL 440+ and Vulkan semantics only |
+| CUDA            | Experimental       | cuda-in | [Restricted compute kernel subset](../docs/cuda.md) |
 
 | Back-end       | Status             | Feature  | Notes                           |
 | -------------- | ------------------ | -------- | ------------------------------- |
