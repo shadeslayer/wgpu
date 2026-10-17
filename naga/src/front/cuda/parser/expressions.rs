@@ -4,6 +4,17 @@ const UNARY_PRECEDENCE: u8 = 11;
 
 impl Parser<'_> {
     pub(super) fn expression(&mut self, minimum_precedence: u8) -> Result<Value, ParseError> {
+        self.expression_result(minimum_precedence)?.require_value()
+    }
+
+    pub(super) fn discard_expression(&mut self) -> Result<(), ParseError> {
+        self.expression_result(0).map(|_| ())
+    }
+
+    pub(super) fn expression_result(
+        &mut self,
+        minimum_precedence: u8,
+    ) -> Result<ExpressionResult, ParseError> {
         self.function.expression_depth += 1;
         if self.function.expression_depth > 64 {
             return self.fail("CUDA expression nesting limit exceeded");
@@ -15,7 +26,7 @@ impl Parser<'_> {
         Ok(value)
     }
 
-    fn expression_inner(&mut self, minimum_precedence: u8) -> Result<Value, ParseError> {
+    fn expression_inner(&mut self, minimum_precedence: u8) -> Result<ExpressionResult, ParseError> {
         let mut left = self.primary()?;
         loop {
             let (operator, precedence) = match self.lexer.peek()?.kind {
@@ -43,21 +54,22 @@ impl Parser<'_> {
                 break;
             }
             self.lexer.next()?;
+            let mut left_value = left.require_value()?;
             if matches!(
                 operator,
                 BinaryOperator::LogicalAnd | BinaryOperator::LogicalOr
             ) {
-                left = self.logical(left, operator, precedence)?;
+                left = ExpressionResult::Value(self.logical(left_value, operator, precedence)?);
                 continue;
             }
             if matches!(
                 operator,
                 BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight
             ) {
-                left = self.rvalue(left)?;
+                left_value = self.rvalue(left_value)?;
             }
             let right = self.expression(precedence + 1)?;
-            left = self.binary_value(operator, left, right)?;
+            left = ExpressionResult::Value(self.binary_value(operator, left_value, right)?);
         }
         if minimum_precedence == 0 {
             let operator = match self.lexer.peek()?.kind {
@@ -75,29 +87,34 @@ impl Parser<'_> {
                 _ => None,
             };
             if let Some(operator) = operator {
-                return self.assignment(left, operator);
+                return self
+                    .assignment(left.require_value()?, operator)
+                    .map(ExpressionResult::Value);
             }
         }
         Ok(left)
     }
 
-    fn primary(&mut self) -> Result<Value, ParseError> {
+    fn primary(&mut self) -> Result<ExpressionResult, ParseError> {
         let mut value = self.primary_inner()?;
         while let TokenKind::Operator(operator @ ("++" | "--")) = self.lexer.peek()?.kind {
-            let span = value.span.until(&self.lexer.peek()?.span);
+            let operand = value.require_value()?;
+            let span = operand.span.until(&self.lexer.peek()?.span);
             self.lexer.next()?;
-            value = self.update(value, operator == "++", true, span)?;
+            value = ExpressionResult::Value(self.update(operand, operator == "++", true, span)?);
         }
         Ok(value)
     }
 
-    fn primary_inner(&mut self) -> Result<Value, ParseError> {
+    fn primary_inner(&mut self) -> Result<ExpressionResult, ParseError> {
         let token = self.lexer.peek()?;
         if let TokenKind::Operator(operator @ ("++" | "--")) = token.kind {
             self.lexer.next()?;
             let value = self.expression(UNARY_PRECEDENCE)?;
             let span = token.span.until(&value.span);
-            return self.update(value, operator == "++", false, span);
+            return self
+                .update(value, operator == "++", false, span)
+                .map(ExpressionResult::Value);
         }
         if self.take_symbol('(')? {
             let checkpoint = self.lexer.clone();
@@ -110,11 +127,11 @@ impl Parser<'_> {
                     let value = self.expression(UNARY_PRECEDENCE)?;
                     let mut value = self.convert_value(value, target)?;
                     value.span = token.span.until(&value.span);
-                    return Ok(value);
+                    return Ok(ExpressionResult::Value(value));
                 }
                 self.lexer = checkpoint;
             }
-            let value = self.expression(0)?;
+            let value = self.expression_result(0)?;
             self.expect_symbol(')')?;
             return Ok(value);
         }
@@ -134,12 +151,12 @@ impl Parser<'_> {
                     },
                     span,
                 )?;
-                return Ok(Value {
+                return Ok(ExpressionResult::Value(Value {
                     handle,
                     scalar: Scalar::BOOL,
                     span,
                     lvalue: None,
-                });
+                }));
             }
             if token.kind == TokenKind::Symbol('~') {
                 let value = self.integral_operand(value)?;
@@ -151,16 +168,16 @@ impl Parser<'_> {
                     },
                     span,
                 )?;
-                return Ok(Value {
+                return Ok(ExpressionResult::Value(Value {
                     handle,
                     scalar: value.scalar,
                     span,
                     lvalue: None,
-                });
+                }));
             }
             let value = self.promote_integral(value)?;
             if token.kind == TokenKind::Symbol('+') {
-                return Ok(value);
+                return Ok(ExpressionResult::Value(value));
             }
             let span = token.span.until(&value.span);
             let expression = if value.scalar == Scalar::U32 {
@@ -177,17 +194,17 @@ impl Parser<'_> {
                 }
             };
             let handle = self.append(expression, span)?;
-            return Ok(Value {
+            return Ok(ExpressionResult::Value(Value {
                 handle,
                 scalar: value.scalar,
                 span,
                 lvalue: None,
-            });
+            }));
         }
         match token.kind {
             TokenKind::Number(text) => {
                 self.lexer.next()?;
-                self.number(text, token.span)
+                self.number(text, token.span).map(ExpressionResult::Value)
             }
             TokenKind::Ident(name) => {
                 self.lexer.next()?;
@@ -200,7 +217,7 @@ impl Parser<'_> {
                     let end = self.expect_symbol(')')?;
                     let mut value = self.convert_value(value, target)?;
                     value.span = token.span.until(&end);
-                    return Ok(value);
+                    return Ok(ExpressionResult::Value(value));
                 }
                 let functional_target = match name {
                     "bool" => Some(Scalar::BOOL),
@@ -215,22 +232,22 @@ impl Parser<'_> {
                     let end = self.expect_symbol(')')?;
                     let mut value = self.convert_value(value, target)?;
                     value.span = token.span.until(&end);
-                    return Ok(value);
+                    return Ok(ExpressionResult::Value(value));
                 }
                 if matches!(name, "true" | "false") {
                     let handle = self.append(
                         Expression::Literal(Literal::Bool(name == "true")),
                         token.span,
                     )?;
-                    return Ok(Value {
+                    return Ok(ExpressionResult::Value(Value {
                         handle,
                         scalar: Scalar::BOOL,
                         span: token.span,
                         lvalue: None,
-                    });
+                    }));
                 }
                 if matches!(name, "threadIdx" | "blockIdx" | "blockDim" | "gridDim") {
-                    return self.builtin(name, token.span);
+                    return self.builtin(name, token.span).map(ExpressionResult::Value);
                 }
                 if self.lexer.peek()?.kind == TokenKind::Symbol('(') {
                     return self.call(name, token.span);
@@ -259,12 +276,12 @@ impl Parser<'_> {
                         writable,
                     } => (pointer, scalar, writable, token.span),
                 };
-                Ok(Value {
+                Ok(ExpressionResult::Value(Value {
                     handle: pointer,
                     scalar,
                     span,
                     lvalue: Some(LValue { pointer, writable }),
-                })
+                }))
             }
             _ => self.fail("expected a supported scalar expression"),
         }

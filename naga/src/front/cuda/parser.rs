@@ -51,6 +51,24 @@ struct Value {
     lvalue: Option<LValue>,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum ExpressionResult {
+    Value(Value),
+    Void(Span),
+}
+
+impl ExpressionResult {
+    fn require_value(self) -> Result<Value, ParseError> {
+        match self {
+            Self::Value(value) => Ok(value),
+            Self::Void(span) => Err(ParseError {
+                message: String::from("void helper call cannot be used as a value"),
+                span,
+            }),
+        }
+    }
+}
+
 pub(super) struct Parser<'a> {
     lexer: Lexer<'a>,
     module: Module,

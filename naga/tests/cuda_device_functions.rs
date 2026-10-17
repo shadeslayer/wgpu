@@ -399,7 +399,7 @@ fn cuda_device_functions_reject_recursion_forward_calls_and_overloads() {
 #[test]
 fn cuda_device_functions_reject_unsupported_signatures_and_captures() {
     for source in [
-        "__device__ void helper(int value) { return; } __global__ void kernel() {}",
+        "__device__ void helper(int *value) { return; } __global__ void kernel() {}",
         "__device__ int *helper(int value) { return value; } __global__ void kernel() {}",
         "__device__ int helper(int *value) { return value[0]; } __global__ void kernel() {}",
         "__device__ int helper(const float *value) { return value[0]; } __global__ void kernel() {}",

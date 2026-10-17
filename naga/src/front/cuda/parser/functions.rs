@@ -32,24 +32,34 @@ impl<'a> Parser<'a> {
 
     pub(super) fn device_function(&mut self) -> Result<(), ParseError> {
         let result_span = self.lexer.peek()?.span;
-        let scalar = self.scalar_type()?;
+        let scalar = if self.take_ident("void")? {
+            None
+        } else {
+            Some(self.scalar_type()?)
+        };
         let (name, span) = self.identifier()?;
         self.check_function_name(name, span)?;
         self.function = FunctionContext::new(FunctionKind::Device);
         self.function.ir.name = Some(String::from(name));
-        self.function.ir.result = Some(crate::FunctionResult {
-            ty: self.scalar_handle(scalar, result_span),
-            binding: None,
-        });
+        if let Some(scalar) = scalar {
+            self.function.ir.result = Some(crate::FunctionResult {
+                ty: self.scalar_handle(scalar, result_span),
+                binding: None,
+            });
+        }
         self.parameters()?;
         self.expect_symbol('{')?;
-        if !self.block_contents()? {
+        let terminated = self.block_contents()?;
+        if self.function.ir.result.is_some() && !terminated {
             return Err(ParseError {
                 message: String::from("device helper must return a value on every supported path"),
                 span,
             });
         }
         self.flush_emitter();
+        if self.function.ir.result.is_none() {
+            crate::proc::ensure_block_returns(&mut self.function.ir.body);
+        }
         let function = core::mem::replace(
             &mut self.function,
             FunctionContext::new(FunctionKind::Kernel),
@@ -77,7 +87,7 @@ impl<'a> Parser<'a> {
         self.initialize_parameter(name, span, scalar, is_const, value)
     }
 
-    pub(super) fn call(&mut self, name: &str, span: Span) -> Result<Value, ParseError> {
+    pub(super) fn call(&mut self, name: &str, span: Span) -> Result<ExpressionResult, ParseError> {
         if self.lookup_symbol(name).is_some() {
             return Err(ParseError {
                 message: format!("local value `{name}` cannot be called"),
@@ -124,24 +134,37 @@ impl<'a> Parser<'a> {
             });
         }
         let span = span.until(&end);
-        let result = self.module.functions[function].result.as_ref().unwrap();
-        let TypeInner::Scalar(scalar) = self.module.types[result.ty].inner else {
-            unreachable!()
+        let scalar = self.module.functions[function]
+            .result
+            .as_ref()
+            .map(|result| {
+                let TypeInner::Scalar(scalar) = self.module.types[result.ty].inner else {
+                    unreachable!()
+                };
+                scalar
+            });
+        let value = if let Some(scalar) = scalar {
+            let handle = self.append_call_result(function, span)?;
+            Some(Value {
+                handle,
+                scalar,
+                span,
+                lvalue: None,
+            })
+        } else {
+            None
         };
-        let handle = self.append_call_result(function, span)?;
         self.push_statement(
             Statement::Call {
                 function,
                 arguments,
-                result: Some(handle),
+                result: value.map(|value| value.handle),
             },
             span,
         );
-        Ok(Value {
-            handle,
-            scalar,
-            span,
-            lvalue: None,
+        Ok(match value {
+            Some(value) => ExpressionResult::Value(value),
+            None => ExpressionResult::Void(span),
         })
     }
 }

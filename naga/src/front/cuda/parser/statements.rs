@@ -82,6 +82,14 @@ impl<'a> Parser<'a> {
                 let value = self.expression(0)?;
                 Some(self.convert_value(value, scalar)?.handle)
             } else {
+                if self.lexer.peek()?.kind != TokenKind::Symbol(';') {
+                    if let ExpressionResult::Value(value) = self.expression_result(0)? {
+                        return Err(ParseError {
+                            message: String::from("cannot return a value from a void function"),
+                            span: value.span,
+                        });
+                    }
+                }
                 None
             };
             let end = self.expect_symbol(';')?;
@@ -137,7 +145,7 @@ impl<'a> Parser<'a> {
             self.local_declaration()?;
             return Ok(false);
         }
-        self.expression(0)?;
+        self.discard_expression()?;
         self.expect_symbol(';')?;
         Ok(false)
     }

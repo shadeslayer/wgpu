@@ -14,6 +14,7 @@ pub fn all_tests(tests: &mut Vec<GpuTestInitializer>) {
         CUDA_SHARED_STORAGE,
         CUDA_BARRIERS,
         CUDA_DEVICE_FUNCTIONS,
+        CUDA_VOID_FUNCTIONS,
     ]);
 }
 
@@ -535,5 +536,42 @@ static CUDA_DEVICE_FUNCTIONS: GpuTestConfiguration = GpuTestConfiguration::new()
                 ],
                 "thread {index}",
             );
+        }
+    });
+
+#[apply(gpu_test!)]
+static CUDA_VOID_FUNCTIONS: GpuTestConfiguration = GpuTestConfiguration::new()
+    .parameters(TestParameters::default().test_features_limits())
+    .run_async(|ctx| async move {
+        let length = 70u32;
+        let sentinel = -9876i32;
+        let buffers = [
+            buffer(
+                &ctx,
+                bytemuck::cast_slice(&[sentinel; 128 * 6]),
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            ),
+            buffer(
+                &ctx,
+                bytemuck::cast_slice(&[length, 0, 0, 0]),
+                wgpu::BufferUsages::UNIFORM,
+            ),
+        ];
+        let result = run_kernel(
+            &ctx,
+            include_str!("../../../naga/tests/in/cuda/void-functions.cu"),
+            &buffers,
+            0,
+            2,
+        )
+        .await;
+        let actual: &[i32] = bytemuck::cast_slice(&result);
+        for (index, values) in actual.as_chunks::<6>().0.iter().enumerate() {
+            let expected = if index < length as usize {
+                [3, 4, 5, 9, 3, 10]
+            } else {
+                [sentinel; 6]
+            };
+            assert_eq!(values, &expected, "thread {index}");
         }
     });

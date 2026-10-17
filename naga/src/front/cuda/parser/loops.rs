@@ -55,7 +55,7 @@ impl Parser<'_> {
                 if parser.starts_declaration()? {
                     parser.local_declaration()?;
                 } else {
-                    parser.expression(0)?;
+                    parser.discard_expression()?;
                     parser.expect_symbol(';')?;
                 }
             }
@@ -70,7 +70,7 @@ impl Parser<'_> {
         })?;
         let ((), continuing) = self.capture_block(|parser| {
             if !parser.take_symbol(')')? {
-                parser.expression(0)?;
+                parser.discard_expression()?;
                 parser.expect_symbol(')')?;
             }
             Ok(())

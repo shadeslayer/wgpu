@@ -75,9 +75,9 @@ as 32-bit values at byte offsets 0, 4, and 8. The library equivalent is
 
 ## Device helpers
 
-`__device__` functions defined before the kernel can take and return `float`,
-`int`, `unsigned int`, or `bool` scalars. Helpers can use local declarations,
-arithmetic, control flow, and calls to earlier helpers:
+`__device__` functions defined before the kernel can take `float`, `int`,
+`unsigned int`, or `bool` scalars and return a scalar or `void`. Helpers can use
+local declarations, arithmetic, control flow, and calls to earlier helpers:
 
 ```cuda
 __device__ float scale(float value, float factor) {
@@ -93,11 +93,16 @@ __global__ void apply(float *out, const float *input) {
 The frontend evaluates arguments left to right, converts them to the parameter
 types, and copies them into per-call locals. Assignments affect only those copies;
 `const` parameters cannot be assigned. Return values convert to the declared
-result type. Helpers must explicitly return on every supported path; a return
-inside a loop alone does not satisfy this conservative check.
+result type. Scalar-returning helpers must explicitly return on every supported
+path; a return inside a loop alone does not satisfy this conservative check.
+
+Void helpers support bare `return;`, implicit fallthrough, and
+`return other_void_helper(...);`. Void calls are accepted as discarded
+expressions, including parenthesized calls and `for` initializer/update clauses.
+Using a void call where a scalar value is required produces a parse error.
 
 Helpers have no resource bindings. Prototypes, overloads, recursion, forward
-calls, `void` results, pointers, references, shared storage, barriers, and
+calls, pointers, references, shared storage, barriers, and
 compute builtins in helpers remain unsupported.
 
 ## Source subset
