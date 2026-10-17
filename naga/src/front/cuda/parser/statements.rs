@@ -151,10 +151,10 @@ impl<'a> Parser<'a> {
     }
 
     pub(super) fn starts_declaration(&mut self) -> Result<bool, ParseError> {
-        if !matches!(
-            self.lexer.peek()?.kind,
-            TokenKind::Ident("__shared__" | "const" | "bool" | "float" | "int" | "unsigned")
-        ) {
+        if self.starts_alias()? || self.lexer.peek()?.kind == TokenKind::Ident("__shared__") {
+            return Ok(true);
+        }
+        if !self.starts_type()? {
             return Ok(false);
         }
         let mut lookahead = self.lexer.clone();
@@ -163,7 +163,7 @@ impl<'a> Parser<'a> {
         if next.kind != TokenKind::Symbol('(') {
             return Ok(true);
         }
-        if declarations::parenthesized_declaration(lookahead)? {
+        if declarations::parenthesized_declaration(self, lookahead)? {
             return Err(ParseError {
                 message: String::from("parenthesized declarators are unsupported"),
                 span: next.span,
@@ -173,12 +173,13 @@ impl<'a> Parser<'a> {
     }
 
     pub(super) fn local_declaration(&mut self) -> Result<(), ParseError> {
+        if self.starts_alias()? {
+            return self.alias_declaration(false);
+        }
         if self.take_ident("__shared__")? {
             return self.shared_declaration();
         }
-        let is_const = self.take_ident("const")?;
-        let scalar = self.scalar_type()?;
-        let is_const = self.const_suffix(is_const)?;
+        let QualifiedScalar { scalar, is_const } = self.scalar_type()?;
         let (name, span) = self.identifier()?;
         self.check_name(name, span)?;
         let ty = self.scalar_handle(scalar, span);
@@ -219,10 +220,10 @@ impl<'a> Parser<'a> {
             return self.fail("shared storage is unsupported in device helpers");
         }
         let type_span = self.lexer.peek()?.span;
-        let scalar = self.scalar_type()?;
-        if scalar == Scalar::BOOL {
+        let QualifiedScalar { scalar, is_const } = self.scalar_type()?;
+        if scalar == Scalar::BOOL || is_const {
             return Err(ParseError {
-                message: String::from("shared storage requires a 32-bit numeric type"),
+                message: String::from("shared storage requires a non-const 32-bit numeric type"),
                 span: type_span,
             });
         }

@@ -10,9 +10,11 @@ mod functions;
 mod loops;
 mod references;
 mod statements;
+mod types;
 mod updates;
 
 use context::{FunctionContext, FunctionKind};
+use types::{GlobalDeclaration, QualifiedScalar};
 
 use crate::{
     front::SymbolTable, AddressSpace, Arena, ArraySize, BinaryOperator, Binding, BuiltIn,
@@ -28,6 +30,7 @@ use super::{
 
 #[derive(Clone, Copy, Debug)]
 enum Symbol {
+    Type(QualifiedScalar),
     Array {
         pointer: Handle<Expression>,
         scalar: Scalar,
@@ -131,7 +134,7 @@ impl ExpressionResult {
 pub(super) struct Parser<'a> {
     lexer: Lexer<'a>,
     module: Module,
-    functions: FastHashMap<&'a str, Handle<Function>>,
+    global_declarations: FastHashMap<&'a str, GlobalDeclaration>,
     function: FunctionContext<'a>,
     workgroup_size: [u32; 3],
 }
@@ -141,15 +144,21 @@ impl<'a> Parser<'a> {
         Self {
             lexer,
             module: Module::default(),
-            functions: FastHashMap::default(),
+            global_declarations: FastHashMap::default(),
             function: FunctionContext::new(FunctionKind::Kernel),
             workgroup_size: options.workgroup_size,
         }
     }
 
     pub fn parse(mut self) -> Result<Module, ParseError> {
-        while self.take_ident("__device__")? {
-            self.device_function()?;
+        loop {
+            if self.starts_alias()? {
+                self.alias_declaration(true)?;
+            } else if self.take_ident("__device__")? {
+                self.device_function()?;
+            } else {
+                break;
+            }
         }
         if self.take_ident("extern")? {
             if self.lexer.peek()?.kind != TokenKind::String("C") {
@@ -164,34 +173,41 @@ impl<'a> Parser<'a> {
         self.parameters()?;
         self.expect_symbol('{')?;
         self.block_contents()?;
-        if self.lexer.peek()?.kind != TokenKind::End {
-            return self.fail("only one CUDA kernel is supported");
-        }
         self.function
             .ir
             .body
             .extend(self.function.emitter.finish(&self.function.ir.expressions));
         barriers::check_control_flow(&self.function.ir.body, false, false)?;
+        let function = core::mem::replace(
+            &mut self.function,
+            FunctionContext::new(FunctionKind::Kernel),
+        );
         self.module.entry_points.push(EntryPoint {
             name: String::from(name),
             stage: ShaderStage::Compute,
             early_depth_test: None,
             workgroup_size: self.workgroup_size,
             workgroup_size_overrides: None,
-            function: self.function.ir,
+            function: function.ir,
             mesh_info: None,
             task_payload: None,
             incoming_ray_payload: None,
         });
+        self.global_declarations
+            .insert(name, GlobalDeclaration::Kernel);
+        while self.starts_alias()? {
+            self.alias_declaration(true)?;
+        }
+        if self.lexer.peek()?.kind != TokenKind::End {
+            return self.fail("only one CUDA kernel is supported");
+        }
         // Remove call results from source statements discarded after a jump.
         crate::compact::compact(&mut self.module, crate::compact::KeepUnused::Yes);
         Ok(self.module)
     }
 
     fn parameter(&mut self) -> Result<(), ParseError> {
-        let is_const = self.take_ident("const")?;
-        let scalar = self.scalar_type()?;
-        let is_const = self.const_suffix(is_const)?;
+        let QualifiedScalar { scalar, is_const } = self.scalar_type()?;
         if self.function.kind == FunctionKind::Kernel && scalar == Scalar::BOOL {
             return self.fail("boolean kernel parameters are unsupported");
         }
@@ -456,34 +472,6 @@ impl<'a> Parser<'a> {
             scalar,
             span,
         })
-    }
-
-    fn scalar_type(&mut self) -> Result<Scalar, ParseError> {
-        if self.take_ident("bool")? {
-            Ok(Scalar::BOOL)
-        } else if self.take_ident("float")? {
-            Ok(Scalar::F32)
-        } else if self.take_ident("int")? {
-            Ok(Scalar::I32)
-        } else if self.take_ident("unsigned")? {
-            self.take_ident("int")?;
-            Ok(Scalar::U32)
-        } else {
-            self.fail("expected `float`, `int`, or `unsigned int`")
-        }
-    }
-
-    fn const_suffix(&mut self, prefix: bool) -> Result<bool, ParseError> {
-        let span = self.lexer.peek()?.span;
-        let suffix = self.take_ident("const")?;
-        if prefix && suffix {
-            Err(ParseError {
-                message: String::from("duplicate const qualifier"),
-                span,
-            })
-        } else {
-            Ok(prefix || suffix)
-        }
     }
 
     fn scalar_handle(&mut self, scalar: Scalar, span: Span) -> Handle<Type> {

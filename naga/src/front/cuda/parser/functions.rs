@@ -21,7 +21,7 @@ impl<'a> Parser<'a> {
 
     pub(super) fn check_function_name(&self, name: &str, span: Span) -> Result<(), ParseError> {
         self.check_name(name, span)?;
-        if self.functions.contains_key(name) {
+        if self.global_declarations.contains_key(name) {
             return Err(ParseError {
                 message: format!("duplicate function or unsupported overload `{name}`"),
                 span,
@@ -35,7 +35,7 @@ impl<'a> Parser<'a> {
         let scalar = if self.take_ident("void")? {
             None
         } else {
-            Some(self.scalar_type()?)
+            Some(self.scalar_type()?.scalar)
         };
         let (name, span) = self.identifier()?;
         self.check_function_name(name, span)?;
@@ -65,7 +65,8 @@ impl<'a> Parser<'a> {
             FunctionContext::new(FunctionKind::Kernel),
         );
         let handle = self.module.functions.append(function.ir, span);
-        self.functions.insert(name, handle);
+        self.global_declarations
+            .insert(name, GlobalDeclaration::Function(handle));
         Ok(())
     }
 
@@ -94,14 +95,15 @@ impl<'a> Parser<'a> {
                 span,
             });
         }
-        let function = self
-            .functions
-            .get(name)
-            .copied()
-            .ok_or_else(|| ParseError {
-                message: format!("unknown or not previously defined device helper `{name}`"),
-                span,
-            })?;
+        let function = match self.global_declarations.get(name) {
+            Some(&GlobalDeclaration::Function(function)) => function,
+            _ => {
+                return Err(ParseError {
+                    message: format!("unknown or not previously defined device helper `{name}`"),
+                    span,
+                })
+            }
+        };
         self.expect_symbol('(')?;
         let mut arguments = Vec::new();
         if self.lexer.peek()?.kind != TokenKind::Symbol(')') {

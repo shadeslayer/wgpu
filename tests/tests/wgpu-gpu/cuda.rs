@@ -16,6 +16,7 @@ pub fn all_tests(tests: &mut Vec<GpuTestInitializer>) {
         CUDA_DEVICE_FUNCTIONS,
         CUDA_VOID_FUNCTIONS,
         CUDA_CONDITIONALS,
+        CUDA_SCALAR_ALIASES,
     ]);
 }
 
@@ -659,6 +660,60 @@ static CUDA_CONDITIONALS: GpuTestConfiguration = GpuTestConfiguration::new()
                 ]
             } else {
                 [sentinel; 25]
+            };
+            assert_eq!(values, &expected, "thread {index}");
+        }
+    });
+
+#[apply(gpu_test!)]
+static CUDA_SCALAR_ALIASES: GpuTestConfiguration = GpuTestConfiguration::new()
+    .parameters(TestParameters::default().test_features_limits())
+    .run_async(|ctx| async move {
+        let length = 70u32;
+        let sentinel = 0xdeadbeefu32;
+        let input: [i32; 128] = std::array::from_fn(|index| index as i32 % 9 - 4);
+        let buffers = [
+            buffer(
+                &ctx,
+                bytemuck::cast_slice(&[sentinel; 128 * 10]),
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            ),
+            buffer(
+                &ctx,
+                bytemuck::cast_slice(&input),
+                wgpu::BufferUsages::STORAGE,
+            ),
+            buffer(
+                &ctx,
+                bytemuck::cast_slice(&[length, 0, 0, 0]),
+                wgpu::BufferUsages::UNIFORM,
+            ),
+        ];
+        let result = run_kernel(
+            &ctx,
+            include_str!("../../../naga/tests/in/cuda/scalar-aliases.cu"),
+            &buffers,
+            0,
+            2,
+        )
+        .await;
+        let actual: &[u32] = bytemuck::cast_slice(&result);
+        for (index, values) in actual.as_chunks::<10>().0.iter().enumerate() {
+            let expected = if index < length as usize {
+                [
+                    index as u32 + 10,
+                    (input[index] * 2 + 1) as u32,
+                    (-3i32) as u32,
+                    3,
+                    (-5i32) as u32,
+                    5,
+                    u32::from(index % 2 == 0),
+                    3,
+                    3,
+                    length,
+                ]
+            } else {
+                [sentinel; 10]
             };
             assert_eq!(values, &expected, "thread {index}");
         }

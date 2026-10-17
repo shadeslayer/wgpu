@@ -126,10 +126,7 @@ impl Parser<'_> {
         }
         if self.take_symbol('(')? {
             let checkpoint = self.lexer.clone();
-            if matches!(
-                self.lexer.peek()?.kind,
-                TokenKind::Ident("const" | "bool" | "int" | "unsigned" | "float")
-            ) {
+            if self.starts_type()? {
                 let target = self.cast_type()?;
                 if self.take_symbol(')')? {
                     let value = self.expression(UNARY_PRECEDENCE)?;
@@ -227,18 +224,11 @@ impl Parser<'_> {
                     value.span = token.span.until(&end);
                     return Ok(value.into());
                 }
-                let functional_target = match name {
-                    "bool" => Some(Scalar::BOOL),
-                    "int" => Some(Scalar::I32),
-                    "unsigned" => Some(Scalar::U32),
-                    "float" => Some(Scalar::F32),
-                    _ => None,
-                };
-                if let Some(target) = functional_target {
+                if let Some(target) = self.type_name(name) {
                     self.expect_symbol('(')?;
                     let value = self.expression(0)?;
                     let end = self.expect_symbol(')')?;
-                    let mut value = self.convert_value(value, target)?;
+                    let mut value = self.convert_value(value, target.scalar)?;
                     value.span = token.span.until(&end);
                     return Ok(value.into());
                 }
@@ -265,6 +255,12 @@ impl Parser<'_> {
                     span: token.span,
                 })?;
                 let (pointer, scalar, writable, span) = match symbol {
+                    Symbol::Type(_) => {
+                        return Err(ParseError {
+                            message: format!("type `{name}` cannot be used as a value"),
+                            span: token.span,
+                        });
+                    }
                     Symbol::Array {
                         pointer,
                         scalar,

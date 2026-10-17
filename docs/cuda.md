@@ -32,7 +32,8 @@ Device and backend resource limits still apply.
 Each source contains one `__global__ void` kernel, optionally preceded by
 `extern "C"`, after any device helper definitions. Parameter types are `float`,
 `int`, or `unsigned int` (`unsigned` is also accepted), either by value or as
-flat pointers. Parameter number `i` uses group 0, binding `i`, preserving source
+flat pointers; scalar aliases of these types are also accepted.
+Parameter number `i` uses group 0, binding `i`, preserving source
 order across both parameter kinds.
 The caller supplies these buffers and dispatches the resulting compute entry
 point by its original kernel name.
@@ -107,6 +108,18 @@ compute builtins in helpers remain unsupported.
 
 ## Source subset
 
+Scalar aliases support `typedef` and `using` for `bool`, `int`, `unsigned int`,
+and `float`, including alias chains and `const` qualification. For example,
+`typedef unsigned int Count, Index;` and `using Sample = const float;` preserve
+the underlying scalar type and resource layout. Repeating an alias declaration
+with the same type and qualification is allowed. Explicit duplicate `const`
+qualifiers are rejected; requalifying an already const alias is allowed.
+
+Aliases can appear at file scope before, between, or after functions, and in
+blocks and `for` initializers. Local values can hide outer type names, and local
+aliases can hide outer values or functions. A `using` alias in a `for` initializer
+uses C++23 syntax. Pointer, array, function, and void aliases remain unsupported.
+
 Supported expressions include indexed buffer reads, initialized scalar locals,
 parentheses, arithmetic and comparisons with scalar conversions, and the logical operators
 `!`, `&&`, and `||`. Logical operators preserve short-circuit evaluation. Numeric
@@ -128,7 +141,8 @@ At statement start, C++ parses `int(value);` as a declaration. Parenthesized
 declarators are unsupported; use `int value = ...;` for a local declaration or
 `(int(value));` for a discarded cast expression.
 Loop conditions are scalar expressions; `for` initializers can declare one
-initialized scalar or evaluate an expression. Empty `for` clauses are supported.
+initialized scalar, declare scalar aliases, or evaluate an expression. Empty
+`for` clauses are supported.
 `continue` executes a `for` loop's update before testing the condition again,
 and checks a `do`/`while` condition before the next iteration. A `for` initializer
 is scoped to the loop. Nested blocks support local shadowing. Statements after a

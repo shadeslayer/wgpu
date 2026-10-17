@@ -1,7 +1,10 @@
 use super::*;
 
-pub(super) fn parenthesized_declaration(mut lexer: Lexer<'_>) -> Result<bool, ParseError> {
-    if !declarator(&mut lexer, 0)? {
+pub(super) fn parenthesized_declaration(
+    parser: &Parser<'_>,
+    mut lexer: Lexer<'_>,
+) -> Result<bool, ParseError> {
+    if !declarator(parser, &mut lexer, 0)? {
         return Ok(false);
     }
     if lexer.peek()?.kind == TokenKind::Symbol('(') && !balanced(&mut lexer, 0)? {
@@ -13,7 +16,7 @@ pub(super) fn parenthesized_declaration(mut lexer: Lexer<'_>) -> Result<bool, Pa
     ))
 }
 
-fn declarator(lexer: &mut Lexer<'_>, depth: u32) -> Result<bool, ParseError> {
+fn declarator(parser: &Parser<'_>, lexer: &mut Lexer<'_>, depth: u32) -> Result<bool, ParseError> {
     check_depth(lexer, depth)?;
     while matches!(
         lexer.peek()?.kind,
@@ -28,7 +31,7 @@ fn declarator(lexer: &mut Lexer<'_>, depth: u32) -> Result<bool, ParseError> {
         }
         TokenKind::Symbol('(') => {
             lexer.next()?;
-            if !declarator(lexer, depth + 1)? || !lexer.next_if(TokenKind::Symbol(')'))? {
+            if !declarator(parser, lexer, depth + 1)? || !lexer.next_if(TokenKind::Symbol(')'))? {
                 return Ok(false);
             }
         }
@@ -43,7 +46,7 @@ fn declarator(lexer: &mut Lexer<'_>, depth: u32) -> Result<bool, ParseError> {
             }
             TokenKind::Symbol('(') => {
                 let checkpoint = lexer.clone();
-                if !parameters(lexer, depth + 1)? {
+                if !parameters(parser, lexer, depth + 1)? {
                     *lexer = checkpoint;
                     break;
                 }
@@ -54,27 +57,23 @@ fn declarator(lexer: &mut Lexer<'_>, depth: u32) -> Result<bool, ParseError> {
     Ok(true)
 }
 
-fn parameters(lexer: &mut Lexer<'_>, depth: u32) -> Result<bool, ParseError> {
+fn parameters(parser: &Parser<'_>, lexer: &mut Lexer<'_>, depth: u32) -> Result<bool, ParseError> {
     check_depth(lexer, depth)?;
     lexer.next()?;
     if lexer.next_if(TokenKind::Symbol(')'))? {
         return Ok(true);
     }
     loop {
-        lexer.next_if(TokenKind::Ident("const"))?;
-        match lexer.peek()?.kind {
-            TokenKind::Ident("bool" | "float" | "int" | "void") => {
-                lexer.next()?;
+        if !lexer.next_if(TokenKind::Ident("void"))? {
+            match lexer.peek()?.kind {
+                TokenKind::Ident("const") => {}
+                TokenKind::Ident(name) if parser.type_name(name).is_some() => {}
+                _ => return Ok(false),
             }
-            TokenKind::Ident("unsigned") => {
-                lexer.next()?;
-                lexer.next_if(TokenKind::Ident("int"))?;
-            }
-            _ => return Ok(false),
+            parser.scalar_type_from(lexer)?;
         }
-        lexer.next_if(TokenKind::Ident("const"))?;
         if !matches!(lexer.peek()?.kind, TokenKind::Symbol(',' | ')' | '='))
-            && !declarator(lexer, depth + 1)?
+            && !declarator(parser, lexer, depth + 1)?
         {
             return Ok(false);
         }
