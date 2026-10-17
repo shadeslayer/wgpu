@@ -1,6 +1,13 @@
 use super::*;
 
+#[derive(Clone, Copy, PartialEq)]
+pub(super) enum FunctionKind {
+    Kernel,
+    Device,
+}
+
 pub(super) struct FunctionContext<'a> {
+    pub(super) kind: FunctionKind,
     pub(super) ir: Function,
     pub(super) emitter: crate::proc::Emitter,
     pub(super) symbol_table: SymbolTable<&'a str, Symbol>,
@@ -12,11 +19,12 @@ pub(super) struct FunctionContext<'a> {
 }
 
 impl FunctionContext<'_> {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(kind: FunctionKind) -> Self {
         let ir = Function::default();
         let mut emitter = crate::proc::Emitter::default();
         emitter.start(&ir.expressions);
         Self {
+            kind,
             ir,
             emitter,
             symbol_table: SymbolTable::default(),
@@ -30,7 +38,21 @@ impl FunctionContext<'_> {
 }
 
 impl Parser<'_> {
-    fn flush_emitter(&mut self) {
+    pub(super) fn append_call_result(
+        &mut self,
+        function: Handle<Function>,
+        span: Span,
+    ) -> Result<Handle<Expression>, ParseError> {
+        self.function
+            .ir
+            .body
+            .extend(self.function.emitter.finish(&self.function.ir.expressions));
+        let handle = self.append(Expression::CallResult(function), span)?;
+        self.function.emitter.start(&self.function.ir.expressions);
+        Ok(handle)
+    }
+
+    pub(super) fn flush_emitter(&mut self) {
         self.function
             .ir
             .body

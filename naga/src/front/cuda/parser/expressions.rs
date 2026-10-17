@@ -232,6 +232,9 @@ impl Parser<'_> {
                 if matches!(name, "threadIdx" | "blockIdx" | "blockDim" | "gridDim") {
                     return self.builtin(name, token.span);
                 }
+                if self.lexer.peek()?.kind == TokenKind::Symbol('(') {
+                    return self.call(name, token.span);
+                }
                 let symbol = self.lookup_symbol(name).ok_or_else(|| ParseError {
                     message: format!("unknown variable `{name}`"),
                     span: token.span,

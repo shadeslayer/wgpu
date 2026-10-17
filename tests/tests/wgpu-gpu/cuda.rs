@@ -13,6 +13,7 @@ pub fn all_tests(tests: &mut Vec<GpuTestInitializer>) {
         CUDA_INTEGER_OPERATORS,
         CUDA_SHARED_STORAGE,
         CUDA_BARRIERS,
+        CUDA_DEVICE_FUNCTIONS,
     ]);
 }
 
@@ -481,4 +482,58 @@ static CUDA_BARRIERS: GpuTestConfiguration = GpuTestConfiguration::new()
             }
         }
         assert!(actual[512..].iter().all(|&value| value == u32::MAX));
+    });
+
+#[apply(gpu_test!)]
+static CUDA_DEVICE_FUNCTIONS: GpuTestConfiguration = GpuTestConfiguration::new()
+    .parameters(TestParameters::default().test_features_limits())
+    .run_async(|ctx| async move {
+        let length = 70u32;
+        let sentinel = -9876i32;
+        let buffers = [
+            buffer(
+                &ctx,
+                bytemuck::cast_slice(&[sentinel; 128 * 10]),
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            ),
+            buffer(
+                &ctx,
+                bytemuck::cast_slice(&[length, 0, 0, 0]),
+                wgpu::BufferUsages::UNIFORM,
+            ),
+        ];
+        let result = run_kernel(
+            &ctx,
+            include_str!("../../../naga/tests/in/cuda/device-functions.cu"),
+            &buffers,
+            0,
+            2,
+        )
+        .await;
+        let actual: &[i32] = bytemuck::cast_slice(&result);
+        let choose = |value: i32| if value >= 0 { value * 2 + 1 } else { -value };
+        for (index, values) in actual.as_chunks::<10>().0.iter().enumerate() {
+            if index >= length as usize {
+                assert_eq!(values, &[sentinel; 10], "guarded thread {index}");
+                continue;
+            }
+            let value = index as i32 - 35;
+            assert_eq!(
+                values,
+                &[
+                    choose(value),
+                    (value as f32 * 1.5 + 2.0) as i32,
+                    10,
+                    4,
+                    value * 2 + 1,
+                    value,
+                    choose(value) + choose(value + 1),
+                    i32::from(value >= 0),
+                    // The frontend chooses left-to-right argument capture.
+                    33,
+                    4,
+                ],
+                "thread {index}",
+            );
+        }
     });

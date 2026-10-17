@@ -75,11 +75,26 @@ impl<'a> Parser<'a> {
             return Ok(accept_terminated && reject_terminated);
         }
         if self.take_ident("return")? {
+            let value = if let Some(ref result) = self.function.ir.result {
+                let TypeInner::Scalar(scalar) = self.module.types[result.ty].inner else {
+                    unreachable!()
+                };
+                let value = self.expression(0)?;
+                Some(self.convert_value(value, scalar)?.handle)
+            } else {
+                None
+            };
             let end = self.expect_symbol(';')?;
-            self.push_statement(Statement::Return { value: None }, start.until(&end));
+            self.push_statement(Statement::Return { value }, start.until(&end));
             return Ok(true);
         }
         if self.take_ident("__syncthreads")? {
+            if self.function.kind == FunctionKind::Device {
+                return Err(ParseError {
+                    message: String::from("barriers are unsupported in device helpers"),
+                    span: start,
+                });
+            }
             self.expect_symbol('(')?;
             self.expect_symbol(')')?;
             let end = self.expect_symbol(';')?;
@@ -148,10 +163,6 @@ impl<'a> Parser<'a> {
         let is_const = self.const_suffix(is_const)?;
         let (name, span) = self.identifier()?;
         self.check_name(name, span)?;
-        self.expect_symbol('=')?;
-        let value = self.expression(0)?;
-        let value = self.convert_value(value, scalar)?;
-        let end = self.expect_symbol(';')?;
         let ty = self.scalar_handle(scalar, span);
         let local = self.function.ir.local_variables.append(
             LocalVariable {
@@ -162,13 +173,6 @@ impl<'a> Parser<'a> {
             span,
         );
         let pointer = self.append(Expression::LocalVariable(local), span)?;
-        self.push_statement(
-            Statement::Store {
-                pointer,
-                value: value.handle,
-            },
-            span.until(&end),
-        );
         self.insert_symbol(
             name,
             Symbol::Scalar {
@@ -178,10 +182,24 @@ impl<'a> Parser<'a> {
             },
             span,
         )?;
+        self.expect_symbol('=')?;
+        let value = self.expression(0)?;
+        let value = self.convert_value(value, scalar)?;
+        let end = self.expect_symbol(';')?;
+        self.push_statement(
+            Statement::Store {
+                pointer,
+                value: value.handle,
+            },
+            span.until(&end),
+        );
         Ok(())
     }
 
     fn shared_declaration(&mut self) -> Result<(), ParseError> {
+        if self.function.kind == FunctionKind::Device {
+            return self.fail("shared storage is unsupported in device helpers");
+        }
         let type_span = self.lexer.peek()?.span;
         let scalar = self.scalar_type()?;
         if scalar == Scalar::BOOL {

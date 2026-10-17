@@ -4,17 +4,18 @@ mod barriers;
 mod context;
 mod conversions;
 mod expressions;
+mod functions;
 mod loops;
 mod statements;
 mod updates;
 
-use context::FunctionContext;
+use context::{FunctionContext, FunctionKind};
 
 use crate::{
     front::SymbolTable, AddressSpace, ArraySize, BinaryOperator, Binding, BuiltIn, EntryPoint,
-    Expression, Function, FunctionArgument, GlobalVariable, Handle, Literal, LocalVariable, Module,
-    ResourceBinding, Scalar, ScalarKind, ShaderStage, Span, Statement, StorageAccess, StructMember,
-    Type, TypeInner, UnaryOperator, VectorSize,
+    Expression, FastHashMap, Function, FunctionArgument, GlobalVariable, Handle, Literal,
+    LocalVariable, Module, ResourceBinding, Scalar, ScalarKind, ShaderStage, Span, Statement,
+    StorageAccess, StructMember, Type, TypeInner, UnaryOperator, VectorSize,
 };
 
 use super::{
@@ -53,6 +54,7 @@ struct Value {
 pub(super) struct Parser<'a> {
     lexer: Lexer<'a>,
     module: Module,
+    functions: FastHashMap<&'a str, Handle<Function>>,
     function: FunctionContext<'a>,
     workgroup_size: [u32; 3],
 }
@@ -62,12 +64,16 @@ impl<'a> Parser<'a> {
         Self {
             lexer,
             module: Module::default(),
-            function: FunctionContext::new(),
+            functions: FastHashMap::default(),
+            function: FunctionContext::new(FunctionKind::Kernel),
             workgroup_size: options.workgroup_size,
         }
     }
 
     pub fn parse(mut self) -> Result<Module, ParseError> {
+        while self.take_ident("__device__")? {
+            self.device_function()?;
+        }
         if self.take_ident("extern")? {
             if self.lexer.peek()?.kind != TokenKind::String("C") {
                 return self.fail("expected `\"C\"` after `extern`");
@@ -77,21 +83,8 @@ impl<'a> Parser<'a> {
         self.expect_ident("__global__")?;
         self.expect_ident("void")?;
         let (name, name_span) = self.identifier()?;
-        self.check_name(name, name_span)?;
-        self.expect_symbol('(')?;
-        if !self.take_symbol(')')? {
-            if self.take_ident("void")? {
-                self.expect_symbol(')')?;
-            } else {
-                loop {
-                    self.parameter()?;
-                    if self.take_symbol(')')? {
-                        break;
-                    }
-                    self.expect_symbol(',')?;
-                }
-            }
-        }
+        self.check_function_name(name, name_span)?;
+        self.parameters()?;
         self.expect_symbol('{')?;
         self.block_contents()?;
         if self.lexer.peek()?.kind != TokenKind::End {
@@ -113,6 +106,8 @@ impl<'a> Parser<'a> {
             task_payload: None,
             incoming_ray_payload: None,
         });
+        // Remove call results from source statements discarded after a jump.
+        crate::compact::compact(&mut self.module, crate::compact::KeepUnused::Yes);
         Ok(self.module)
     }
 
@@ -120,12 +115,22 @@ impl<'a> Parser<'a> {
         let is_const = self.take_ident("const")?;
         let scalar = self.scalar_type()?;
         let is_const = self.const_suffix(is_const)?;
-        if scalar == Scalar::BOOL {
+        if self.function.kind == FunctionKind::Kernel && scalar == Scalar::BOOL {
             return self.fail("boolean kernel parameters are unsupported");
         }
+        let pointer_span = self.lexer.peek()?.span;
         let is_pointer = self.take_symbol('*')?;
+        if self.function.kind == FunctionKind::Device && is_pointer {
+            return Err(ParseError {
+                message: String::from("device helper pointer parameters are unsupported"),
+                span: pointer_span,
+            });
+        }
         let (name, span) = self.identifier()?;
         self.check_name(name, span)?;
+        if self.function.kind == FunctionKind::Device {
+            return self.device_parameter(name, span, scalar, is_const);
+        }
         if !is_pointer {
             return self.scalar_parameter(name, span, scalar, is_const);
         }
@@ -209,6 +214,18 @@ impl<'a> Parser<'a> {
         let base = self.append(Expression::GlobalVariable(global), span)?;
         let field = self.append(Expression::AccessIndex { base, index: 0 }, span)?;
         let value = self.append(Expression::Load { pointer: field }, span)?;
+        self.initialize_parameter(name, span, scalar, is_const, value)
+    }
+
+    fn initialize_parameter(
+        &mut self,
+        name: &'a str,
+        span: Span,
+        scalar: Scalar,
+        is_const: bool,
+        value: Handle<Expression>,
+    ) -> Result<(), ParseError> {
+        let scalar_ty = self.scalar_handle(scalar, span);
         let local = self.function.ir.local_variables.append(
             LocalVariable {
                 name: Some(String::from(name)),
@@ -256,6 +273,12 @@ impl<'a> Parser<'a> {
     }
 
     fn builtin(&mut self, name: &str, start: Span) -> Result<Value, ParseError> {
+        if self.function.kind == FunctionKind::Device {
+            return Err(ParseError {
+                message: String::from("compute builtins are unsupported in device helpers"),
+                span: start,
+            });
+        }
         self.expect_symbol('.')?;
         let (component, span) = self.identifier()?;
         let index = match component {
@@ -457,6 +480,7 @@ impl<'a> Parser<'a> {
                 | "return"
                 | "extern"
                 | "__global__"
+                | "__device__"
                 | "__syncthreads"
         ) || [
             "alignas",

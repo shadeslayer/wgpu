@@ -30,9 +30,10 @@ Device and backend resource limits still apply.
 ## Kernel interface
 
 Each source contains one `__global__ void` kernel, optionally preceded by
-`extern "C"`. Parameter types are `float`, `int`, or `unsigned int` (`unsigned`
-is also accepted), either by value or as flat pointers. Parameter number `i`
-uses group 0, binding `i`, preserving source order across both parameter kinds.
+`extern "C"`, after any device helper definitions. Parameter types are `float`,
+`int`, or `unsigned int` (`unsigned` is also accepted), either by value or as
+flat pointers. Parameter number `i` uses group 0, binding `i`, preserving source
+order across both parameter kinds.
 The caller supplies these buffers and dispatches the resulting compute entry
 point by its original kernel name.
 
@@ -72,6 +73,33 @@ as 32-bit values at byte offsets 0, 4, and 8. The library equivalent is
 `gridDim` produce an HLSL error if this binding is missing. Kernels using only
 `threadIdx`, `blockIdx`, and `blockDim` do not need this buffer.
 
+## Device helpers
+
+`__device__` functions defined before the kernel can take and return `float`,
+`int`, `unsigned int`, or `bool` scalars. Helpers can use local declarations,
+arithmetic, control flow, and calls to earlier helpers:
+
+```cuda
+__device__ float scale(float value, float factor) {
+    value *= factor;
+    return value;
+}
+__global__ void apply(float *out, const float *input) {
+    unsigned i = threadIdx.x;
+    out[i] = scale(input[i], 2.0f);
+}
+```
+
+The frontend evaluates arguments left to right, converts them to the parameter
+types, and copies them into per-call locals. Assignments affect only those copies;
+`const` parameters cannot be assigned. Return values convert to the declared
+result type. Helpers must explicitly return on every supported path; a return
+inside a loop alone does not satisfy this conservative check.
+
+Helpers have no resource bindings. Prototypes, overloads, recursion, forward
+calls, `void` results, pointers, references, shared storage, barriers, and
+compute builtins in helpers remain unsupported.
+
 ## Source subset
 
 Supported expressions include indexed buffer reads, initialized scalar locals,
@@ -81,7 +109,7 @@ conditions are false when equal to zero; boolean locals and `true`/`false`
 literals are supported.
 
 Statements include local declarations, expression statements, scoped blocks,
-`if`/`else`, `for`, `while`, `do`/`while`, `break`, `continue`, and `return;`.
+`if`/`else`, `for`, `while`, `do`/`while`, `break`, `continue`, and `return`.
 Loop conditions are scalar expressions; `for` initializers can declare one
 initialized scalar or evaluate an expression. Empty `for` clauses are supported.
 `continue` executes a `for` loop's update before testing the condition again,
@@ -141,7 +169,7 @@ allowed. Synchronization does not extend across workgroups.
 
 Unsupported syntax produces a parse error with a source span. This includes
 preprocessor directives and includes, host code and launch syntax,
-general pointer operations, device functions and calls, switches,
+general pointer operations, switches,
 dynamic shared memory, atomics, other synchronization primitives, templates,
 double precision, and inline PTX. No CUDA runtime ABI or NVIDIA device code is
 generated.
@@ -149,7 +177,8 @@ generated.
 ## Further increments
 
 Add each capability with a failing acceptance test and rejection tests before
-changing the parser or lowering. Useful next increments are device functions,
-dynamic shared storage, and more general barrier placement. Each increment must
-preserve validation and backend compatibility; CUDA-specific features need an
-explicit portable representation or an unsupported-feature diagnostic.
+changing the parser or lowering. Useful next increments are more device-function
+signatures, dynamic shared storage, and more general barrier placement. Each
+increment must preserve validation and backend compatibility; CUDA-specific
+features need an explicit portable representation or an unsupported-feature
+diagnostic.
