@@ -22,9 +22,9 @@ impl Parser<'_> {
         let ((), body) = self.capture_block(|parser| {
             parser.loop_condition()?;
             parser.expect_symbol(')')?;
-            parser.loop_depth += 1;
+            parser.function.loop_depth += 1;
             let result = parser.scoped_statement();
-            parser.loop_depth -= 1;
+            parser.function.loop_depth -= 1;
             let (body, _) = result?;
             parser.push_statement(Statement::Block(body), start);
             Ok(())
@@ -42,9 +42,9 @@ impl Parser<'_> {
 
     pub(super) fn for_loop(&mut self, start: Span) -> Result<(), ParseError> {
         self.expect_symbol('(')?;
-        self.symbol_table.push_scope();
+        self.function.symbol_table.push_scope();
         let result = self.for_loop_body(start);
-        self.symbol_table.pop_scope();
+        self.function.symbol_table.pop_scope();
         self.push_statement(Statement::Block(result?), start);
         Ok(())
     }
@@ -75,7 +75,7 @@ impl Parser<'_> {
             }
             Ok(())
         })?;
-        self.loop_depth += 1;
+        self.function.loop_depth += 1;
         let result = self.capture_block(|parser| {
             if parser.take_symbol('{')? {
                 parser.block_contents()
@@ -83,7 +83,7 @@ impl Parser<'_> {
                 parser.statement()
             }
         });
-        self.loop_depth -= 1;
+        self.function.loop_depth -= 1;
         let (_, statements) = result?;
         body.extend_block(statements);
         init.push(
@@ -98,9 +98,9 @@ impl Parser<'_> {
     }
 
     pub(super) fn do_loop(&mut self, start: Span) -> Result<(), ParseError> {
-        self.loop_depth += 1;
+        self.function.loop_depth += 1;
         let result = self.scoped_statement();
-        self.loop_depth -= 1;
+        self.function.loop_depth -= 1;
         let (body, _) = result?;
         self.expect_ident("while")?;
         self.expect_symbol('(')?;

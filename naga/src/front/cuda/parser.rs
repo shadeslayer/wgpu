@@ -8,6 +8,8 @@ mod loops;
 mod statements;
 mod updates;
 
+use context::FunctionContext;
+
 use crate::{
     front::SymbolTable, AddressSpace, ArraySize, BinaryOperator, Binding, BuiltIn, EntryPoint,
     Expression, Function, FunctionArgument, GlobalVariable, Handle, Literal, LocalVariable, Module,
@@ -51,34 +53,18 @@ struct Value {
 pub(super) struct Parser<'a> {
     lexer: Lexer<'a>,
     module: Module,
-    function: Function,
-    emitter: crate::proc::Emitter,
-    symbol_table: SymbolTable<&'a str, Symbol>,
-    statement_depth: u32,
-    loop_depth: u32,
-    builtin_arguments: [Option<Handle<Expression>>; 3],
+    function: FunctionContext<'a>,
     workgroup_size: [u32; 3],
-    expression_depth: u32,
-    expression_graph_depths: Vec<u32>,
 }
 
 impl<'a> Parser<'a> {
     pub fn new(lexer: Lexer<'a>, options: &Options) -> Self {
-        let mut parser = Self {
+        Self {
             lexer,
             module: Module::default(),
-            function: Function::default(),
-            emitter: crate::proc::Emitter::default(),
-            symbol_table: SymbolTable::default(),
-            statement_depth: 0,
-            loop_depth: 0,
-            builtin_arguments: [None; 3],
+            function: FunctionContext::new(),
             workgroup_size: options.workgroup_size,
-            expression_depth: 0,
-            expression_graph_depths: Vec::new(),
-        };
-        parser.emitter.start(&parser.function.expressions);
-        parser
+        }
     }
 
     pub fn parse(mut self) -> Result<Module, ParseError> {
@@ -112,16 +98,17 @@ impl<'a> Parser<'a> {
             return self.fail("only one CUDA kernel is supported");
         }
         self.function
+            .ir
             .body
-            .extend(self.emitter.finish(&self.function.expressions));
-        barriers::check_control_flow(&self.function.body, false, false)?;
+            .extend(self.function.emitter.finish(&self.function.ir.expressions));
+        barriers::check_control_flow(&self.function.ir.body, false, false)?;
         self.module.entry_points.push(EntryPoint {
             name: String::from(name),
             stage: ShaderStage::Compute,
             early_depth_test: None,
             workgroup_size: self.workgroup_size,
             workgroup_size_overrides: None,
-            function: self.function,
+            function: self.function.ir,
             mesh_info: None,
             task_payload: None,
             incoming_ray_payload: None,
@@ -222,7 +209,7 @@ impl<'a> Parser<'a> {
         let base = self.append(Expression::GlobalVariable(global), span)?;
         let field = self.append(Expression::AccessIndex { base, index: 0 }, span)?;
         let value = self.append(Expression::Load { pointer: field }, span)?;
-        let local = self.function.local_variables.append(
+        let local = self.function.ir.local_variables.append(
             LocalVariable {
                 name: Some(String::from(name)),
                 ty: scalar_ty,
@@ -294,7 +281,7 @@ impl<'a> Parser<'a> {
                 "blockIdx" => (1, BuiltIn::WorkGroupId),
                 _ => (2, BuiltIn::NumWorkGroups),
             };
-            let base = if let Some(base) = self.builtin_arguments[slot] {
+            let base = if let Some(base) = self.function.builtin_arguments[slot] {
                 base
             } else {
                 let ty = self.module.types.insert(
@@ -307,14 +294,14 @@ impl<'a> Parser<'a> {
                     },
                     span,
                 );
-                let argument_index = self.function.arguments.len() as u32;
-                self.function.arguments.push(FunctionArgument {
+                let argument_index = self.function.ir.arguments.len() as u32;
+                self.function.ir.arguments.push(FunctionArgument {
                     name: Some(String::from(name)),
                     ty,
                     binding: Some(Binding::BuiltIn(builtin)),
                 });
                 let base = self.append(Expression::FunctionArgument(argument_index), span)?;
-                self.builtin_arguments[slot] = Some(base);
+                self.function.builtin_arguments[slot] = Some(base);
                 base
             };
             self.append(Expression::AccessIndex { base, index }, span)?
@@ -421,15 +408,15 @@ impl<'a> Parser<'a> {
             | Expression::As { expr: operand, .. }
             | Expression::AccessIndex { base: operand, .. }
             | Expression::Load { pointer: operand } => {
-                self.expression_graph_depths[operand.index()] + 1
+                self.function.expression_graph_depths[operand.index()] + 1
             }
             Expression::Binary { left, right, .. }
             | Expression::Access {
                 base: left,
                 index: right,
             } => {
-                self.expression_graph_depths[left.index()]
-                    .max(self.expression_graph_depths[right.index()])
+                self.function.expression_graph_depths[left.index()]
+                    .max(self.function.expression_graph_depths[right.index()])
                     + 1
             }
             _ => 0,
@@ -443,13 +430,14 @@ impl<'a> Parser<'a> {
         let pre_emitted = expression.needs_pre_emit();
         if pre_emitted {
             self.function
+                .ir
                 .body
-                .extend(self.emitter.finish(&self.function.expressions));
+                .extend(self.function.emitter.finish(&self.function.ir.expressions));
         }
-        let handle = self.function.expressions.append(expression, span);
-        self.expression_graph_depths.push(depth);
+        let handle = self.function.ir.expressions.append(expression, span);
+        self.function.expression_graph_depths.push(depth);
         if pre_emitted {
-            self.emitter.start(&self.function.expressions);
+            self.function.emitter.start(&self.function.ir.expressions);
         }
         Ok(handle)
     }
@@ -581,7 +569,7 @@ impl<'a> Parser<'a> {
         symbol: Symbol,
         span: Span,
     ) -> Result<(), ParseError> {
-        if self.symbol_table.add(name, symbol).is_some() {
+        if self.function.symbol_table.add(name, symbol).is_some() {
             Err(ParseError {
                 message: format!("duplicate or reserved name `{name}`"),
                 span,
@@ -592,7 +580,7 @@ impl<'a> Parser<'a> {
     }
 
     fn lookup_symbol(&self, name: &str) -> Option<Symbol> {
-        self.symbol_table.lookup(name).copied()
+        self.function.symbol_table.lookup(name).copied()
     }
 
     fn take_symbol(&mut self, symbol: char) -> Result<bool, ParseError> {

@@ -20,7 +20,7 @@ impl<'a> Parser<'a> {
 
     pub(super) fn scoped_statement(&mut self) -> Result<(crate::Block, bool), ParseError> {
         let compound = self.take_symbol('{')?;
-        self.symbol_table.push_scope();
+        self.function.symbol_table.push_scope();
         let result = self.capture_block(|parser| {
             if compound {
                 parser.block_contents()
@@ -28,17 +28,17 @@ impl<'a> Parser<'a> {
                 parser.statement()
             }
         });
-        self.symbol_table.pop_scope();
+        self.function.symbol_table.pop_scope();
         result.map(|(terminated, body)| (body, terminated))
     }
 
     pub(super) fn statement(&mut self) -> Result<bool, ParseError> {
-        self.statement_depth += 1;
-        if self.statement_depth > 64 {
+        self.function.statement_depth += 1;
+        if self.function.statement_depth > 64 {
             return self.fail("CUDA statement nesting limit exceeded");
         }
         let result = self.statement_inner();
-        self.statement_depth -= 1;
+        self.function.statement_depth -= 1;
         result
     }
 
@@ -103,7 +103,7 @@ impl<'a> Parser<'a> {
         }
         if matches!(token.kind, TokenKind::Ident("break" | "continue")) {
             self.lexer.next()?;
-            if self.loop_depth == 0 {
+            if self.function.loop_depth == 0 {
                 return Err(ParseError {
                     message: String::from("jump requires an enclosing loop"),
                     span: start,
@@ -153,7 +153,7 @@ impl<'a> Parser<'a> {
         let value = self.convert_value(value, scalar)?;
         let end = self.expect_symbol(';')?;
         let ty = self.scalar_handle(scalar, span);
-        let local = self.function.local_variables.append(
+        let local = self.function.ir.local_variables.append(
             LocalVariable {
                 name: Some(String::from(name)),
                 ty,

@@ -4,12 +4,12 @@ const UNARY_PRECEDENCE: u8 = 11;
 
 impl Parser<'_> {
     pub(super) fn expression(&mut self, minimum_precedence: u8) -> Result<Value, ParseError> {
-        self.expression_depth += 1;
-        if self.expression_depth > 64 {
+        self.function.expression_depth += 1;
+        if self.function.expression_depth > 64 {
             return self.fail("CUDA expression nesting limit exceeded");
         }
         let result = self.capture_block(|parser| parser.expression_inner(minimum_precedence));
-        self.expression_depth -= 1;
+        self.function.expression_depth -= 1;
         let (value, body) = result?;
         self.append_block(body);
         Ok(value)
@@ -247,7 +247,7 @@ impl Parser<'_> {
                             pointer,
                             scalar,
                             writable,
-                            self.function.expressions.get_span(pointer),
+                            self.function.ir.expressions.get_span(pointer),
                         )
                     }
                     Symbol::Scalar {
@@ -303,7 +303,7 @@ impl Parser<'_> {
     ) -> Result<Value, ParseError> {
         let left = self.truthy(left)?;
         let ty = self.scalar_handle(Scalar::BOOL, left.span);
-        let local = self.function.local_variables.append(
+        let local = self.function.ir.local_variables.append(
             LocalVariable {
                 name: None,
                 ty,

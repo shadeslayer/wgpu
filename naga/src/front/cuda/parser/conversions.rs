@@ -88,7 +88,7 @@ impl Parser<'_> {
                 if operator == BinaryOperator::ShiftLeft {
                     // Keep wrapping shifts out of WGSL constant evaluation.
                     let ty = self.scalar_handle(Scalar::U32, right.span);
-                    let local = self.function.local_variables.append(
+                    let local = self.function.ir.local_variables.append(
                         LocalVariable {
                             name: None,
                             ty,

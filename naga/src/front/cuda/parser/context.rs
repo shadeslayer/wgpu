@@ -1,16 +1,46 @@
 use super::*;
 
+pub(super) struct FunctionContext<'a> {
+    pub(super) ir: Function,
+    pub(super) emitter: crate::proc::Emitter,
+    pub(super) symbol_table: SymbolTable<&'a str, Symbol>,
+    pub(super) statement_depth: u32,
+    pub(super) loop_depth: u32,
+    pub(super) builtin_arguments: [Option<Handle<Expression>>; 3],
+    pub(super) expression_depth: u32,
+    pub(super) expression_graph_depths: Vec<u32>,
+}
+
+impl FunctionContext<'_> {
+    pub(super) fn new() -> Self {
+        let ir = Function::default();
+        let mut emitter = crate::proc::Emitter::default();
+        emitter.start(&ir.expressions);
+        Self {
+            ir,
+            emitter,
+            symbol_table: SymbolTable::default(),
+            statement_depth: 0,
+            loop_depth: 0,
+            builtin_arguments: [None; 3],
+            expression_depth: 0,
+            expression_graph_depths: Vec::new(),
+        }
+    }
+}
+
 impl Parser<'_> {
     fn flush_emitter(&mut self) {
         self.function
+            .ir
             .body
-            .extend(self.emitter.finish(&self.function.expressions));
-        self.emitter.start(&self.function.expressions);
+            .extend(self.function.emitter.finish(&self.function.ir.expressions));
+        self.function.emitter.start(&self.function.ir.expressions);
     }
 
     pub(super) fn push_statement(&mut self, statement: Statement, span: Span) {
         self.flush_emitter();
-        self.function.body.push(statement, span);
+        self.function.ir.body.push(statement, span);
     }
 
     pub(super) fn capture_block<T>(
@@ -18,21 +48,21 @@ impl Parser<'_> {
         parse: impl FnOnce(&mut Self) -> Result<T, ParseError>,
     ) -> Result<(T, crate::Block), ParseError> {
         self.flush_emitter();
-        let parent_body = core::mem::take(&mut self.function.body);
+        let parent_body = core::mem::take(&mut self.function.ir.body);
         let result = parse(self);
         self.flush_emitter();
-        let captured_body = core::mem::replace(&mut self.function.body, parent_body);
+        let captured_body = core::mem::replace(&mut self.function.ir.body, parent_body);
         result.map(|value| (value, captured_body))
     }
 
     pub(super) fn append_block(&mut self, block: crate::Block) {
         self.flush_emitter();
-        self.function.body.extend_block(block);
+        self.function.ir.body.extend_block(block);
     }
 
     pub(super) fn prepend_block(&mut self, mut block: crate::Block) {
         self.flush_emitter();
-        core::mem::swap(&mut self.function.body, &mut block);
+        core::mem::swap(&mut self.function.ir.body, &mut block);
         self.append_block(block);
     }
 }
