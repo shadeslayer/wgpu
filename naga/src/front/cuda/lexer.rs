@@ -114,19 +114,24 @@ pub(super) fn lex(source: &str) -> Result<Vec<Token<'_>>, ParseError> {
             }
             cursor += 1;
             TokenKind::String(&source[start + 1..cursor - 1])
+        } else if bytes[cursor..].starts_with(b"<<=") || bytes[cursor..].starts_with(b">>=") {
+            cursor += 3;
+            TokenKind::Operator(&source[start..cursor])
         } else if matches!(
             (byte, bytes.get(cursor + 1)),
             (
-                b'=' | b'!' | b'<' | b'>' | b'+' | b'-' | b'*' | b'/',
+                b'=' | b'!' | b'<' | b'>' | b'+' | b'-' | b'*' | b'/' | b'%' | b'&' | b'|' | b'^',
                 Some(b'=')
             ) | (b'+', Some(b'+'))
                 | (b'-', Some(b'-'))
                 | (b'&', Some(b'&'))
                 | (b'|', Some(b'|'))
+                | (b'<', Some(b'<'))
+                | (b'>', Some(b'>'))
         ) {
             cursor += 2;
             TokenKind::Operator(&source[start..cursor])
-        } else if b"(){}[],;=.+-*/<>!".contains(&byte) {
+        } else if b"(){}[],;=.+-*/<>!%~&|^".contains(&byte) {
             if byte == b'-' && bytes.get(cursor + 1) == Some(&b'>') {
                 return Err(ParseError {
                     message: String::from("unsupported CUDA operator"),
@@ -199,8 +204,10 @@ mod tests {
 
     #[test]
     fn cuda_operators_do_not_join_across_comments() {
-        for source in ["a &/* split */& b", "a | | b"] {
-            assert!(lex(source).is_err());
+        for (source, symbol) in [("a &/* split */& b", '&'), ("a | | b", '|')] {
+            let tokens = lex(source).unwrap();
+            assert_eq!(tokens[1].kind, TokenKind::Symbol(symbol));
+            assert_eq!(tokens[2].kind, TokenKind::Symbol(symbol));
         }
         let tokens = lex("a < /* comment */ = b").unwrap();
         assert_eq!(tokens[1].kind, TokenKind::Symbol('<'));
@@ -249,6 +256,12 @@ mod tests {
             ('-', '='),
             ('*', '='),
             ('/', '='),
+            ('%', '='),
+            ('&', '='),
+            ('|', '='),
+            ('^', '='),
+            ('<', '<'),
+            ('>', '>'),
         ] {
             for separator in [" /* split */ ", " // split\n "] {
                 let source = alloc::format!("left {first}{separator}{second} right");
@@ -274,5 +287,84 @@ mod tests {
         let error = lex(source).unwrap_err();
         assert_eq!(error.message, "unsupported CUDA operator");
         assert_eq!(&source[error.span.to_range().unwrap()], "->");
+    }
+
+    #[test]
+    fn cuda_integer_operators_use_maximal_munch() {
+        for (source, expected) in [
+            ("%", TokenKind::Symbol('%')),
+            ("~", TokenKind::Symbol('~')),
+            ("&", TokenKind::Symbol('&')),
+            ("|", TokenKind::Symbol('|')),
+            ("^", TokenKind::Symbol('^')),
+            ("<<", TokenKind::Operator("<<")),
+            (">>", TokenKind::Operator(">>")),
+            ("%=", TokenKind::Operator("%=")),
+            ("&=", TokenKind::Operator("&=")),
+            ("|=", TokenKind::Operator("|=")),
+            ("^=", TokenKind::Operator("^=")),
+            ("<<=", TokenKind::Operator("<<=")),
+            (">>=", TokenKind::Operator(">>=")),
+        ] {
+            let tokens = lex(source).unwrap();
+            assert_eq!(tokens.len(), 2, "{source}");
+            assert_eq!(tokens[0].kind, expected);
+            assert_eq!(&source[tokens[0].span.to_range().unwrap()], source);
+            assert_eq!(tokens[1].kind, TokenKind::End);
+        }
+        let source = "<<=>>=<<>>";
+        let tokens = lex(source).unwrap();
+        let kinds: alloc::vec::Vec<_> = tokens.iter().map(|token| token.kind).collect();
+        assert_eq!(
+            kinds,
+            [
+                TokenKind::Operator("<<="),
+                TokenKind::Operator(">>="),
+                TokenKind::Operator("<<"),
+                TokenKind::Operator(">>"),
+                TokenKind::End,
+            ]
+        );
+        for token in &tokens {
+            if let TokenKind::Operator(operator) = token.kind {
+                assert_eq!(&source[token.span.to_range().unwrap()], operator);
+            }
+        }
+    }
+
+    #[test]
+    fn cuda_shift_assignments_do_not_join_across_comments() {
+        for (source, left, right) in [
+            (
+                "a < /* split */ <= b",
+                TokenKind::Symbol('<'),
+                TokenKind::Operator("<="),
+            ),
+            (
+                "a > // split\n >= b",
+                TokenKind::Symbol('>'),
+                TokenKind::Operator(">="),
+            ),
+            (
+                "a << /* split */ = b",
+                TokenKind::Operator("<<"),
+                TokenKind::Symbol('='),
+            ),
+            (
+                "a >> // split\n = b",
+                TokenKind::Operator(">>"),
+                TokenKind::Symbol('='),
+            ),
+        ] {
+            let tokens = lex(source).unwrap();
+            assert_eq!(tokens.len(), 5, "{source}");
+            assert_eq!(tokens[1].kind, left);
+            assert_eq!(tokens[2].kind, right);
+            for token in &tokens {
+                if let TokenKind::Operator(operator) = token.kind {
+                    assert_eq!(&source[token.span.to_range().unwrap()], operator);
+                }
+            }
+        }
     }
 }
