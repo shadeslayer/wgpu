@@ -116,21 +116,22 @@ pub(super) fn lex(source: &str) -> Result<Vec<Token<'_>>, ParseError> {
             TokenKind::String(&source[start + 1..cursor - 1])
         } else if matches!(
             (byte, bytes.get(cursor + 1)),
-            (b'=' | b'!' | b'<' | b'>', Some(b'=')) | (b'&', Some(b'&')) | (b'|', Some(b'|'))
+            (
+                b'=' | b'!' | b'<' | b'>' | b'+' | b'-' | b'*' | b'/',
+                Some(b'=')
+            ) | (b'+', Some(b'+'))
+                | (b'-', Some(b'-'))
+                | (b'&', Some(b'&'))
+                | (b'|', Some(b'|'))
         ) {
             cursor += 2;
             TokenKind::Operator(&source[start..cursor])
         } else if b"(){}[],;=.+-*/<>!".contains(&byte) {
-            if let Some(&next) = bytes.get(cursor + 1) {
-                if matches!(
-                    (byte, next),
-                    (b'+', b'+' | b'=') | (b'-', b'-' | b'=' | b'>') | (b'*' | b'/', b'=')
-                ) {
-                    return Err(ParseError {
-                        message: String::from("unsupported CUDA operator"),
-                        span: Span::new(start as u32, (start + 2) as u32),
-                    });
-                }
+            if byte == b'-' && bytes.get(cursor + 1) == Some(&b'>') {
+                return Err(ParseError {
+                    message: String::from("unsupported CUDA operator"),
+                    span: Span::new(start as u32, (start + 2) as u32),
+                });
             }
             cursor += 1;
             TokenKind::Symbol(char::from(byte))
@@ -204,5 +205,74 @@ mod tests {
         let tokens = lex("a < /* comment */ = b").unwrap();
         assert_eq!(tokens[1].kind, TokenKind::Symbol('<'));
         assert_eq!(tokens[2].kind, TokenKind::Symbol('='));
+    }
+
+    #[test]
+    fn cuda_update_and_assignment_operators_use_maximal_munch() {
+        let source = "a+++b---c+=d-=e*=f/=g";
+        let tokens = lex(source).unwrap();
+        let kinds: alloc::vec::Vec<_> = tokens.iter().map(|token| token.kind).collect();
+        assert_eq!(
+            kinds,
+            [
+                TokenKind::Ident("a"),
+                TokenKind::Operator("++"),
+                TokenKind::Symbol('+'),
+                TokenKind::Ident("b"),
+                TokenKind::Operator("--"),
+                TokenKind::Symbol('-'),
+                TokenKind::Ident("c"),
+                TokenKind::Operator("+="),
+                TokenKind::Ident("d"),
+                TokenKind::Operator("-="),
+                TokenKind::Ident("e"),
+                TokenKind::Operator("*="),
+                TokenKind::Ident("f"),
+                TokenKind::Operator("/="),
+                TokenKind::Ident("g"),
+                TokenKind::End,
+            ]
+        );
+        for token in &tokens {
+            if let TokenKind::Operator(operator) = token.kind {
+                assert_eq!(&source[token.span.to_range().unwrap()], operator);
+            }
+        }
+    }
+
+    #[test]
+    fn cuda_update_operators_do_not_join_across_comments() {
+        for (first, second) in [
+            ('+', '+'),
+            ('-', '-'),
+            ('+', '='),
+            ('-', '='),
+            ('*', '='),
+            ('/', '='),
+        ] {
+            for separator in [" /* split */ ", " // split\n "] {
+                let source = alloc::format!("left {first}{separator}{second} right");
+                let tokens = lex(&source).unwrap();
+                assert_eq!(tokens.len(), 5);
+                assert_eq!(tokens[1].kind, TokenKind::Symbol(first));
+                assert_eq!(tokens[2].kind, TokenKind::Symbol(second));
+                assert_eq!(
+                    &source[tokens[1].span.to_range().unwrap()],
+                    alloc::format!("{first}")
+                );
+                assert_eq!(
+                    &source[tokens[2].span.to_range().unwrap()],
+                    alloc::format!("{second}")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cuda_arrow_operator_remains_unsupported() {
+        let source = "pointer->field";
+        let error = lex(source).unwrap_err();
+        assert_eq!(error.message, "unsupported CUDA operator");
+        assert_eq!(&source[error.span.to_range().unwrap()], "->");
     }
 }
