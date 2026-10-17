@@ -3,6 +3,7 @@ use alloc::{format, string::String, vec::Vec};
 mod conversions;
 mod expressions;
 mod statements;
+mod updates;
 
 use crate::{
     AddressSpace, ArraySize, BinaryOperator, Binding, BuiltIn, EntryPoint, Expression, FastHashMap,
@@ -31,10 +32,17 @@ enum Symbol {
 }
 
 #[derive(Clone, Copy, Debug)]
+struct LValue {
+    pointer: Handle<Expression>,
+    writable: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
 struct Value {
     handle: Handle<Expression>,
     scalar: Scalar,
     span: Span,
+    lvalue: Option<LValue>,
 }
 
 pub(super) struct Parser<'a> {
@@ -232,6 +240,7 @@ impl<'a> Parser<'a> {
     ) -> Result<Handle<Expression>, ParseError> {
         self.expect_symbol('[')?;
         let index = self.expression(0)?;
+        let index = self.rvalue(index)?;
         if !matches!(index.scalar.kind, ScalarKind::Sint | ScalarKind::Uint) {
             return Err(ParseError {
                 message: String::from("buffer index must be an integer"),
@@ -303,6 +312,7 @@ impl<'a> Parser<'a> {
             handle,
             scalar: Scalar::U32,
             span,
+            lvalue: None,
         })
     }
 
@@ -348,6 +358,7 @@ impl<'a> Parser<'a> {
             handle,
             scalar,
             span,
+            lvalue: None,
         })
     }
 

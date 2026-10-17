@@ -6,7 +6,10 @@ impl Parser<'_> {
         if self.expression_depth > 64 {
             return Err(self.error("CUDA expression nesting limit exceeded"));
         }
+        let parent = core::mem::take(&mut self.function.body);
         let result = self.expression_inner(minimum_precedence);
+        let body = core::mem::replace(&mut self.function.body, parent);
+        self.function.body.extend_block(body);
         self.expression_depth -= 1;
         result
     }
@@ -65,13 +68,43 @@ impl Parser<'_> {
                 handle,
                 scalar,
                 span,
+                lvalue: None,
             };
+        }
+        if minimum_precedence == 0 {
+            let operator = match self.current().kind {
+                TokenKind::Symbol('=') => Some(None),
+                TokenKind::Operator("+=") => Some(Some(BinaryOperator::Add)),
+                TokenKind::Operator("-=") => Some(Some(BinaryOperator::Subtract)),
+                TokenKind::Operator("*=") => Some(Some(BinaryOperator::Multiply)),
+                TokenKind::Operator("/=") => Some(Some(BinaryOperator::Divide)),
+                _ => None,
+            };
+            if let Some(operator) = operator {
+                return self.assignment(left, operator);
+            }
         }
         Ok(left)
     }
 
     fn primary(&mut self) -> Result<Value, ParseError> {
+        let mut value = self.primary_inner()?;
+        while let TokenKind::Operator(operator @ ("++" | "--")) = self.current().kind {
+            let span = value.span.until(&self.current().span);
+            self.advance();
+            value = self.update(value, operator == "++", true, span)?;
+        }
+        Ok(value)
+    }
+
+    fn primary_inner(&mut self) -> Result<Value, ParseError> {
         let token = self.current();
+        if let TokenKind::Operator(operator @ ("++" | "--")) = token.kind {
+            self.advance();
+            let value = self.expression(7)?;
+            let span = token.span.until(&value.span);
+            return self.update(value, operator == "++", false, span);
+        }
         if self.take_symbol('(') {
             let start = self.position;
             if matches!(
@@ -107,6 +140,7 @@ impl Parser<'_> {
                     handle,
                     scalar: Scalar::BOOL,
                     span,
+                    lvalue: None,
                 });
             }
             let value = self.promote_integral(value)?;
@@ -132,6 +166,7 @@ impl Parser<'_> {
                 handle,
                 scalar: value.scalar,
                 span,
+                lvalue: None,
             });
         }
         match token.kind {
@@ -176,6 +211,7 @@ impl Parser<'_> {
                         handle,
                         scalar: Scalar::BOOL,
                         span: token.span,
+                        lvalue: None,
                     });
                 }
                 if matches!(name, "threadIdx" | "blockIdx" | "blockDim" | "gridDim") {
@@ -185,19 +221,31 @@ impl Parser<'_> {
                     message: format!("unknown variable `{name}`"),
                     span: token.span,
                 })?;
-                let (pointer, scalar) = match symbol {
+                let (pointer, scalar, writable, span) = match symbol {
                     Symbol::Buffer {
-                        pointer, scalar, ..
-                    } => (self.buffer_element(pointer, token.span)?, scalar),
+                        pointer,
+                        scalar,
+                        writable,
+                    } => {
+                        let pointer = self.buffer_element(pointer, token.span)?;
+                        (
+                            pointer,
+                            scalar,
+                            writable,
+                            self.function.expressions.get_span(pointer),
+                        )
+                    }
                     Symbol::Local {
-                        pointer, scalar, ..
-                    } => (pointer, scalar),
+                        pointer,
+                        scalar,
+                        writable,
+                    } => (pointer, scalar, writable, token.span),
                 };
-                let handle = self.append(Expression::Load { pointer }, token.span)?;
                 Ok(Value {
-                    handle,
+                    handle: pointer,
                     scalar,
-                    span: token.span,
+                    span,
+                    lvalue: Some(LValue { pointer, writable }),
                 })
             }
             _ => Err(self.error("expected a supported scalar expression")),
@@ -205,6 +253,7 @@ impl Parser<'_> {
     }
 
     pub(super) fn truthy(&mut self, value: Value) -> Result<Value, ParseError> {
+        let value = self.rvalue(value)?;
         if value.scalar == Scalar::BOOL {
             return Ok(value);
         }
@@ -227,6 +276,7 @@ impl Parser<'_> {
             handle,
             scalar: Scalar::BOOL,
             span: value.span,
+            lvalue: None,
         })
     }
 
@@ -288,6 +338,7 @@ impl Parser<'_> {
             handle,
             scalar: Scalar::BOOL,
             span,
+            lvalue: None,
         })
     }
 }

@@ -6,6 +6,7 @@ impl Parser<'_> {
         value: Value,
         target: Scalar,
     ) -> Result<Value, ParseError> {
+        let value = self.rvalue(value)?;
         if value.scalar == target {
             return Ok(value);
         }
@@ -30,6 +31,7 @@ impl Parser<'_> {
             handle,
             scalar: target,
             span: value.span,
+            lvalue: None,
         })
     }
 
@@ -53,6 +55,7 @@ impl Parser<'_> {
     }
 
     pub(super) fn promote_integral(&mut self, value: Value) -> Result<Value, ParseError> {
+        let value = self.rvalue(value)?;
         if value.scalar == Scalar::BOOL {
             self.convert_value(value, Scalar::I32)
         } else {

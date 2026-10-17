@@ -8,6 +8,7 @@ pub fn all_tests(tests: &mut Vec<GpuTestInitializer>) {
         CUDA_SCALAR_PARAMETER,
         CUDA_GUARDED_VECTOR_ADD,
         CUDA_NUMERIC_CONVERSIONS,
+        CUDA_UPDATES,
     ]);
 }
 
@@ -208,6 +209,58 @@ static CUDA_NUMERIC_CONVERSIONS: GpuTestConfiguration = GpuTestConfiguration::ne
             assert_eq!(
                 values,
                 &[u32::MAX, 2, 0, 3, 5, 1, 8, 3],
+                "thread {invocation}"
+            );
+        }
+    });
+
+#[apply(gpu_test!)]
+static CUDA_UPDATES: GpuTestConfiguration = GpuTestConfiguration::new()
+    .parameters(TestParameters::default().test_features_limits())
+    .run_async(|ctx| async move {
+        let buffers = [buffer(
+            &ctx,
+            bytemuck::cast_slice(&[99i32; 64 * 16]),
+            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+        )];
+        let result = run_kernel(
+            &ctx,
+            "__global__ void updates(int *out) {
+                unsigned int base = threadIdx.x * 16u;
+                int i = 1;
+                out[base] = i++;
+                out[base + 1u] = ++i;
+                out[base + 2u] = --i;
+                out[base + 3u] = i--;
+                out[base + 4u] = i;
+                out[base + 5u] = (i += 2) *= 3;
+                out[base + 6u] = i = 4;
+                out[base + 7u] = i += (i = 6);
+                false && (++i > 0);
+                true || (++i > 0);
+                out[base + 8u] = i;
+                true && (++i > 0);
+                false || (++i > 0);
+                out[base + 9u] = i;
+                int j = 0;
+                out[base + 10u + j++] = ++j;
+                out[base + 12u] = j;
+                out[base + 13u] = 10;
+                out[base + 14u] = 20;
+                j = 0;
+                out[base + 13u + j++] += ++j;
+                out[base + 15u] = j;
+            }",
+            &buffers,
+            0,
+            1,
+        )
+        .await;
+        let actual: &[i32] = bytemuck::cast_slice(&result);
+        for (invocation, values) in actual.chunks_exact(16).enumerate() {
+            assert_eq!(
+                values,
+                &[1, 3, 2, 2, 1, 9, 4, 12, 12, 14, 99, 1, 2, 10, 21, 2],
                 "thread {invocation}"
             );
         }

@@ -81,51 +81,20 @@ impl<'a> Parser<'a> {
                 .push(Statement::Return { value: None }, start.until(&end));
             return Ok(true);
         }
-        if matches!(
-            self.current().kind,
-            TokenKind::Ident("const" | "bool" | "float" | "int" | "unsigned")
-        ) {
+        if self.starts_declaration() {
             self.local_declaration()?;
             return Ok(false);
         }
-        let (name, span) = self.identifier()?;
-        let symbol = self.lookup_symbol(name).ok_or_else(|| ParseError {
-            message: format!("unknown variable `{name}`"),
-            span,
-        })?;
-        let (pointer, scalar, writable) = match symbol {
-            Symbol::Buffer {
-                pointer,
-                scalar,
-                writable,
-            } => {
-                let pointer = self.buffer_element(pointer, span)?;
-                (pointer, scalar, writable)
-            }
-            Symbol::Local {
-                pointer,
-                scalar,
-                writable,
-            } => (pointer, scalar, writable),
-        };
-        if !writable {
-            return Err(ParseError {
-                message: format!("cannot write to const variable `{name}`"),
-                span,
-            });
-        }
-        self.expect_symbol('=')?;
-        let value = self.expression(0)?;
-        let value = self.convert_value(value, scalar)?;
-        let end = self.expect_symbol(';')?;
-        self.function.body.push(
-            Statement::Store {
-                pointer,
-                value: value.handle,
-            },
-            span.until(&end),
-        );
+        self.expression(0)?;
+        self.expect_symbol(';')?;
         Ok(false)
+    }
+
+    fn starts_declaration(&self) -> bool {
+        matches!(
+            self.current().kind,
+            TokenKind::Ident("const" | "bool" | "float" | "int" | "unsigned")
+        ) && self.tokens[self.position + 1].kind != TokenKind::Symbol('(')
     }
 
     fn local_declaration(&mut self) -> Result<(), ParseError> {
