@@ -26,6 +26,12 @@ use crate::{
     FastHashMap,
 };
 
+#[cfg(any(feature = "cuda-in", feature = "wgsl-in"))]
+pub(crate) fn consume_any(input: &str, what: impl Fn(char) -> bool) -> (&str, &str) {
+    let pos = input.find(|c| !what(c)).unwrap_or(input.len());
+    input.split_at(pos)
+}
+
 /// A table of types for an `Arena<Expression>`.
 ///
 /// A front end can use a `Typifier` to get types for an arena's expressions

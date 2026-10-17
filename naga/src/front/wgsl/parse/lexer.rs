@@ -1,4 +1,5 @@
 use super::{number::consume_number, Error, ExpectedToken, Result};
+use crate::front::consume_any;
 use crate::front::wgsl::error::NumberError;
 use crate::front::wgsl::parse::directive::enable_extension::{
     EnableExtensions, ImplementedEnableExtension,
@@ -99,11 +100,6 @@ pub enum Token<'a> {
 
     /// The end of the input.
     End,
-}
-
-fn consume_any(input: &str, what: impl Fn(char) -> bool) -> (&str, &str) {
-    let pos = input.find(|c| !what(c)).unwrap_or(input.len());
-    input.split_at(pos)
 }
 
 fn find_string_literal_end(input: &str) -> Option<usize> {

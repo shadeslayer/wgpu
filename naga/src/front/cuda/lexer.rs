@@ -1,6 +1,6 @@
 use alloc::{format, string::String, vec::Vec};
 
-use crate::Span;
+use crate::{front::consume_any, Span};
 
 use super::ParseError;
 
@@ -11,6 +11,7 @@ pub(super) enum TokenKind<'a> {
     String(&'a str),
     Operator(&'a str),
     Symbol(char),
+    Trivia,
     End,
 }
 
@@ -20,8 +21,103 @@ pub(super) struct Token<'a> {
     pub span: Span,
 }
 
-pub(super) fn lex(source: &str) -> Result<Vec<Token<'_>>, ParseError> {
-    let length = u32::try_from(source.len()).map_err(|_| ParseError {
+#[derive(Clone)]
+pub(super) struct Lexer<'a> {
+    source: &'a str,
+    input: &'a str,
+    last_end_offset: usize,
+    lookahead: Option<(Token<'a>, &'a str)>,
+}
+
+impl<'a> Lexer<'a> {
+    pub(super) fn new(source: &'a str) -> Result<Self, ParseError> {
+        check_source(source)?;
+        Ok(Self {
+            source,
+            input: source,
+            last_end_offset: 0,
+            lookahead: None,
+        })
+    }
+
+    pub(super) fn next(&mut self) -> Result<Token<'a>, ParseError> {
+        let (token, rest) = match self.lookahead.take() {
+            Some(next) => next,
+            None => self.scan()?,
+        };
+        self.input = rest;
+        self.last_end_offset = self.source.len() - rest.len();
+        Ok(token)
+    }
+
+    fn scan(&self) -> Result<(Token<'a>, &'a str), ParseError> {
+        let mut input = self.input;
+        loop {
+            let offset = self.source.len() - input.len();
+            let (kind, rest) = consume_token(input).map_err(|mut error| {
+                let range = error.span.to_range().unwrap_or(0..0);
+                error.span = Span::from(offset + range.start..offset + range.end);
+                error
+            })?;
+            if kind == TokenKind::Trivia {
+                input = rest;
+                continue;
+            }
+            return Ok((
+                Token {
+                    kind,
+                    span: Span::from(offset..self.source.len() - rest.len()),
+                },
+                rest,
+            ));
+        }
+    }
+
+    pub(super) fn peek(&mut self) -> Result<Token<'a>, ParseError> {
+        let input = self.input;
+        let last_end_offset = self.last_end_offset;
+        let token = self.next()?;
+        self.lookahead = Some((token, self.input));
+        self.input = input;
+        self.last_end_offset = last_end_offset;
+        Ok(token)
+    }
+
+    pub(super) fn next_if(&mut self, expected: TokenKind<'_>) -> Result<bool, ParseError> {
+        if self.peek()?.kind == expected {
+            self.next()?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    pub(super) fn expect_span(&mut self, expected: TokenKind<'_>) -> Result<Span, ParseError> {
+        let token = self.peek()?;
+        if self.next_if(expected)? {
+            return Ok(token.span);
+        }
+        self.next()?;
+        let message = match expected {
+            TokenKind::Ident(text) | TokenKind::Operator(text) => format!("expected `{text}`"),
+            TokenKind::Symbol(symbol) => format!("expected `{symbol}`"),
+            TokenKind::End => String::from("expected end of source"),
+            _ => format!("expected {expected:?}"),
+        };
+        Err(ParseError {
+            message,
+            span: token.span,
+        })
+    }
+
+    #[cfg(test)]
+    fn span_from(&self, offset: usize) -> Span {
+        Span::from(offset..self.last_end_offset)
+    }
+}
+
+fn check_source(source: &str) -> Result<(), ParseError> {
+    u32::try_from(source.len()).map_err(|_| ParseError {
         message: String::from("CUDA source is too large"),
         span: Span::UNDEFINED,
     })?;
@@ -30,141 +126,241 @@ pub(super) fn lex(source: &str) -> Result<Vec<Token<'_>>, ParseError> {
         if byte == b'\\' && matches!(bytes.get(index + 1), Some(b'\n' | b'\r')) {
             return Err(ParseError {
                 message: String::from("CUDA line continuations are unsupported"),
-                span: Span::new(index as u32, (index + 2) as u32),
+                span: Span::from(index..index + 2),
             });
         }
     }
     if let Some(index) = bytes.windows(3).position(|window| window == b"??/") {
         return Err(ParseError {
             message: String::from("CUDA trigraphs are unsupported"),
-            span: Span::new(index as u32, (index + 3) as u32),
+            span: Span::from(index..index + 3),
         });
     }
-    let mut cursor = 0;
-    let mut tokens = Vec::new();
-    while cursor < bytes.len() {
-        let start = cursor;
-        let byte = bytes[cursor];
-        if byte.is_ascii_whitespace() {
-            cursor += 1;
-            continue;
-        }
-        if byte == b'/' && bytes.get(cursor + 1) == Some(&b'/') {
-            cursor += 2;
-            while cursor < bytes.len() && !matches!(bytes[cursor], b'\n' | b'\r') {
-                cursor += 1;
-            }
-            continue;
-        }
-        if byte == b'/' && bytes.get(cursor + 1) == Some(&b'*') {
-            cursor += 2;
-            while cursor + 1 < bytes.len() && !(bytes[cursor] == b'*' && bytes[cursor + 1] == b'/')
-            {
-                cursor += 1;
-            }
-            if cursor + 1 >= bytes.len() {
-                return Err(ParseError {
-                    message: String::from("unterminated block comment"),
-                    span: Span::new(start as u32, length),
-                });
-            }
-            cursor += 2;
-            continue;
-        }
-        let kind = if byte.is_ascii_alphabetic() || byte == b'_' {
-            cursor += 1;
-            while cursor < bytes.len()
-                && (bytes[cursor].is_ascii_alphanumeric() || bytes[cursor] == b'_')
-            {
-                cursor += 1;
-            }
-            TokenKind::Ident(&source[start..cursor])
-        } else if byte.is_ascii_digit()
-            || (byte == b'.' && bytes.get(cursor + 1).is_some_and(u8::is_ascii_digit))
-        {
-            cursor += 1;
-            while cursor < bytes.len() {
-                let next = bytes[cursor];
-                if next.is_ascii_alphanumeric()
-                    || matches!(next, b'.' | b'_')
-                    || (matches!(next, b'+' | b'-') && matches!(bytes[cursor - 1], b'e' | b'E'))
-                {
-                    cursor += 1;
-                } else {
-                    break;
-                }
-            }
-            TokenKind::Number(&source[start..cursor])
-        } else if byte == b'"' {
-            cursor += 1;
-            while cursor < bytes.len() && bytes[cursor] != b'"' {
-                if matches!(bytes[cursor], b'\\' | b'\n' | b'\r') {
-                    return Err(ParseError {
-                        message: String::from("unsupported string literal"),
-                        span: Span::new(start as u32, (cursor + 1) as u32),
-                    });
-                }
-                cursor += 1;
-            }
-            if cursor == bytes.len() {
-                return Err(ParseError {
-                    message: String::from("unterminated string literal"),
-                    span: Span::new(start as u32, length),
-                });
-            }
-            cursor += 1;
-            TokenKind::String(&source[start + 1..cursor - 1])
-        } else if bytes[cursor..].starts_with(b"<<=") || bytes[cursor..].starts_with(b">>=") {
-            cursor += 3;
-            TokenKind::Operator(&source[start..cursor])
-        } else if matches!(
-            (byte, bytes.get(cursor + 1)),
-            (
-                b'=' | b'!' | b'<' | b'>' | b'+' | b'-' | b'*' | b'/' | b'%' | b'&' | b'|' | b'^',
-                Some(b'=')
-            ) | (b'+', Some(b'+'))
-                | (b'-', Some(b'-'))
-                | (b'&', Some(b'&'))
-                | (b'|', Some(b'|'))
-                | (b'<', Some(b'<'))
-                | (b'>', Some(b'>'))
-        ) {
-            cursor += 2;
-            TokenKind::Operator(&source[start..cursor])
-        } else if b"(){}[],;=.+-*/<>!%~&|^".contains(&byte) {
-            if byte == b'-' && bytes.get(cursor + 1) == Some(&b'>') {
-                return Err(ParseError {
-                    message: String::from("unsupported CUDA operator"),
-                    span: Span::new(start as u32, (start + 2) as u32),
-                });
-            }
-            cursor += 1;
-            TokenKind::Symbol(char::from(byte))
-        } else {
-            let character = source[cursor..].chars().next().ok_or_else(|| ParseError {
-                message: String::from("unexpected end of source"),
-                span: Span::new(start as u32, length),
-            })?;
-            return Err(ParseError {
-                message: format!("unsupported character `{}`", character.escape_debug()),
-                span: Span::new(start as u32, (start + character.len_utf8()) as u32),
-            });
+    Ok(())
+}
+
+fn consume_token(input: &str) -> Result<(TokenKind<'_>, &str), ParseError> {
+    let Some(character) = input.chars().next() else {
+        return Ok((TokenKind::End, input));
+    };
+    if character.is_ascii_whitespace() {
+        return Ok((
+            TokenKind::Trivia,
+            consume_any(input, |c| c.is_ascii_whitespace()).1,
+        ));
+    }
+    if input.starts_with("//") {
+        return Ok((
+            TokenKind::Trivia,
+            consume_any(input, |c| !matches!(c, '\n' | '\r')).1,
+        ));
+    }
+    if let Some(content) = input.strip_prefix("/*") {
+        return match content.find("*/") {
+            Some(end) => Ok((TokenKind::Trivia, &content[end + 2..])),
+            None => Err(ParseError {
+                message: String::from("unterminated block comment"),
+                span: Span::from(0..input.len()),
+            }),
         };
-        tokens.push(Token {
-            kind,
-            span: Span::new(start as u32, cursor as u32),
+    }
+    if character.is_ascii_alphabetic() || character == '_' {
+        let (word, rest) = consume_any(input, |c| c.is_ascii_alphanumeric() || c == '_');
+        return Ok((TokenKind::Ident(word), rest));
+    }
+    if character.is_ascii_digit()
+        || (character == '.' && input.as_bytes().get(1).is_some_and(u8::is_ascii_digit))
+    {
+        let is_number_part = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '_');
+        let (mut number, mut rest) = consume_any(input, is_number_part);
+        while (number.ends_with('e') || number.ends_with('E')) && rest.starts_with(['+', '-']) {
+            rest = consume_any(&rest[1..], is_number_part).1;
+            number = &input[..input.len() - rest.len()];
+        }
+        return Ok((TokenKind::Number(number), rest));
+    }
+    if let Some(content) = input.strip_prefix('"') {
+        return match content.find(['"', '\\', '\n', '\r']) {
+            Some(end) if content.as_bytes()[end] == b'"' => {
+                Ok((TokenKind::String(&content[..end]), &content[end + 1..]))
+            }
+            Some(end) => Err(ParseError {
+                message: String::from("unsupported string literal"),
+                span: Span::from(0..end + 2),
+            }),
+            None => Err(ParseError {
+                message: String::from("unterminated string literal"),
+                span: Span::from(0..input.len()),
+            }),
+        };
+    }
+    for operator in [
+        "<<=", ">>=", "==", "!=", "<=", ">=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "++",
+        "--", "&&", "||", "<<", ">>",
+    ] {
+        if let Some(rest) = input.strip_prefix(operator) {
+            return Ok((TokenKind::Operator(&input[..operator.len()]), rest));
+        }
+    }
+    if input.starts_with("->") {
+        return Err(ParseError {
+            message: String::from("unsupported CUDA operator"),
+            span: Span::from(0..2),
         });
     }
-    tokens.push(Token {
-        kind: TokenKind::End,
-        span: Span::new(length, length),
-    });
-    Ok(tokens)
+    if "(){}[],;=.+-*/<>!%~&|^".contains(character) {
+        return Ok((TokenKind::Symbol(character), &input[1..]));
+    }
+    Err(ParseError {
+        message: format!("unsupported character `{}`", character.escape_debug()),
+        span: Span::from(0..character.len_utf8()),
+    })
+}
+
+pub(super) fn lex(source: &str) -> Result<Vec<Token<'_>>, ParseError> {
+    let mut lexer = Lexer::new(source)?;
+    let mut tokens = Vec::new();
+    loop {
+        let token = lexer.peek()?;
+        if token.kind == TokenKind::End {
+            lexer.expect_span(TokenKind::End)?;
+            tokens.push(token);
+            return Ok(tokens);
+        }
+        tokens.push(lexer.next()?);
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{lex, TokenKind};
+    use super::{lex, Lexer, TokenKind};
+
+    #[test]
+    fn cuda_scanner_is_lazy_and_repeats_lexical_errors() {
+        let source = "first /* 漢 */ @";
+        let mut lexer = Lexer::new(source).unwrap();
+        assert_eq!(lexer.next().unwrap().kind, TokenKind::Ident("first"));
+        let checkpoint = lexer.clone();
+        for error in [
+            lexer.peek().unwrap_err(),
+            lexer.next().unwrap_err(),
+            lexer.peek().unwrap_err(),
+        ] {
+            assert_eq!(&source[error.span.to_range().unwrap()], "@");
+        }
+        assert_eq!(lexer.input, checkpoint.input);
+        assert_eq!(lexer.last_end_offset, checkpoint.last_end_offset);
+    }
+
+    #[test]
+    fn cuda_scanner_peek_and_failed_next_if_preserve_position() {
+        let source = "  first /* 漢 */ += second // tail\r\n";
+        let mut lexer = Lexer::new(source).unwrap();
+        for _ in 0..3 {
+            let token = lexer.peek().unwrap();
+            assert_eq!(token.kind, TokenKind::Ident("first"));
+            assert_eq!(&source[token.span.to_range().unwrap()], "first");
+            assert_eq!(lexer.input, source);
+            assert_eq!(lexer.last_end_offset, 0);
+        }
+        assert!(!lexer.next_if(TokenKind::Symbol('(')).unwrap());
+        assert_eq!(lexer.next().unwrap().kind, TokenKind::Ident("first"));
+        assert_eq!(lexer.last_end_offset, 7);
+        let before = lexer.input;
+        assert_eq!(lexer.peek().unwrap().kind, TokenKind::Operator("+="));
+        assert_eq!(lexer.input, before);
+        assert!(!lexer.next_if(TokenKind::Symbol('+')).unwrap());
+        assert!(lexer.next_if(TokenKind::Operator("+=")).unwrap());
+        assert_eq!(lexer.next().unwrap().kind, TokenKind::Ident("second"));
+        let last_end = lexer.last_end_offset;
+        assert_eq!(lexer.peek().unwrap().kind, TokenKind::End);
+        assert_eq!(lexer.last_end_offset, last_end);
+        assert!(!lexer.next_if(TokenKind::Symbol(';')).unwrap());
+        for _ in 0..3 {
+            assert_eq!(
+                lexer.next().unwrap().span,
+                crate::Span::from(source.len()..source.len())
+            );
+        }
+    }
+
+    #[test]
+    fn cuda_scanner_checkpoint_restores_cached_lookahead() {
+        let source = "( /* 漢 */ int) value";
+        let mut lexer = Lexer::new(source).unwrap();
+        lexer.expect_span(TokenKind::Symbol('(')).unwrap();
+        assert_eq!(lexer.peek().unwrap().kind, TokenKind::Ident("int"));
+        let checkpoint = lexer.clone();
+        lexer.expect_span(TokenKind::Ident("int")).unwrap();
+        lexer.expect_span(TokenKind::Symbol(')')).unwrap();
+        assert_eq!(
+            &source[lexer.span_from(0).to_range().unwrap()],
+            "( /* 漢 */ int)"
+        );
+        lexer = checkpoint;
+        assert_eq!(lexer.next().unwrap().kind, TokenKind::Ident("int"));
+        assert_eq!(lexer.next().unwrap().kind, TokenKind::Symbol(')'));
+        assert_eq!(lexer.next().unwrap().kind, TokenKind::Ident("value"));
+    }
+
+    #[test]
+    fn cuda_scanner_errors_rebase_after_multibyte_trivia() {
+        for (tail, expected) in [
+            ("漢", "漢"),
+            ("->field", "->"),
+            ("/* unterminated", "/* unterminated"),
+            ("\"unterminated", "\"unterminated"),
+            ("\"x\\q\"", "\"x\\"),
+        ] {
+            let source = alloc::format!("first /* 漢 */ {tail}");
+            let mut lexer = Lexer::new(&source).unwrap();
+            lexer.next().unwrap();
+            let error = lexer.next().unwrap_err();
+            assert_eq!(
+                &source[error.span.to_range().unwrap()],
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn cuda_scanner_expectations_consume_mismatches_and_propagate_lexical_errors() {
+        let source = "first /* 漢 */ second @";
+        let mut lexer = Lexer::new(source).unwrap();
+        lexer.next().unwrap();
+        let error = lexer.expect_span(TokenKind::Symbol(';')).unwrap_err();
+        assert_eq!(&source[error.span.to_range().unwrap()], "second");
+        for error in [
+            lexer.next_if(TokenKind::End).unwrap_err(),
+            lexer.expect_span(TokenKind::End).unwrap_err(),
+        ] {
+            assert_eq!(&source[error.span.to_range().unwrap()], "@");
+        }
+    }
+
+    #[test]
+    fn cuda_scanner_comments_do_not_nest_and_eof_spans_are_stable() {
+        let mut lexer = Lexer::new("/* outer /* inner */ value").unwrap();
+        assert_eq!(lexer.next().unwrap().kind, TokenKind::Ident("value"));
+        for source in ["", " \r\n", "/* 漢 */ // tail\r\n"] {
+            let mut lexer = Lexer::new(source).unwrap();
+            for _ in 0..2 {
+                let token = lexer.peek().unwrap();
+                assert_eq!(token.kind, TokenKind::End);
+                assert_eq!(token.span, crate::Span::from(source.len()..source.len()));
+                assert_eq!(lexer.next().unwrap().kind, TokenKind::End);
+            }
+        }
+    }
+
+    #[test]
+    fn cuda_scanner_phase_checks_are_upfront() {
+        for (source, offending) in [("@ // hidden \\\n", "\\\n"), ("@ /* ??/ */", "??/")] {
+            let error = Lexer::new(source).err().unwrap();
+            assert_eq!(&source[error.span.to_range().unwrap()], offending);
+        }
+    }
 
     #[test]
     fn cuda_comparison_and_logical_tokens() {
