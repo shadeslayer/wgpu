@@ -207,6 +207,83 @@ fn cuda_emits_hlsl() {
     assert!(output.contains("numthreads"));
 }
 
+#[cfg(feature = "hlsl-out")]
+#[test]
+fn cuda_hlsl_grid_dimensions_require_dispatch_constants() {
+    let (module, info) = validate(
+        "__global__ void grid(unsigned int *out) { out[0] = gridDim.x; }",
+        &Options::default(),
+    );
+    let mut output = String::new();
+    let options = naga::back::hlsl::Options::default();
+    let pipeline = naga::back::hlsl::PipelineOptions::default();
+    let result =
+        naga::back::hlsl::Writer::new(&mut output, &options, &pipeline).write(&module, &info, None);
+    assert!(matches!(
+        result,
+        Err(naga::back::hlsl::Error::MissingSpecialConstantsBinding)
+    ));
+}
+
+#[cfg(feature = "hlsl-out")]
+#[test]
+fn cuda_hlsl_grid_dimensions_use_dispatch_constants() {
+    let (module, info) = validate(
+        "__global__ void grid(unsigned int *out) { out[0] = gridDim.x; out[1] = gridDim.y; out[2] = gridDim.z; out[3] = blockIdx.x; }",
+        &Options::default(),
+    );
+    let mut output = String::new();
+    let options = naga::back::hlsl::Options {
+        special_constants_binding: Some(naga::back::hlsl::BindTarget {
+            register: 7,
+            space: 3,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let pipeline = naga::back::hlsl::PipelineOptions::default();
+    let reflection = naga::back::hlsl::Writer::new(&mut output, &options, &pipeline)
+        .write(&module, &info, None)
+        .unwrap();
+    for name in reflection.entry_point_names {
+        name.unwrap();
+    }
+    assert!(output.contains("register(b7, space3)"));
+    for component in ["x", "y", "z"] {
+        assert!(output.contains(&format!(
+            "uint3(_NagaConstants.first_vertex, _NagaConstants.first_instance, _NagaConstants.other).{component}"
+        )));
+    }
+    assert!(output.contains("asuint(blockIdx.x)"));
+}
+
+#[cfg(all(feature = "hlsl-out", feature = "wgsl-in"))]
+#[test]
+fn hlsl_dispatch_constants_are_required_only_for_selected_entry_points() {
+    let module = naga::front::wgsl::parse_str(
+        "struct Input { @builtin(num_workgroups) counts: vec3<u32> }\n\
+         @compute @workgroup_size(1) fn grid(input: Input) {}\n\
+         @compute @workgroup_size(1) fn empty() {}",
+    )
+    .unwrap();
+    let info = naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::empty(),
+    )
+    .validate(&module)
+    .unwrap();
+    let options = naga::back::hlsl::Options::default();
+    for entry_point in ["grid", "empty"] {
+        let mut output = String::new();
+        let pipeline = naga::back::hlsl::PipelineOptions {
+            entry_point: Some((naga::ShaderStage::Compute, entry_point.into())),
+        };
+        let result = naga::back::hlsl::Writer::new(&mut output, &options, &pipeline)
+            .write(&module, &info, None);
+        assert_eq!(result.is_ok(), entry_point == "empty");
+    }
+}
+
 #[cfg(feature = "msl-out")]
 #[test]
 fn cuda_emits_msl() {

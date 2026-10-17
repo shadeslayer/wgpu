@@ -123,3 +123,68 @@ fn cuda_reports_unsupported_source_with_location() {
     );
     assert!(!files.output.exists());
 }
+
+#[test]
+fn cuda_hlsl_grid_dimensions_require_special_constants_binding() {
+    let mut files = TestFiles::new(
+        "cu",
+        "__global__ void grid(unsigned int *out) { out[0] = gridDim.x; }",
+    );
+    let wgsl = files.translate(&[]);
+    assert!(
+        wgsl.status.success(),
+        "{}",
+        String::from_utf8_lossy(&wgsl.stderr)
+    );
+    files.read_module();
+
+    files.output.set_extension("hlsl");
+    let hlsl = files.translate(&[]);
+    assert!(!hlsl.status.success());
+    let diagnostic = String::from_utf8_lossy(&hlsl.stderr);
+    assert!(
+        diagnostic.contains("special_constants_binding"),
+        "{diagnostic}"
+    );
+    assert!(!files.output.exists());
+}
+
+#[test]
+fn cuda_hlsl_grid_dimensions_use_configured_special_constants() {
+    for (binding, declaration) in [("5,2", "register(b5, space2)"), ("0,0", "register(b0)")] {
+        let mut files = TestFiles::new(
+            "cu",
+            "__global__ void grid(unsigned int *out) { out[0] = gridDim.x; }",
+        );
+        files.output.set_extension("hlsl");
+        let result = files.translate(&["--hlsl-special-constants-binding", binding]);
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let hlsl = fs::read_to_string(&files.output).unwrap();
+        assert!(
+            hlsl.contains(&format!(
+                "ConstantBuffer<NagaConstants> _NagaConstants: {declaration}"
+            )),
+            "{hlsl}"
+        );
+        assert!(
+            hlsl.contains("uint3(_NagaConstants.first_vertex, _NagaConstants.first_instance, _NagaConstants.other)"),
+            "{hlsl}"
+        );
+    }
+}
+
+#[test]
+fn hlsl_rejects_invalid_special_constants_binding() {
+    for binding in ["", "3", "3,0,1", "-1,0", "1,-1", "4294967296,0", "1,256"] {
+        let files = TestFiles::new("cu", "__global__ void empty() {}\n");
+        let result = files.translate(&["--hlsl-special-constants-binding", binding]);
+        assert!(!result.status.success(), "accepted {binding}");
+        let diagnostic = String::from_utf8_lossy(&result.stderr);
+        assert!(diagnostic.contains("register,space"), "{diagnostic}");
+        assert!(!files.output.exists());
+    }
+}

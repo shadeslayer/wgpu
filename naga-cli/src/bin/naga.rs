@@ -62,6 +62,10 @@ struct Args {
     #[argh(option)]
     shader_model: Option<ShaderModelArg>,
 
+    /// HLSL special constants binding as register,space (u32,u8).
+    #[argh(option)]
+    hlsl_special_constants_binding: Option<HlslSpecialConstantsBindingArg>,
+
     /// the SPIR-V version to use if targeting SPIR-V
     ///
     /// For example, 1.0, 1.4, etc
@@ -230,6 +234,26 @@ impl FromStr for ShaderModelArg {
             "66" => ShaderModel::V6_6,
             "67" => ShaderModel::V6_7,
             _ => return Err(format!("Invalid value for --shader-model: {s}")),
+        }))
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct HlslSpecialConstantsBindingArg(naga::back::hlsl::BindTarget);
+
+impl FromStr for HlslSpecialConstantsBindingArg {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let invalid =
+            || format!("HLSL special constants binding requires register,space as u32,u8: {s}");
+        let (register, space) = s.split_once(',').ok_or_else(invalid)?;
+        let register = register.parse::<u32>().map_err(|_| invalid())?;
+        let space = space.parse::<u8>().map_err(|_| invalid())?;
+        Ok(Self(naga::back::hlsl::BindTarget {
+            register,
+            space,
+            ..Default::default()
         }))
     }
 }
@@ -586,6 +610,8 @@ fn run() -> anyhow::Result<()> {
     if let Some(ref model) = args.shader_model {
         params.hlsl.shader_model = model.0;
     }
+    params.hlsl.special_constants_binding =
+        args.hlsl_special_constants_binding.map(|binding| binding.0);
     if let Some(ref version) = args.metal_version {
         params.msl.lang_version = version.0;
     }

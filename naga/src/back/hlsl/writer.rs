@@ -867,6 +867,20 @@ impl<'a, W: fmt::Write> super::Writer<'a, W> {
     ) -> Result<EntryPointInterface, Error> {
         let func = &ep.function;
         let stage = ep.stage;
+        let num_workgroups = Some(crate::Binding::BuiltIn(crate::BuiltIn::NumWorkGroups));
+        if self.options.special_constants_binding.is_none()
+            && func
+                .arguments
+                .iter()
+                .any(|arg| match module.types[arg.ty].inner {
+                    TypeInner::Struct { ref members, .. } => members
+                        .iter()
+                        .any(|member| member.binding == num_workgroups),
+                    _ => arg.binding == num_workgroups,
+                })
+        {
+            return Err(Error::MissingSpecialConstantsBinding);
+        }
         Ok(EntryPointInterface {
             input: if !func.arguments.is_empty()
                 && (stage == ShaderStage::Fragment

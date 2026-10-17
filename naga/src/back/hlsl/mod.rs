@@ -499,8 +499,13 @@ pub struct Options {
 
     /// Don't panic on missing bindings, instead generate any HLSL.
     pub fake_missing_bindings: bool,
-    /// Add special constants to `SV_VertexIndex` and `SV_InstanceIndex`,
-    /// to make them work like in Vulkan/Metal, with help of the host.
+    /// Binding for constants supplied by the host.
+    ///
+    /// Vertex shaders use the first two 32-bit words as signed base vertex and
+    /// base instance offsets, added to `SV_VertexID` and `SV_InstanceID`.
+    /// Compute shaders use the first three 32-bit words, at byte offsets 0, 4,
+    /// and 8, as the dispatch's x, y, and z workgroup counts. This binding is
+    /// required when an entry point uses [`crate::BuiltIn::NumWorkGroups`].
     pub special_constants_binding: Option<BindTarget>,
 
     /// HLSL binding information for the [`Immediate`] global, if present.
@@ -674,6 +679,8 @@ pub enum Error {
     EntryPointNotFound(ir::ShaderStage, String),
     #[error("requires shader model {1:?} for reason: {0}")]
     ShaderModelTooLow(String, ShaderModel),
+    #[error("the NumWorkGroups builtin requires Options::special_constants_binding")]
+    MissingSpecialConstantsBinding,
 }
 
 #[derive(PartialEq, Eq, Hash)]
