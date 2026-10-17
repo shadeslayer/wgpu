@@ -11,6 +11,7 @@ pub fn all_tests(tests: &mut Vec<GpuTestInitializer>) {
         CUDA_LOOPS,
         CUDA_UPDATES,
         CUDA_INTEGER_OPERATORS,
+        CUDA_SHARED_STORAGE,
     ]);
 }
 
@@ -412,5 +413,33 @@ static CUDA_INTEGER_OPERATORS: GpuTestConfiguration = GpuTestConfiguration::new(
                 ],
                 "thread {invocation}"
             );
+        }
+    });
+
+#[apply(gpu_test!)]
+static CUDA_SHARED_STORAGE: GpuTestConfiguration = GpuTestConfiguration::new()
+    .parameters(TestParameters::default().test_features_limits())
+    .run_async(|ctx| async move {
+        let buffers = [buffer(
+            &ctx,
+            bytemuck::cast_slice(&[u32::MAX; 256]),
+            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+        )];
+        let result = run_kernel(
+            &ctx,
+            include_str!("../../../naga/tests/in/cuda/shared-storage.cu"),
+            &buffers,
+            0,
+            2,
+        )
+        .await;
+        let actual: &[u32] = bytemuck::cast_slice(&result);
+        for (group, values) in actual.chunks_exact(128).enumerate() {
+            let expected: Vec<_> = (0..64)
+                .map(|lane| group as u32 * 1000 + lane + 10)
+                .collect();
+            assert_eq!(&values[..64], expected, "workgroup {group}");
+            assert_eq!(&values[64..66], &[3, 7], "workgroup {group}");
+            assert!(values[66..].iter().all(|&value| value == u32::MAX));
         }
     });

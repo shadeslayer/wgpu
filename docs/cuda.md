@@ -116,16 +116,27 @@ mutable numeric values. Assignment evaluates its right operand before its left
 operand. Logical short-circuiting also applies to assignments and updates inside
 the right operand.
 
+Static `__shared__` declarations support `float`, `int`, and `unsigned int`
+scalars and fixed one-dimensional arrays inside the kernel. Array extents must
+be positive decimal integer literals, optionally suffixed with `u` or `U`.
+Shared variables become workgroup storage without resource bindings; names obey
+the surrounding block scope, and each workgroup has its own storage. Declarations
+cannot contain initializers, following NVIDIA's
+[shared memory constraints](https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/cpp-language-extensions.html).
+Dynamic `extern __shared__` storage, constant-expression extents, and
+`__syncthreads()` remain unsupported. Without synchronization, each invocation
+must use shared values independently of other invocations.
+
 Unsupported syntax produces a parse error with a source span. This includes
 preprocessor directives and includes, host code and launch syntax,
 general pointer operations, device functions and calls, switches,
-shared memory, atomics, synchronization, templates, double precision,
+dynamic shared memory, atomics, synchronization, templates, double precision,
 and inline PTX. No CUDA runtime ABI or NVIDIA device code is generated.
 
 ## Further increments
 
 Add each capability with a failing acceptance test and rejection tests before
 changing the parser or lowering. Useful next increments are device functions,
-shared storage and barriers. Each increment must preserve
+barriers, and dynamic shared storage. Each increment must preserve
 validation and backend compatibility; CUDA-specific features need an explicit
 portable representation or an unsupported-feature diagnostic.

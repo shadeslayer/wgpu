@@ -237,12 +237,12 @@ impl Parser<'_> {
                     span: token.span,
                 })?;
                 let (pointer, scalar, writable, span) = match symbol {
-                    Symbol::Buffer {
+                    Symbol::Array {
                         pointer,
                         scalar,
                         writable,
                     } => {
-                        let pointer = self.buffer_element(pointer, token.span)?;
+                        let pointer = self.array_element(pointer, token.span)?;
                         (
                             pointer,
                             scalar,
@@ -250,7 +250,7 @@ impl Parser<'_> {
                             self.function.expressions.get_span(pointer),
                         )
                     }
-                    Symbol::Local {
+                    Symbol::Scalar {
                         pointer,
                         scalar,
                         writable,

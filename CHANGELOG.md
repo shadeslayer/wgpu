@@ -149,6 +149,7 @@ By @sagudev in [#10307](https://github.com/gfx-rs/wgpu/pull/10307).
 - Support CUDA assignment expressions, compound arithmetic assignments, and prefix/postfix updates.
 - Support CUDA `for`, `while`, and `do`/`while` loops with `break` and `continue`.
 - Support CUDA integer remainder, bitwise operators, shifts, and their compound assignments.
+- Support static CUDA `__shared__` scalars and fixed one-dimensional arrays.
 - Add `@builtin(hit_barycentrics)`, a `vec2<f32>` readable in `@any_hit` and `@closest_hit` ray tracing pipeline shaders, holding two of the barycentric coordinates of the hit point on the triangle (the third is `1.0 - x - y`). Currently only supported with the SPIR-V backend. By @JMS55 in [#10193](https://github.com/gfx-rs/wgpu/pull/10193).
 
 #### Hal

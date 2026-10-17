@@ -1,5 +1,7 @@
 use super::*;
 
+use core::num::NonZeroU32;
+
 impl<'a> Parser<'a> {
     pub(super) fn block_contents(&mut self) -> Result<bool, ParseError> {
         let mut terminated = false;
@@ -118,7 +120,7 @@ impl<'a> Parser<'a> {
     pub(super) fn starts_declaration(&mut self) -> Result<bool, ParseError> {
         if !matches!(
             self.lexer.peek()?.kind,
-            TokenKind::Ident("const" | "bool" | "float" | "int" | "unsigned")
+            TokenKind::Ident("__shared__" | "const" | "bool" | "float" | "int" | "unsigned")
         ) {
             return Ok(false);
         }
@@ -128,6 +130,9 @@ impl<'a> Parser<'a> {
     }
 
     pub(super) fn local_declaration(&mut self) -> Result<(), ParseError> {
+        if self.take_ident("__shared__")? {
+            return self.shared_declaration();
+        }
         let is_const = self.take_ident("const")?;
         let scalar = self.scalar_type()?;
         let is_const = self.const_suffix(is_const)?;
@@ -156,7 +161,7 @@ impl<'a> Parser<'a> {
         );
         self.insert_symbol(
             name,
-            Symbol::Local {
+            Symbol::Scalar {
                 pointer,
                 scalar,
                 writable: !is_const,
@@ -164,5 +169,95 @@ impl<'a> Parser<'a> {
             span,
         )?;
         Ok(())
+    }
+
+    fn shared_declaration(&mut self) -> Result<(), ParseError> {
+        let type_span = self.lexer.peek()?.span;
+        let scalar = self.scalar_type()?;
+        if scalar == Scalar::BOOL {
+            return Err(ParseError {
+                message: String::from("shared storage requires a 32-bit numeric type"),
+                span: type_span,
+            });
+        }
+        let (name, span) = self.identifier()?;
+        self.check_name(name, span)?;
+        let base = self.scalar_handle(scalar, span);
+        let is_array = self.take_symbol('[')?;
+        let ty = if is_array {
+            let (size, extent_span) = self.shared_array_size()?;
+            self.expect_symbol(']')?;
+            let inner = TypeInner::Array {
+                base,
+                size: ArraySize::Constant(size),
+                stride: 4,
+            };
+            if inner.try_size(self.module.to_ctx()).is_none() {
+                return Err(ParseError {
+                    message: String::from("shared array exceeds Naga's type size limit"),
+                    span: extent_span,
+                });
+            }
+            self.module.types.insert(Type { name: None, inner }, span)
+        } else {
+            base
+        };
+        if self.lexer.peek()?.kind == TokenKind::Symbol('[') {
+            return self.fail("multidimensional shared arrays are unsupported");
+        }
+        if self.lexer.peek()?.kind == TokenKind::Symbol('=') {
+            return self.fail("shared variables cannot have initializers");
+        }
+        self.expect_symbol(';')?;
+        let global = self.module.global_variables.append(
+            GlobalVariable {
+                name: Some(String::from(name)),
+                space: AddressSpace::WorkGroup,
+                binding: None,
+                ty,
+                init: None,
+                memory_decorations: Default::default(),
+            },
+            span,
+        );
+        let pointer = self.append(Expression::GlobalVariable(global), span)?;
+        let symbol = if is_array {
+            Symbol::Array {
+                pointer,
+                scalar,
+                writable: true,
+            }
+        } else {
+            Symbol::Scalar {
+                pointer,
+                scalar,
+                writable: true,
+            }
+        };
+        self.insert_symbol(name, symbol, span)
+    }
+
+    fn shared_array_size(&mut self) -> Result<(NonZeroU32, Span), ParseError> {
+        let token = self.lexer.next()?;
+        let invalid = || ParseError {
+            message: String::from("shared array extent must be a positive decimal integer literal"),
+            span: token.span,
+        };
+        let TokenKind::Number(text) = token.kind else {
+            return Err(invalid());
+        };
+        let digits = text.strip_suffix(['u', 'U']).unwrap_or(text);
+        if digits.is_empty()
+            || !digits.bytes().all(|byte| byte.is_ascii_digit())
+            || (digits.len() > 1 && digits.starts_with('0'))
+        {
+            return Err(invalid());
+        }
+        let size = digits
+            .parse::<u32>()
+            .ok()
+            .and_then(NonZeroU32::new)
+            .ok_or_else(invalid)?;
+        Ok((size, token.span))
     }
 }

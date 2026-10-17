@@ -21,12 +21,12 @@ use super::{
 
 #[derive(Clone, Copy, Debug)]
 enum Symbol {
-    Buffer {
+    Array {
         pointer: Handle<Expression>,
         scalar: Scalar,
         writable: bool,
     },
-    Local {
+    Scalar {
         pointer: Handle<Expression>,
         scalar: Scalar,
         writable: bool,
@@ -172,7 +172,7 @@ impl<'a> Parser<'a> {
         let pointer = self.append(Expression::GlobalVariable(global), span)?;
         self.insert_symbol(
             name,
-            Symbol::Buffer {
+            Symbol::Array {
                 pointer,
                 scalar,
                 writable: !is_const,
@@ -232,7 +232,7 @@ impl<'a> Parser<'a> {
         self.push_statement(Statement::Store { pointer, value }, span);
         self.insert_symbol(
             name,
-            Symbol::Local {
+            Symbol::Scalar {
                 pointer,
                 scalar,
                 writable: !is_const,
@@ -242,7 +242,7 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    fn buffer_element(
+    fn array_element(
         &mut self,
         base: Handle<Expression>,
         span: Span,
@@ -252,7 +252,7 @@ impl<'a> Parser<'a> {
         let index = self.rvalue(index)?;
         if !matches!(index.scalar.kind, ScalarKind::Sint | ScalarKind::Uint) {
             return Err(ParseError {
-                message: String::from("buffer index must be an integer"),
+                message: String::from("array index must be an integer"),
                 span: index.span,
             });
         }
