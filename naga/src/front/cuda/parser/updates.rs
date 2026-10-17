@@ -39,11 +39,12 @@ impl Parser<'_> {
     ) -> Result<Value, ParseError> {
         let lvalue = self.mutable_lvalue(left)?;
         self.lexer.next()?;
-        let left_body = core::mem::take(&mut self.function.body);
-        let right = self.expression(0)?;
-        let right = self.rvalue(right)?;
+        let (right, right_body) = self.capture_block(|parser| {
+            let right = parser.expression(0)?;
+            parser.rvalue(right)
+        })?;
         let span = left.span.until(&right.span);
-        self.function.body.extend_block(left_body);
+        self.prepend_block(right_body);
         let value = if let Some(op) = operator {
             let previous_value = self.rvalue(left)?;
             self.binary_value(op, previous_value, right)?

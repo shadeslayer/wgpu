@@ -213,6 +213,18 @@ fn cuda_assignment_evaluates_rhs_before_the_lhs_index() {
 }
 
 #[test]
+fn cuda_assignment_loads_rhs_before_the_lhs_changes_it() {
+    let source = "__global__ void update(int *out) { int i = 0; out[i++] = i; out[2] = i; }";
+    assert_eq!(execute(source, &[-999; 3]), [0, -999, 1]);
+}
+
+#[test]
+fn cuda_compound_assignment_loads_rhs_before_the_lhs_changes_it() {
+    let source = "__global__ void update(int *out) { int i = 1; out[i++] += i; out[2] = i; }";
+    assert_eq!(execute(source, &[-999, 10, -999]), [-999, 11, 2]);
+}
+
+#[test]
 fn cuda_compound_assignment_evaluates_its_index_once_after_the_rhs() {
     let source = "__global__ void update(int *out) { int i = 0; out[i++] += ++i; out[2] = i; }";
     assert_eq!(execute(source, &[-999, 10, -999]), [-999, 11, 2]);

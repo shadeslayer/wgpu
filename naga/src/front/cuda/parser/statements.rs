@@ -8,10 +8,7 @@ impl<'a> Parser<'a> {
                 return self.fail("expected `}`");
             }
             if terminated {
-                let reachable = core::mem::take(&mut self.function.body);
-                let result = self.statement();
-                self.function.body = reachable;
-                result?;
+                self.capture_block(Self::statement)?;
             } else {
                 terminated = self.statement()?;
             }
@@ -22,15 +19,15 @@ impl<'a> Parser<'a> {
     pub(super) fn scoped_statement(&mut self) -> Result<(crate::Block, bool), ParseError> {
         let compound = self.take_symbol('{')?;
         self.symbol_table.push_scope();
-        let parent = core::mem::take(&mut self.function.body);
-        let result = if compound {
-            self.block_contents()
-        } else {
-            self.statement()
-        };
-        let body = core::mem::replace(&mut self.function.body, parent);
+        let result = self.capture_block(|parser| {
+            if compound {
+                parser.block_contents()
+            } else {
+                parser.statement()
+            }
+        });
         self.symbol_table.pop_scope();
-        result.map(|terminated| (body, terminated))
+        result.map(|(terminated, body)| (body, terminated))
     }
 
     pub(super) fn statement(&mut self) -> Result<bool, ParseError> {

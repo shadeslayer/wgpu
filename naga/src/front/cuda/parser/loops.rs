@@ -19,15 +19,16 @@ impl Parser<'_> {
 
     pub(super) fn while_loop(&mut self, start: Span) -> Result<(), ParseError> {
         self.expect_symbol('(')?;
-        let parent = core::mem::take(&mut self.function.body);
-        self.loop_condition()?;
-        self.expect_symbol(')')?;
-        self.loop_depth += 1;
-        let result = self.scoped_statement();
-        self.loop_depth -= 1;
-        let (body, _) = result?;
-        self.function.body.push(Statement::Block(body), start);
-        let body = core::mem::replace(&mut self.function.body, parent);
+        let ((), body) = self.capture_block(|parser| {
+            parser.loop_condition()?;
+            parser.expect_symbol(')')?;
+            parser.loop_depth += 1;
+            let result = parser.scoped_statement();
+            parser.loop_depth -= 1;
+            let (body, _) = result?;
+            parser.function.body.push(Statement::Block(body), start);
+            Ok(())
+        })?;
         self.function.body.push(
             Statement::Loop {
                 body,
@@ -42,35 +43,49 @@ impl Parser<'_> {
     pub(super) fn for_loop(&mut self, start: Span) -> Result<(), ParseError> {
         self.expect_symbol('(')?;
         self.symbol_table.push_scope();
-        let parent = core::mem::take(&mut self.function.body);
-        if !self.take_symbol(';')? {
-            if self.starts_declaration()? {
-                self.local_declaration()?;
-            } else {
-                self.expression(0)?;
-                self.expect_symbol(';')?;
+        let result = self.for_loop_body(start);
+        self.symbol_table.pop_scope();
+        self.function.body.push(Statement::Block(result?), start);
+        Ok(())
+    }
+
+    fn for_loop_body(&mut self, start: Span) -> Result<crate::Block, ParseError> {
+        let ((), mut init) = self.capture_block(|parser| {
+            if !parser.take_symbol(';')? {
+                if parser.starts_declaration()? {
+                    parser.local_declaration()?;
+                } else {
+                    parser.expression(0)?;
+                    parser.expect_symbol(';')?;
+                }
             }
-        }
-        let mut init = core::mem::take(&mut self.function.body);
-        if !self.take_symbol(';')? {
-            self.loop_condition()?;
-            self.expect_symbol(';')?;
-        }
-        let mut body = core::mem::take(&mut self.function.body);
-        if !self.take_symbol(')')? {
-            self.expression(0)?;
-            self.expect_symbol(')')?;
-        }
-        let continuing = core::mem::take(&mut self.function.body);
+            Ok(())
+        })?;
+        let ((), mut body) = self.capture_block(|parser| {
+            if !parser.take_symbol(';')? {
+                parser.loop_condition()?;
+                parser.expect_symbol(';')?;
+            }
+            Ok(())
+        })?;
+        let ((), continuing) = self.capture_block(|parser| {
+            if !parser.take_symbol(')')? {
+                parser.expression(0)?;
+                parser.expect_symbol(')')?;
+            }
+            Ok(())
+        })?;
         self.loop_depth += 1;
-        let result = if self.take_symbol('{')? {
-            self.block_contents()
-        } else {
-            self.statement()
-        };
+        let result = self.capture_block(|parser| {
+            if parser.take_symbol('{')? {
+                parser.block_contents()
+            } else {
+                parser.statement()
+            }
+        });
         self.loop_depth -= 1;
-        result?;
-        body.append(&mut self.function.body);
+        let (_, statements) = result?;
+        body.extend_block(statements);
         init.push(
             Statement::Loop {
                 body,
@@ -79,32 +94,30 @@ impl Parser<'_> {
             },
             start,
         );
-        self.function.body = parent;
-        self.symbol_table.pop_scope();
-        self.function.body.push(Statement::Block(init), start);
-        Ok(())
+        Ok(init)
     }
 
     pub(super) fn do_loop(&mut self, start: Span) -> Result<(), ParseError> {
-        let parent = core::mem::take(&mut self.function.body);
         self.loop_depth += 1;
         let result = self.scoped_statement();
         self.loop_depth -= 1;
         let (body, _) = result?;
         self.expect_ident("while")?;
         self.expect_symbol('(')?;
-        let value = self.expression(0)?;
-        let condition = self.truthy(value)?;
-        let break_if = self.append(
-            Expression::Unary {
-                op: UnaryOperator::LogicalNot,
-                expr: condition.handle,
-            },
-            condition.span,
-        )?;
-        self.expect_symbol(')')?;
-        let end = self.expect_symbol(';')?;
-        let continuing = core::mem::replace(&mut self.function.body, parent);
+        let ((break_if, end), continuing) = self.capture_block(|parser| {
+            let value = parser.expression(0)?;
+            let condition = parser.truthy(value)?;
+            let break_if = parser.append(
+                Expression::Unary {
+                    op: UnaryOperator::LogicalNot,
+                    expr: condition.handle,
+                },
+                condition.span,
+            )?;
+            parser.expect_symbol(')')?;
+            let end = parser.expect_symbol(';')?;
+            Ok((break_if, end))
+        })?;
         self.function.body.push(
             Statement::Loop {
                 body,

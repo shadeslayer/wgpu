@@ -8,12 +8,11 @@ impl Parser<'_> {
         if self.expression_depth > 64 {
             return self.fail("CUDA expression nesting limit exceeded");
         }
-        let parent = core::mem::take(&mut self.function.body);
-        let result = self.expression_inner(minimum_precedence);
-        let body = core::mem::replace(&mut self.function.body, parent);
-        self.function.body.extend_block(body);
+        let result = self.capture_block(|parser| parser.expression_inner(minimum_precedence));
         self.expression_depth -= 1;
-        result
+        let (value, body) = result?;
+        self.append_block(body);
+        Ok(value)
     }
 
     fn expression_inner(&mut self, minimum_precedence: u8) -> Result<Value, ParseError> {
@@ -320,21 +319,18 @@ impl Parser<'_> {
             },
             left.span,
         );
-        let parent = core::mem::take(&mut self.function.body);
-        let result = self
-            .expression(precedence + 1)
-            .and_then(|right| self.truthy(right));
-        if let Ok(right) = result {
-            self.function.body.push(
+        let (right, right_body) = self.capture_block(|parser| {
+            let right = parser.expression(precedence + 1)?;
+            let right = parser.truthy(right)?;
+            parser.function.body.push(
                 Statement::Store {
                     pointer,
                     value: right.handle,
                 },
                 right.span,
             );
-        }
-        let right_body = core::mem::replace(&mut self.function.body, parent);
-        let right = result?;
+            Ok(right)
+        })?;
         let span = left.span.until(&right.span);
         let (accept, reject) = if operator == BinaryOperator::LogicalAnd {
             (right_body, crate::Block::new())
