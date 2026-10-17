@@ -312,7 +312,7 @@ impl Parser<'_> {
             left.span,
         );
         let pointer = self.append(Expression::LocalVariable(local), left.span)?;
-        self.function.body.push(
+        self.push_statement(
             Statement::Store {
                 pointer,
                 value: left.handle,
@@ -322,7 +322,7 @@ impl Parser<'_> {
         let (right, right_body) = self.capture_block(|parser| {
             let right = parser.expression(precedence + 1)?;
             let right = parser.truthy(right)?;
-            parser.function.body.push(
+            parser.push_statement(
                 Statement::Store {
                     pointer,
                     value: right.handle,
@@ -337,7 +337,7 @@ impl Parser<'_> {
         } else {
             (crate::Block::new(), right_body)
         };
-        self.function.body.push(
+        self.push_statement(
             Statement::If {
                 condition: left.handle,
                 accept,

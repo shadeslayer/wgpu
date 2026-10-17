@@ -48,7 +48,7 @@ impl<'a> Parser<'a> {
         }
         if self.lexer.peek()?.kind == TokenKind::Symbol('{') {
             let (body, terminated) = self.scoped_statement()?;
-            self.function.body.push(Statement::Block(body), start);
+            self.push_statement(Statement::Block(body), start);
             return Ok(terminated);
         }
         if self.take_ident("if")? {
@@ -62,7 +62,7 @@ impl<'a> Parser<'a> {
             } else {
                 (crate::Block::new(), false)
             };
-            self.function.body.push(
+            self.push_statement(
                 Statement::If {
                     condition: condition.handle,
                     accept,
@@ -74,9 +74,7 @@ impl<'a> Parser<'a> {
         }
         if self.take_ident("return")? {
             let end = self.expect_symbol(';')?;
-            self.function
-                .body
-                .push(Statement::Return { value: None }, start.until(&end));
+            self.push_statement(Statement::Return { value: None }, start.until(&end));
             return Ok(true);
         }
         if self.take_ident("for")? {
@@ -105,7 +103,7 @@ impl<'a> Parser<'a> {
                 Statement::Continue
             };
             let end = self.expect_symbol(';')?;
-            self.function.body.push(statement, start.until(&end));
+            self.push_statement(statement, start.until(&end));
             return Ok(true);
         }
         if self.starts_declaration()? {
@@ -149,7 +147,7 @@ impl<'a> Parser<'a> {
             span,
         );
         let pointer = self.append(Expression::LocalVariable(local), span)?;
-        self.function.body.push(
+        self.push_statement(
             Statement::Store {
                 pointer,
                 value: value.handle,

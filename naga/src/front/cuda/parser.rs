@@ -51,6 +51,7 @@ pub(super) struct Parser<'a> {
     lexer: Lexer<'a>,
     module: Module,
     function: Function,
+    emitter: crate::proc::Emitter,
     symbol_table: SymbolTable<&'a str, Symbol>,
     statement_depth: u32,
     loop_depth: u32,
@@ -62,10 +63,11 @@ pub(super) struct Parser<'a> {
 
 impl<'a> Parser<'a> {
     pub fn new(lexer: Lexer<'a>, options: &Options) -> Self {
-        Self {
+        let mut parser = Self {
             lexer,
             module: Module::default(),
             function: Function::default(),
+            emitter: crate::proc::Emitter::default(),
             symbol_table: SymbolTable::default(),
             statement_depth: 0,
             loop_depth: 0,
@@ -73,7 +75,9 @@ impl<'a> Parser<'a> {
             workgroup_size: options.workgroup_size,
             expression_depth: 0,
             expression_graph_depths: Vec::new(),
-        }
+        };
+        parser.emitter.start(&parser.function.expressions);
+        parser
     }
 
     pub fn parse(mut self) -> Result<Module, ParseError> {
@@ -106,6 +110,9 @@ impl<'a> Parser<'a> {
         if self.lexer.peek()?.kind != TokenKind::End {
             return self.fail("only one CUDA kernel is supported");
         }
+        self.function
+            .body
+            .extend(self.emitter.finish(&self.function.expressions));
         self.module.entry_points.push(EntryPoint {
             name: String::from(name),
             stage: ShaderStage::Compute,
@@ -222,9 +229,7 @@ impl<'a> Parser<'a> {
             span,
         );
         let pointer = self.append(Expression::LocalVariable(local), span)?;
-        self.function
-            .body
-            .push(Statement::Store { pointer, value }, span);
+        self.push_statement(Statement::Store { pointer, value }, span);
         self.insert_symbol(
             name,
             Symbol::Local {
@@ -434,13 +439,15 @@ impl<'a> Parser<'a> {
             });
         }
         let pre_emitted = expression.needs_pre_emit();
+        if pre_emitted {
+            self.function
+                .body
+                .extend(self.emitter.finish(&self.function.expressions));
+        }
         let handle = self.function.expressions.append(expression, span);
         self.expression_graph_depths.push(depth);
-        if !pre_emitted {
-            self.function.body.push(
-                Statement::Emit(crate::Range::new_from_bounds(handle, handle)),
-                span,
-            );
+        if pre_emitted {
+            self.emitter.start(&self.function.expressions);
         }
         Ok(handle)
     }

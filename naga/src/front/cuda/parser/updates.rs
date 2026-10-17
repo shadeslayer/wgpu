@@ -52,7 +52,7 @@ impl Parser<'_> {
             right
         };
         let value = self.convert_value(value, left.scalar)?;
-        self.function.body.push(
+        self.push_statement(
             Statement::Store {
                 pointer: lvalue.pointer,
                 value: value.handle,
@@ -106,7 +106,7 @@ impl Parser<'_> {
             },
             value.scalar,
         )?;
-        self.function.body.push(
+        self.push_statement(
             Statement::Store {
                 pointer: lvalue.pointer,
                 value: updated_value.handle,

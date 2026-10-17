@@ -6,7 +6,7 @@ impl Parser<'_> {
         let condition = self.truthy(value)?;
         let mut reject = crate::Block::new();
         reject.push(Statement::Break, condition.span);
-        self.function.body.push(
+        self.push_statement(
             Statement::If {
                 condition: condition.handle,
                 accept: crate::Block::new(),
@@ -26,10 +26,10 @@ impl Parser<'_> {
             let result = parser.scoped_statement();
             parser.loop_depth -= 1;
             let (body, _) = result?;
-            parser.function.body.push(Statement::Block(body), start);
+            parser.push_statement(Statement::Block(body), start);
             Ok(())
         })?;
-        self.function.body.push(
+        self.push_statement(
             Statement::Loop {
                 body,
                 continuing: crate::Block::new(),
@@ -45,7 +45,7 @@ impl Parser<'_> {
         self.symbol_table.push_scope();
         let result = self.for_loop_body(start);
         self.symbol_table.pop_scope();
-        self.function.body.push(Statement::Block(result?), start);
+        self.push_statement(Statement::Block(result?), start);
         Ok(())
     }
 
@@ -118,7 +118,7 @@ impl Parser<'_> {
             let end = parser.expect_symbol(';')?;
             Ok((break_if, end))
         })?;
-        self.function.body.push(
+        self.push_statement(
             Statement::Loop {
                 body,
                 continuing,

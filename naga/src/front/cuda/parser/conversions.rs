@@ -97,7 +97,7 @@ impl Parser<'_> {
                         right.span,
                     );
                     let pointer = self.append(Expression::LocalVariable(local), right.span)?;
-                    self.function.body.push(
+                    self.push_statement(
                         Statement::Store {
                             pointer,
                             value: right.handle,
