@@ -172,7 +172,7 @@ fn cuda_shared_shadowing_uses_distinct_workgroup_objects() {
             naga::Statement::Store { value, .. } => Some(value),
             _ => None,
         })
-        .last()
+        .next_back()
         .unwrap();
     let naga::Expression::Load { pointer } = function.expressions[last_value] else {
         panic!("expected shared scalar load")

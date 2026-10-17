@@ -209,7 +209,7 @@ static CUDA_NUMERIC_CONVERSIONS: GpuTestConfiguration = GpuTestConfiguration::ne
         )
         .await;
         let actual: &[u32] = bytemuck::cast_slice(&result);
-        for (invocation, values) in actual.chunks_exact(8).enumerate() {
+        for (invocation, values) in actual.as_chunks::<8>().0.iter().enumerate() {
             assert_eq!(
                 values,
                 &[u32::MAX, 2, 0, 3, 5, 1, 8, 3],
@@ -284,7 +284,7 @@ static CUDA_LOOPS: GpuTestConfiguration = GpuTestConfiguration::new()
         )
         .await;
         let actual: &[i32] = bytemuck::cast_slice(&result);
-        for (invocation, values) in actual.chunks_exact(10).enumerate() {
+        for (invocation, values) in actual.as_chunks::<10>().0.iter().enumerate() {
             let tail = if invocation < 32 { 99 } else { 19 };
             assert_eq!(
                 values,
@@ -337,7 +337,7 @@ static CUDA_UPDATES: GpuTestConfiguration = GpuTestConfiguration::new()
         )
         .await;
         let actual: &[i32] = bytemuck::cast_slice(&result);
-        for (invocation, values) in actual.chunks_exact(16).enumerate() {
+        for (invocation, values) in actual.as_chunks::<16>().0.iter().enumerate() {
             assert_eq!(
                 values,
                 &[1, 3, 2, 2, 1, 9, 4, 12, 12, 14, 99, 1, 2, 10, 21, 2],
@@ -391,7 +391,7 @@ static CUDA_INTEGER_OPERATORS: GpuTestConfiguration = GpuTestConfiguration::new(
         )
         .await;
         let actual: &[u32] = bytemuck::cast_slice(&result);
-        for (invocation, values) in actual.chunks_exact(16).enumerate() {
+        for (invocation, values) in actual.as_chunks::<16>().0.iter().enumerate() {
             assert_eq!(
                 values,
                 &[
@@ -435,7 +435,7 @@ static CUDA_SHARED_STORAGE: GpuTestConfiguration = GpuTestConfiguration::new()
         )
         .await;
         let actual: &[u32] = bytemuck::cast_slice(&result);
-        for (group, values) in actual.chunks_exact(128).enumerate() {
+        for (group, values) in actual.as_chunks::<128>().0.iter().enumerate() {
             let expected: Vec<_> = (0..64)
                 .map(|lane| group as u32 * 1000 + lane + 10)
                 .collect();
