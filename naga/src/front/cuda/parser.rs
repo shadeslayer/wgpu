@@ -1,5 +1,6 @@
 use alloc::{format, string::String, vec::Vec};
 
+mod barriers;
 mod context;
 mod conversions;
 mod expressions;
@@ -113,6 +114,7 @@ impl<'a> Parser<'a> {
         self.function
             .body
             .extend(self.emitter.finish(&self.function.expressions));
+        barriers::check_control_flow(&self.function.body, false, false)?;
         self.module.entry_points.push(EntryPoint {
             name: String::from(name),
             stage: ShaderStage::Compute,
@@ -467,6 +469,7 @@ impl<'a> Parser<'a> {
                 | "return"
                 | "extern"
                 | "__global__"
+                | "__syncthreads"
         ) || [
             "alignas",
             "alignof",

@@ -248,7 +248,6 @@ fn cuda_shared_storage_rejects_unsupported_declarations_and_uses() {
         "__shared__ int values[2]; values = 1;",
         "__shared__ int values[2]; values[0][0] = 1;",
         "__shared__ int values[2]; values[true] = 1;",
-        "__shared__ int value; __syncthreads();",
     ] {
         let source = format!("__global__ void bad() {{ {declaration} }}");
         assert!(parse_str(&source, &Options::default()).is_err(), "{source}");

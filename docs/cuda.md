@@ -123,20 +123,33 @@ Shared variables become workgroup storage without resource bindings; names obey
 the surrounding block scope, and each workgroup has its own storage. Declarations
 cannot contain initializers, following NVIDIA's
 [shared memory constraints](https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/cpp-language-extensions.html).
-Dynamic `extern __shared__` storage, constant-expression extents, and
-`__syncthreads()` remain unsupported. Without synchronization, each invocation
-must use shared values independently of other invocations.
+Dynamic `extern __shared__` storage and constant-expression extents remain
+unsupported. Accesses to shared values from different invocations require
+synchronization when any invocation writes them.
+
+`__syncthreads();` synchronizes a thread block and makes earlier shared and
+global buffer accesses visible to other invocations in that block. It lowers to
+a control barrier covering both workgroup and storage memory, following
+[CUDA's synchronization semantics](https://docs.nvidia.com/cuda/archive/13.0.0/cuda-c-programming-guide/index.html#synchronization-functions).
+The first implementation accepts this zero-argument statement only in
+straight-line kernel flow, including unconditional nested blocks. Barriers
+inside `if` branches or loops, or after a possible earlier `return`, produce a
+parse error. This conservative restriction rejects some valid CUDA programs
+until control-barrier uniformity analysis is available. Conditions and loops
+without returns may precede a barrier; returns after the last barrier are
+allowed. Synchronization does not extend across workgroups.
 
 Unsupported syntax produces a parse error with a source span. This includes
 preprocessor directives and includes, host code and launch syntax,
 general pointer operations, device functions and calls, switches,
-dynamic shared memory, atomics, synchronization, templates, double precision,
-and inline PTX. No CUDA runtime ABI or NVIDIA device code is generated.
+dynamic shared memory, atomics, other synchronization primitives, templates,
+double precision, and inline PTX. No CUDA runtime ABI or NVIDIA device code is
+generated.
 
 ## Further increments
 
 Add each capability with a failing acceptance test and rejection tests before
 changing the parser or lowering. Useful next increments are device functions,
-barriers, and dynamic shared storage. Each increment must preserve
-validation and backend compatibility; CUDA-specific features need an explicit
-portable representation or an unsupported-feature diagnostic.
+dynamic shared storage, and more general barrier placement. Each increment must
+preserve validation and backend compatibility; CUDA-specific features need an
+explicit portable representation or an unsupported-feature diagnostic.

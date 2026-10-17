@@ -12,6 +12,7 @@ pub fn all_tests(tests: &mut Vec<GpuTestInitializer>) {
         CUDA_UPDATES,
         CUDA_INTEGER_OPERATORS,
         CUDA_SHARED_STORAGE,
+        CUDA_BARRIERS,
     ]);
 }
 
@@ -442,4 +443,42 @@ static CUDA_SHARED_STORAGE: GpuTestConfiguration = GpuTestConfiguration::new()
             assert_eq!(&values[64..66], &[3, 7], "workgroup {group}");
             assert!(values[66..].iter().all(|&value| value == u32::MAX));
         }
+    });
+
+#[apply(gpu_test!)]
+static CUDA_BARRIERS: GpuTestConfiguration = GpuTestConfiguration::new()
+    .parameters(TestParameters::default().test_features_limits())
+    .run_async(|ctx| async move {
+        let buffers = [buffer(
+            &ctx,
+            bytemuck::cast_slice(&[u32::MAX; 512 + 16]),
+            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+        )];
+        let result = run_kernel(
+            &ctx,
+            include_str!("../../../naga/tests/in/cuda/barriers.cu"),
+            &buffers,
+            0,
+            2,
+        )
+        .await;
+        let actual: &[u32] = bytemuck::cast_slice(&result);
+        for group in 0..2 {
+            let values = &actual[group * 256..(group + 1) * 256];
+            for lane in 0..64 {
+                assert_eq!(values[lane], group as u32 * 1000 + lane as u32);
+                assert_eq!(
+                    values[64 + lane],
+                    group as u32 * 2000 + 63 - lane as u32 + 7,
+                    "shared exchange in workgroup {group}, lane {lane}",
+                );
+                assert_eq!(
+                    values[128 + lane],
+                    group as u32 * 1000 + (lane as u32 + 1) % 64,
+                    "storage exchange in workgroup {group}, lane {lane}",
+                );
+                assert_eq!(values[192 + lane], group as u32 * 100 + 11);
+            }
+        }
+        assert!(actual[512..].iter().all(|&value| value == u32::MAX));
     });

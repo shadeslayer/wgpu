@@ -79,6 +79,16 @@ impl<'a> Parser<'a> {
             self.push_statement(Statement::Return { value: None }, start.until(&end));
             return Ok(true);
         }
+        if self.take_ident("__syncthreads")? {
+            self.expect_symbol('(')?;
+            self.expect_symbol(')')?;
+            let end = self.expect_symbol(';')?;
+            self.push_statement(
+                Statement::ControlBarrier(crate::Barrier::WORK_GROUP | crate::Barrier::STORAGE),
+                start.until(&end),
+            );
+            return Ok(false);
+        }
         if self.take_ident("for")? {
             self.for_loop(start)?;
             return Ok(false);
