@@ -41,7 +41,7 @@ impl Parser<'_> {
 
     pub(super) fn for_loop(&mut self, start: Span) -> Result<(), ParseError> {
         self.expect_symbol('(')?;
-        self.scopes.push(FastHashMap::default());
+        self.symbol_table.push_scope();
         let parent = core::mem::take(&mut self.function.body);
         if !self.take_symbol(';') {
             if self.starts_declaration() {
@@ -80,7 +80,7 @@ impl Parser<'_> {
             start,
         );
         self.function.body = parent;
-        self.scopes.pop();
+        self.symbol_table.pop_scope();
         self.function.body.push(Statement::Block(init), start);
         Ok(())
     }

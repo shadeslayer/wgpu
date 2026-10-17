@@ -7,8 +7,8 @@ mod statements;
 mod updates;
 
 use crate::{
-    AddressSpace, ArraySize, BinaryOperator, Binding, BuiltIn, EntryPoint, Expression, FastHashMap,
-    Function, FunctionArgument, GlobalVariable, Handle, Literal, LocalVariable, Module,
+    front::SymbolTable, AddressSpace, ArraySize, BinaryOperator, Binding, BuiltIn, EntryPoint,
+    Expression, Function, FunctionArgument, GlobalVariable, Handle, Literal, LocalVariable, Module,
     ResourceBinding, Scalar, ScalarKind, ShaderStage, Span, Statement, StorageAccess, StructMember,
     Type, TypeInner, UnaryOperator, VectorSize,
 };
@@ -51,7 +51,7 @@ pub(super) struct Parser<'a> {
     position: usize,
     module: Module,
     function: Function,
-    scopes: Vec<FastHashMap<&'a str, Symbol>>,
+    symbol_table: SymbolTable<&'a str, Symbol>,
     statement_depth: u32,
     loop_depth: u32,
     builtin_arguments: [Option<Handle<Expression>>; 3],
@@ -67,7 +67,7 @@ impl<'a> Parser<'a> {
             position: 0,
             module: Module::default(),
             function: Function::default(),
-            scopes: alloc::vec![FastHashMap::default()],
+            symbol_table: SymbolTable::default(),
             statement_depth: 0,
             loop_depth: 0,
             builtin_arguments: [None; 3],
@@ -171,7 +171,8 @@ impl<'a> Parser<'a> {
                 scalar,
                 writable: !is_const,
             },
-        );
+            span,
+        )?;
         Ok(())
     }
 
@@ -232,7 +233,8 @@ impl<'a> Parser<'a> {
                 scalar,
                 writable: !is_const,
             },
-        );
+            span,
+        )?;
         Ok(())
     }
 
@@ -445,120 +447,115 @@ impl<'a> Parser<'a> {
     }
 
     fn check_name(&self, name: &str, span: Span) -> Result<(), ParseError> {
-        if self
-            .scopes
-            .last()
-            .is_some_and(|scope| scope.contains_key(name))
-            || matches!(
-                name,
-                "threadIdx"
-                    | "blockIdx"
-                    | "gridDim"
-                    | "blockDim"
-                    | "const"
-                    | "float"
-                    | "int"
-                    | "unsigned"
-                    | "void"
-                    | "return"
-                    | "extern"
-                    | "__global__"
-            )
-            || [
-                "alignas",
-                "alignof",
-                "and",
-                "and_eq",
-                "asm",
-                "auto",
-                "bitand",
-                "bitor",
-                "bool",
-                "break",
-                "case",
-                "catch",
-                "char",
-                "char8_t",
-                "char16_t",
-                "char32_t",
-                "class",
-                "compl",
-                "concept",
-                "consteval",
-                "constexpr",
-                "constinit",
-                "const_cast",
-                "continue",
-                "co_await",
-                "co_return",
-                "co_yield",
-                "decltype",
-                "default",
-                "delete",
-                "do",
-                "double",
-                "dynamic_cast",
-                "else",
-                "enum",
-                "explicit",
-                "export",
-                "false",
-                "for",
-                "friend",
-                "goto",
-                "if",
-                "inline",
-                "long",
-                "mutable",
-                "namespace",
-                "new",
-                "noexcept",
-                "not",
-                "not_eq",
-                "nullptr",
-                "operator",
-                "or",
-                "or_eq",
-                "private",
-                "protected",
-                "public",
-                "register",
-                "reinterpret_cast",
-                "requires",
-                "short",
-                "signed",
-                "sizeof",
-                "static",
-                "static_assert",
-                "static_cast",
-                "struct",
-                "switch",
-                "template",
-                "this",
-                "thread_local",
-                "throw",
-                "true",
-                "try",
-                "typedef",
-                "typeid",
-                "typename",
-                "union",
-                "using",
-                "virtual",
-                "volatile",
-                "wchar_t",
-                "while",
-                "xor",
-                "xor_eq",
-                "__device__",
-                "__host__",
-                "__shared__",
-                "__constant__",
-                "__managed__",
-                "__restrict__",
-                "__launch_bounds__",
-            ]
-            .contains(&name)
+        if matches!(
+            name,
+            "threadIdx"
+                | "blockIdx"
+                | "gridDim"
+                | "blockDim"
+                | "const"
+                | "float"
+                | "int"
+                | "unsigned"
+                | "void"
+                | "return"
+                | "extern"
+                | "__global__"
+        ) || [
+            "alignas",
+            "alignof",
+            "and",
+            "and_eq",
+            "asm",
+            "auto",
+            "bitand",
+            "bitor",
+            "bool",
+            "break",
+            "case",
+            "catch",
+            "char",
+            "char8_t",
+            "char16_t",
+            "char32_t",
+            "class",
+            "compl",
+            "concept",
+            "consteval",
+            "constexpr",
+            "constinit",
+            "const_cast",
+            "continue",
+            "co_await",
+            "co_return",
+            "co_yield",
+            "decltype",
+            "default",
+            "delete",
+            "do",
+            "double",
+            "dynamic_cast",
+            "else",
+            "enum",
+            "explicit",
+            "export",
+            "false",
+            "for",
+            "friend",
+            "goto",
+            "if",
+            "inline",
+            "long",
+            "mutable",
+            "namespace",
+            "new",
+            "noexcept",
+            "not",
+            "not_eq",
+            "nullptr",
+            "operator",
+            "or",
+            "or_eq",
+            "private",
+            "protected",
+            "public",
+            "register",
+            "reinterpret_cast",
+            "requires",
+            "short",
+            "signed",
+            "sizeof",
+            "static",
+            "static_assert",
+            "static_cast",
+            "struct",
+            "switch",
+            "template",
+            "this",
+            "thread_local",
+            "throw",
+            "true",
+            "try",
+            "typedef",
+            "typeid",
+            "typename",
+            "union",
+            "using",
+            "virtual",
+            "volatile",
+            "wchar_t",
+            "while",
+            "xor",
+            "xor_eq",
+            "__device__",
+            "__host__",
+            "__shared__",
+            "__constant__",
+            "__managed__",
+            "__restrict__",
+            "__launch_bounds__",
+        ]
+        .contains(&name)
         {
             Err(ParseError {
                 message: format!("duplicate or reserved name `{name}`"),
@@ -569,15 +566,24 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn insert_symbol(&mut self, name: &'a str, symbol: Symbol) {
-        self.scopes.last_mut().unwrap().insert(name, symbol);
+    fn insert_symbol(
+        &mut self,
+        name: &'a str,
+        symbol: Symbol,
+        span: Span,
+    ) -> Result<(), ParseError> {
+        if self.symbol_table.add(name, symbol).is_some() {
+            Err(ParseError {
+                message: format!("duplicate or reserved name `{name}`"),
+                span,
+            })
+        } else {
+            Ok(())
+        }
     }
 
     fn lookup_symbol(&self, name: &str) -> Option<Symbol> {
-        self.scopes
-            .iter()
-            .rev()
-            .find_map(|scope| scope.get(name).copied())
+        self.symbol_table.lookup(name).copied()
     }
 
     fn current(&self) -> Token<'a> {

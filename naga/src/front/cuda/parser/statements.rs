@@ -21,7 +21,7 @@ impl<'a> Parser<'a> {
 
     pub(super) fn scoped_statement(&mut self) -> Result<(crate::Block, bool), ParseError> {
         let compound = self.take_symbol('{');
-        self.scopes.push(FastHashMap::default());
+        self.symbol_table.push_scope();
         let parent = core::mem::take(&mut self.function.body);
         let result = if compound {
             self.block_contents()
@@ -29,7 +29,7 @@ impl<'a> Parser<'a> {
             self.statement()
         };
         let body = core::mem::replace(&mut self.function.body, parent);
-        self.scopes.pop();
+        self.symbol_table.pop_scope();
         result.map(|terminated| (body, terminated))
     }
 
@@ -159,7 +159,8 @@ impl<'a> Parser<'a> {
                 scalar,
                 writable: !is_const,
             },
-        );
+            span,
+        )?;
         Ok(())
     }
 }
