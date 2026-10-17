@@ -87,13 +87,17 @@ they should be easy to copy into a standalone project.
 
 ## `naga` CUDA Frontend Tests
 
-- Located in: `naga/tests/cuda.rs` and `naga/tests/cuda_adversarial.rs`
-- Run with `cargo nextest run -p naga --test cuda --test cuda_adversarial`
+- Located in: `naga/tests/cuda*.rs`
+- Run with `cargo nextest run -p naga -E 'binary(/cuda/) | test(front::cuda)'`
 - Verify the supported CUDA source subset, rejection of unsupported syntax,
   arithmetic semantics, parser depth limits, and output from every shader backend.
 
 The CLI integration tests live in `naga-cli/tests/cuda.rs` and run with
 `cargo nextest run -p naga-cli --test cuda`.
+
+GPU tests in `tests/tests/wgpu-gpu/cuda.rs` run generated WGSL through the available
+backends and check scalar uniform parameters and guarded vector addition. Run
+them with `cargo xtask test -E 'binary(wgpu-gpu) & test(wgpu_gpu::cuda)'`.
 
 ## `naga` Example Tests
 
