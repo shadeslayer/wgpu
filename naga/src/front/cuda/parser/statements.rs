@@ -83,10 +83,10 @@ impl<'a> Parser<'a> {
                 Some(self.convert_value(value, scalar)?.handle)
             } else {
                 if self.lexer.peek()?.kind != TokenKind::Symbol(';') {
-                    if let ExpressionResult::Value(value) = self.expression_result(0)? {
+                    if let ExpressionResult::Scalar(value) = self.expression_result(0)? {
                         return Err(ParseError {
                             message: String::from("cannot return a value from a void function"),
-                            span: value.span,
+                            span: value.span(),
                         });
                     }
                 }

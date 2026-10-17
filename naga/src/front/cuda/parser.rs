@@ -37,10 +37,12 @@ enum Symbol {
     },
 }
 
-#[derive(Clone, Copy, Debug)]
-struct LValue {
+#[derive(Debug)]
+struct ReferenceValue {
     pointer: Handle<Expression>,
     writable: bool,
+    scalar: Scalar,
+    span: Span,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -48,19 +50,52 @@ struct Value {
     handle: Handle<Expression>,
     scalar: Scalar,
     span: Span,
-    lvalue: Option<LValue>,
 }
 
-#[derive(Clone, Copy, Debug)]
-enum ExpressionResult {
+#[derive(Debug)]
+enum ScalarExpression {
     Value(Value),
+    Reference(ReferenceValue),
+}
+
+impl ScalarExpression {
+    const fn scalar(&self) -> Scalar {
+        match *self {
+            Self::Value(value) => value.scalar,
+            Self::Reference(ref reference) => reference.scalar,
+        }
+    }
+
+    const fn span(&self) -> Span {
+        match *self {
+            Self::Value(value) => value.span,
+            Self::Reference(ref reference) => reference.span,
+        }
+    }
+}
+
+impl From<Value> for ScalarExpression {
+    fn from(value: Value) -> Self {
+        Self::Value(value)
+    }
+}
+
+#[derive(Debug)]
+enum ExpressionResult {
+    Scalar(ScalarExpression),
     Void(Span),
 }
 
+impl From<Value> for ExpressionResult {
+    fn from(value: Value) -> Self {
+        Self::Scalar(value.into())
+    }
+}
+
 impl ExpressionResult {
-    fn require_value(self) -> Result<Value, ParseError> {
+    fn require_scalar(self) -> Result<ScalarExpression, ParseError> {
         match self {
-            Self::Value(value) => Ok(value),
+            Self::Scalar(value) => Ok(value),
             Self::Void(span) => Err(ParseError {
                 message: String::from("void helper call cannot be used as a value"),
                 span,
@@ -351,7 +386,6 @@ impl<'a> Parser<'a> {
             handle,
             scalar: Scalar::U32,
             span,
-            lvalue: None,
         })
     }
 
@@ -397,7 +431,6 @@ impl<'a> Parser<'a> {
             handle,
             scalar,
             span,
-            lvalue: None,
         })
     }
 

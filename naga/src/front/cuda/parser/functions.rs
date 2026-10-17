@@ -149,7 +149,6 @@ impl<'a> Parser<'a> {
                 handle,
                 scalar,
                 span,
-                lvalue: None,
             })
         } else {
             None
@@ -163,7 +162,7 @@ impl<'a> Parser<'a> {
             span,
         );
         Ok(match value {
-            Some(value) => ExpressionResult::Value(value),
+            Some(value) => value.into(),
             None => ExpressionResult::Void(span),
         })
     }

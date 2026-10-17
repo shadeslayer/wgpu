@@ -3,7 +3,7 @@ use super::*;
 impl Parser<'_> {
     pub(super) fn convert_value(
         &mut self,
-        value: Value,
+        value: ScalarExpression,
         target: Scalar,
     ) -> Result<Value, ParseError> {
         let value = self.rvalue(value)?;
@@ -11,7 +11,7 @@ impl Parser<'_> {
             return Ok(value);
         }
         if target == Scalar::BOOL {
-            return self.truthy(value);
+            return self.truthy(value.into());
         }
         if ![Scalar::I32, Scalar::U32, Scalar::F32].contains(&target) {
             return Err(ParseError {
@@ -31,16 +31,15 @@ impl Parser<'_> {
             handle,
             scalar: target,
             span: value.span,
-            lvalue: None,
         })
     }
 
     pub(super) fn usual_arithmetic(
         &mut self,
-        left: Value,
-        right: Value,
+        left: ScalarExpression,
+        right: ScalarExpression,
     ) -> Result<(Value, Value), ParseError> {
-        let scalars = [left.scalar, right.scalar];
+        let scalars = [left.scalar(), right.scalar()];
         let common = if scalars.contains(&Scalar::F32) {
             Scalar::F32
         } else if scalars.contains(&Scalar::U32) {
@@ -54,20 +53,26 @@ impl Parser<'_> {
         ))
     }
 
-    pub(super) fn promote_integral(&mut self, value: Value) -> Result<Value, ParseError> {
+    pub(super) fn promote_integral(
+        &mut self,
+        value: ScalarExpression,
+    ) -> Result<Value, ParseError> {
         let value = self.rvalue(value)?;
         if value.scalar == Scalar::BOOL {
-            self.convert_value(value, Scalar::I32)
+            self.convert_value(value.into(), Scalar::I32)
         } else {
             Ok(value)
         }
     }
 
-    pub(super) fn integral_operand(&mut self, value: Value) -> Result<Value, ParseError> {
-        if value.scalar.kind == ScalarKind::Float {
+    pub(super) fn integral_operand(
+        &mut self,
+        value: ScalarExpression,
+    ) -> Result<Value, ParseError> {
+        if value.scalar().kind == ScalarKind::Float {
             return Err(ParseError {
                 message: String::from("operator requires integral operands"),
-                span: value.span,
+                span: value.span(),
             });
         }
         self.promote_integral(value)
@@ -76,15 +81,15 @@ impl Parser<'_> {
     pub(super) fn binary_value(
         &mut self,
         operator: BinaryOperator,
-        left: Value,
-        right: Value,
+        left: ScalarExpression,
+        right: ScalarExpression,
     ) -> Result<Value, ParseError> {
-        let span = left.span.until(&right.span);
+        let span = left.span().until(&right.span());
         let (left, right) = match operator {
             BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight => {
                 let left = self.integral_operand(left)?;
                 let right = self.integral_operand(right)?;
-                let mut right = self.convert_value(right, Scalar::U32)?;
+                let mut right = self.convert_value(right.into(), Scalar::U32)?;
                 if operator == BinaryOperator::ShiftLeft {
                     // Keep wrapping shifts out of WGSL constant evaluation.
                     let ty = self.scalar_handle(Scalar::U32, right.span);
@@ -114,7 +119,7 @@ impl Parser<'_> {
             | BinaryOperator::ExclusiveOr => {
                 let left = self.integral_operand(left)?;
                 let right = self.integral_operand(right)?;
-                self.usual_arithmetic(left, right)?
+                self.usual_arithmetic(left.into(), right.into())?
             }
             _ => self.usual_arithmetic(left, right)?,
         };
@@ -139,7 +144,6 @@ impl Parser<'_> {
             handle,
             scalar,
             span,
-            lvalue: None,
         })
     }
 
