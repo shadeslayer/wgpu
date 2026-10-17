@@ -86,6 +86,26 @@ pub struct WriterSharedOptions {
     pub bounds_checks_policies: naga::proc::BoundsCheckPolicies,
 }
 
+#[derive(Debug, serde::Deserialize)]
+#[serde(default)]
+pub struct CudaInParameters {
+    pub workgroup_size: [u32; 3],
+}
+impl Default for CudaInParameters {
+    fn default() -> Self {
+        Self {
+            workgroup_size: [1; 3],
+        }
+    }
+}
+impl From<&CudaInParameters> for naga::front::cuda::Options {
+    fn from(value: &CudaInParameters) -> Self {
+        Self {
+            workgroup_size: value.workgroup_size,
+        }
+    }
+}
+
 #[derive(Debug, Default, serde::Deserialize)]
 #[serde(default)]
 pub struct WgslInParameters {
@@ -213,6 +233,9 @@ pub struct Parameters {
     // Capabilities to enable. Defaults to `Capabilities::default()`.
     pub capabilities: Option<naga::valid::Capabilities>,
 
+    #[serde(rename = "cuda-in")]
+    pub cuda_in: CudaInParameters,
+
     // -- wgsl-in options --
     #[serde(rename = "wgsl-in")]
     pub wgsl_in: WgslInParameters,
@@ -224,7 +247,7 @@ pub struct Parameters {
     // -- SPIR-V options --
     pub spv: SpirvOutParameters,
 
-    /// Defaults to [`Targets::non_wgsl_default()`] for `spv` and `glsl` snapshots,
+    /// Defaults to [`Targets::non_wgsl_default()`] for `spv`, `glsl`, and `cuda` snapshots,
     /// and [`Targets::wgsl_default()`] for `wgsl` snapshots.
     pub targets: Option<Targets>,
 
@@ -459,6 +482,7 @@ impl Input {
             {
                 "wgsl" => params.targets = Some(Targets::wgsl_default()),
                 "spvasm" => params.targets = Some(Targets::non_wgsl_default()),
+                "cu" => params.targets = Some(Targets::non_wgsl_default()),
                 "vert" | "frag" | "comp" => params.targets = Some(Targets::non_wgsl_default()),
                 e => {
                     panic!("Unknown extension: {e}");
@@ -483,5 +507,40 @@ impl Input {
         if let Err(err) = fs::write(&output_path, data) {
             panic!("Error writing {}: {}", output_path.display(), err);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Input, Parameters, Targets};
+
+    #[test]
+    fn cuda_input_defaults_to_wgsl_snapshots() {
+        let input = Input::new("cuda", "default-options", "cu");
+        let params = input.read_parameters(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/in"));
+        assert_eq!(params.targets, Some(Targets::WGSL));
+        assert_eq!(
+            naga::front::cuda::Options::from(&params.cuda_in).workgroup_size,
+            [1; 3]
+        );
+    }
+
+    #[test]
+    fn cuda_snapshot_parameters_accept_launch_dimensions() {
+        let params: Parameters =
+            toml::from_str("[cuda-in]\nworkgroup_size = [64, 2, 1]\n").unwrap();
+        assert_eq!(
+            naga::front::cuda::Options::from(&params.cuda_in).workgroup_size,
+            [64, 2, 1]
+        );
+    }
+
+    #[test]
+    fn cuda_snapshot_parameters_default_missing_launch_dimensions() {
+        let params: Parameters = toml::from_str("[cuda-in]\n").unwrap();
+        assert_eq!(
+            naga::front::cuda::Options::from(&params.cuda_in).workgroup_size,
+            [1; 3]
+        );
     }
 }

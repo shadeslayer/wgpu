@@ -1,0 +1,80 @@
+; SPIR-V
+; Version: 1.1
+; Generator: rspirv
+; Bound: 50
+OpCapability Shader
+OpExtension "SPV_KHR_storage_buffer_storage_class"
+%1 = OpExtInstImport "GLSL.std.450"
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %22 "add" %17 %20
+OpExecutionMode %22 LocalSize 64 1 1
+OpDecorate %4 ArrayStride 4
+OpDecorate %7 NonWritable
+OpDecorate %7 DescriptorSet 0
+OpDecorate %7 Binding 0
+OpDecorate %8 Block
+OpMemberDecorate %8 0 Offset 0
+OpDecorate %10 NonWritable
+OpDecorate %10 DescriptorSet 0
+OpDecorate %10 Binding 1
+OpDecorate %11 Block
+OpMemberDecorate %11 0 Offset 0
+OpDecorate %13 DescriptorSet 0
+OpDecorate %13 Binding 2
+OpDecorate %14 Block
+OpMemberDecorate %14 0 Offset 0
+OpDecorate %17 BuiltIn WorkgroupId
+OpDecorate %20 BuiltIn LocalInvocationId
+%2 = OpTypeVoid
+%3 = OpTypeFloat 32
+%4 = OpTypeRuntimeArray %3
+%6 = OpTypeInt 32 0
+%5 = OpTypeVector %6 3
+%8 = OpTypeStruct %4
+%9 = OpTypePointer StorageBuffer %8
+%7 = OpVariable  %9  StorageBuffer
+%11 = OpTypeStruct %4
+%12 = OpTypePointer StorageBuffer %11
+%10 = OpVariable  %12  StorageBuffer
+%14 = OpTypeStruct %4
+%15 = OpTypePointer StorageBuffer %14
+%13 = OpVariable  %15  StorageBuffer
+%18 = OpTypePointer Input %5
+%17 = OpVariable  %18  Input
+%20 = OpVariable  %18  Input
+%23 = OpTypeFunction %2
+%24 = OpTypePointer StorageBuffer %4
+%25 = OpConstant  %6  0
+%29 = OpConstant  %6  64
+%30 = OpConstant  %3  2
+%32 = OpTypePointer Function %6
+%33 = OpConstantNull  %6
+%40 = OpTypePointer StorageBuffer %3
+%22 = OpFunction  %2  None %23
+%16 = OpLabel
+%31 = OpVariable  %32  Function %33
+%19 = OpLoad  %5  %17
+%21 = OpLoad  %5  %20
+%26 = OpAccessChain  %24  %7 %25
+%27 = OpAccessChain  %24  %10 %25
+%28 = OpAccessChain  %24  %13 %25
+OpBranch %34
+%34 = OpLabel
+%35 = OpCompositeExtract  %6  %19 0
+%36 = OpIMul  %6  %35 %29
+%37 = OpCompositeExtract  %6  %21 0
+%38 = OpIAdd  %6  %36 %37
+OpStore %31 %38
+%39 = OpLoad  %6  %31
+%41 = OpLoad  %6  %31
+%42 = OpAccessChain  %40  %27 %41
+%43 = OpLoad  %3  %42
+%44 = OpFMul  %3  %43 %30
+%45 = OpAccessChain  %40  %26 %39
+%46 = OpLoad  %3  %45
+%47 = OpFAdd  %3  %46 %44
+%48 = OpLoad  %6  %31
+%49 = OpAccessChain  %40  %28 %48
+OpStore %49 %47
+OpReturn
+OpFunctionEnd

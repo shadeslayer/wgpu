@@ -567,6 +567,20 @@ fn convert_snapshots_wgsl() {
     }
 }
 
+#[cfg(feature = "cuda-in")]
+#[cfg_attr(miri, ignore)]
+#[test]
+fn convert_snapshots_cuda() {
+    let _ = env_logger::try_init();
+
+    for input in Input::files_in_dir("cuda", &["cu"], DIR_IN) {
+        let source = input.read_source(DIR_IN, true);
+        let params = input.read_parameters(DIR_IN);
+        let mut module = naga::front::cuda::parse_str(&source, &(&params.cuda_in).into()).unwrap();
+        check_targets(&input, &mut module, Some(&source));
+    }
+}
+
 // miri doesn't allow us to shell out to `spirv-as`
 #[cfg_attr(miri, ignore)]
 #[test]

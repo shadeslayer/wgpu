@@ -115,7 +115,7 @@ directory can be parsed by `naga`'s `wgsl` parser and validate correctly.
 - Data driven snapshot tests for `naga`'s input/output.
 
 These tests are snapshot tests for `naga`s parsers and code generators.
-There are inputs in `wgsl`, `spirv`, and `glsl`. There are outputs for
+There are inputs in `wgsl`, `spirv`, `glsl`, and `cuda`. There are outputs for
 `hlsl`, `spirv`, `wgsl`, `msl`, `glsl`, and naga's internal IR. The tests
 can be configured by a sidecar toml file of the same name as the input file.
 
@@ -124,7 +124,10 @@ This is the goto tool for testing all kinds of codegen and parsing features.
 To avoid clutter we generally use the following pattern:
 
 - `wgsl` tests generate output to all backends.
-- `spirv`, `glsl` tests generate `wgsl` output
+- `spirv`, `glsl`, and `cuda` tests generate `wgsl` output by default.
+
+CUDA inputs use the `.cu` extension. Set launch dimensions in the sidecar's
+`[cuda-in]` table with `workgroup_size = [64, 1, 1]`; the default is `[1, 1, 1]`.
 
 This "butterfly" pattern ensures we don't need to test the
 full matrix of possibilities to get full coverage.
