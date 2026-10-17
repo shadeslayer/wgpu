@@ -74,9 +74,14 @@ struct Args {
     #[argh(option)]
     shader_stage: Option<ShaderStage>,
 
-    /// the kind of input, e.g. 'glsl', 'wgsl', 'spv', or 'bin'.
+    /// the kind of input, e.g. 'cuda', 'glsl', 'wgsl', 'spv', or 'bin'.
     #[argh(option)]
     input_kind: Option<InputKind>,
+
+    /// CUDA launch block dimensions as three comma-separated nonzero integers.
+    /// Defaults to 1,1,1.
+    #[argh(option)]
+    cuda_workgroup_size: Option<CudaWorkgroupSizeArg>,
 
     /// the metal version to use, for example, 1.0, 1.1, 1.2, etc.
     #[argh(option)]
@@ -267,6 +272,7 @@ impl FromStr for ShaderStage {
 #[derive(Debug, Clone, Copy)]
 enum InputKind {
     Bincode,
+    Cuda,
     Glsl,
     SpirV,
     Wgsl,
@@ -277,11 +283,37 @@ impl FromStr for InputKind {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(match s.to_lowercase().as_str() {
             "bin" => InputKind::Bincode,
+            "cu" | "cuda" => InputKind::Cuda,
             "glsl" => InputKind::Glsl,
             "spv" => InputKind::SpirV,
             "wgsl" => InputKind::Wgsl,
             _ => return Err(anyhow!("Invalid value for --input-kind: {s}")),
         })
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CudaWorkgroupSizeArg([u32; 3]);
+
+impl FromStr for CudaWorkgroupSizeArg {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let invalid =
+            || format!("CUDA workgroup size requires exactly three nonzero u32 dimensions: {s}");
+        let mut values = s.split(',');
+        let mut dimensions = [0; 3];
+        for dimension in &mut dimensions {
+            *dimension = values
+                .next()
+                .and_then(|value| value.parse::<u32>().ok())
+                .filter(|&value| value != 0)
+                .ok_or_else(invalid)?;
+        }
+        if values.next().is_some() {
+            return Err(invalid());
+        }
+        Ok(Self(dimensions))
     }
 }
 
@@ -408,6 +440,7 @@ struct Parameters<'a> {
     entry_point: Option<String>,
     keep_coordinate_space: bool,
     overrides: naga::back::PipelineConstants,
+    cuda_in: naga::front::cuda::Options,
     spv_in: naga::front::spv::Options,
     spv_out: naga::back::spv::Options<'a>,
     dot: naga::back::dot::Options,
@@ -542,6 +575,9 @@ fn run() -> anyhow::Result<()> {
         strict_capabilities: false,
         block_ctx_dump_prefix: args.block_ctx_dir.clone(),
     };
+    if let Some(dimensions) = args.cuda_workgroup_size {
+        params.cuda_in.workgroup_size = dimensions.0;
+    }
 
     params.entry_point.clone_from(&args.entry_point);
     if let Some(ref version) = args.profile {
@@ -751,6 +787,25 @@ fn parse_input(input_path: &Path, input: Vec<u8>, params: &Parameters) -> anyhow
             input_text: None,
             language: naga::back::spv::SourceLanguage::Unknown,
         },
+        InputKind::Cuda => {
+            let input = String::from_utf8(input)?;
+            let module =
+                naga::front::cuda::parse_str(&input, &params.cuda_in).map_err(|error| {
+                    let location = error.span.location(&input);
+                    anyhow!(
+                        "Could not parse CUDA at {}:{}:{}: {}",
+                        input_path.display(),
+                        location.line_number,
+                        location.line_position,
+                        error.message
+                    )
+                })?;
+            Parsed {
+                module,
+                input_text: Some(input),
+                language: naga::back::spv::SourceLanguage::Unknown,
+            }
+        }
         InputKind::SpirV => Parsed {
             module: naga::front::spv::parse_u8_slice(&input, &params.spv_in)?,
             input_text: None,

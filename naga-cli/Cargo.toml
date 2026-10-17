@@ -19,6 +19,7 @@ test = false
 
 [dependencies]
 naga = { workspace = true, features = [
+    "cuda-in",
     "wgsl-in",
     "wgsl-out",
     "glsl-in",
