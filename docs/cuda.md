@@ -28,12 +28,17 @@ Device and backend resource limits still apply.
 ## Kernel interface
 
 Each source contains one `__global__ void` kernel, optionally preceded by
-`extern "C"`. Parameters are flat pointers to `float`, `int`, or `unsigned int`
-(`unsigned` is also accepted). Parameter number `i` becomes a storage buffer at
-group 0, binding `i`, with a runtime array of the corresponding 32-bit scalar.
-A `const` pointee produces a read-only buffer; other buffers permit reads and
-writes. The caller supplies these buffers and dispatches the resulting compute
-entry point by its original kernel name.
+`extern "C"`. Parameter types are `float`, `int`, or `unsigned int` (`unsigned`
+is also accepted), either by value or as flat pointers. Parameter number `i`
+uses group 0, binding `i`, preserving source order across both parameter kinds.
+The caller supplies these buffers and dispatches the resulting compute entry
+point by its original kernel name.
+
+Pointer parameters become storage buffers with runtime arrays of the corresponding
+32-bit scalar. A `const` pointee produces a read-only buffer; other buffers permit
+reads and writes. Scalar parameters use 16-byte uniform buffers containing the
+32-bit value at byte offset 0. Each invocation copies the value into a local
+variable; assigning to a non-`const` parameter changes only that invocation's copy.
 
 The frontend maps CUDA's built-in variables as follows:
 
@@ -79,16 +84,16 @@ them `unsigned int`. Floating literals require the `f`/`F` suffix, such as
 and assignments produce errors. Use matching types in this initial subset.
 
 Unsupported syntax produces a parse error with a source span. This includes
-preprocessor directives and includes, host code and launch syntax, scalar
-parameters, general pointer operations, device functions and calls, control
+preprocessor directives and includes, host code and launch syntax,
+general pointer operations, device functions and calls, control
 flow, shared memory, atomics, synchronization, templates, double precision,
 and inline PTX. No CUDA runtime ABI or NVIDIA device code is generated.
 
 ## Further increments
 
 Add each capability with a failing acceptance test and rejection tests before
-changing the parser or lowering. Useful next increments are scalar launch
-parameters and guarded indexing, then structured control flow, explicit casts,
+changing the parser or lowering. Useful next increments are guarded indexing
+and structured control flow, explicit casts,
 device functions, shared storage and barriers. Each increment must preserve
 validation and backend compatibility; CUDA-specific features need an explicit
 portable representation or an unsupported-feature diagnostic.

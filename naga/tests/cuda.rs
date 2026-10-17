@@ -96,7 +96,7 @@ fn cuda_rejects_unsupported_or_invalid_source() {
         "",
         "__device__ void helper() {}",
         "__global__ int value() { return 1; }",
-        "__global__ void scalar(int value) {}",
+        "__global__ void scalar(double value) {}",
         "__global__ void bad(float **out) {}",
         "__global__ void bad(double *out) {}",
         "#include <cuda_runtime.h>\n__global__ void empty() {}",

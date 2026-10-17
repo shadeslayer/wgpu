@@ -3,8 +3,8 @@ use alloc::{format, string::String, vec::Vec};
 use crate::{
     AddressSpace, ArraySize, BinaryOperator, Binding, BuiltIn, EntryPoint, Expression, FastHashMap,
     Function, FunctionArgument, GlobalVariable, Handle, Literal, LocalVariable, Module,
-    ResourceBinding, Scalar, ScalarKind, ShaderStage, Span, Statement, StorageAccess, Type,
-    TypeInner, UnaryOperator, VectorSize,
+    ResourceBinding, Scalar, ScalarKind, ShaderStage, Span, Statement, StorageAccess, StructMember,
+    Type, TypeInner, UnaryOperator, VectorSize,
 };
 
 use super::{
@@ -118,9 +118,12 @@ impl<'a> Parser<'a> {
         let is_const = self.take_ident("const");
         let scalar = self.scalar_type()?;
         let is_const = self.const_suffix(is_const)?;
-        self.expect_symbol('*')?;
+        let is_pointer = self.take_symbol('*');
         let (name, span) = self.identifier()?;
         self.check_name(name, span)?;
+        if !is_pointer {
+            return self.scalar_parameter(name, span, scalar, is_const);
+        }
         let base = self.scalar_handle(scalar, span);
         let ty = self.module.types.insert(
             Type {
@@ -154,6 +157,67 @@ impl<'a> Parser<'a> {
         self.symbols.insert(
             name,
             Symbol::Buffer {
+                pointer,
+                scalar,
+                writable: !is_const,
+            },
+        );
+        Ok(())
+    }
+
+    fn scalar_parameter(
+        &mut self,
+        name: &'a str,
+        span: Span,
+        scalar: Scalar,
+        is_const: bool,
+    ) -> Result<(), ParseError> {
+        let scalar_ty = self.scalar_handle(scalar, span);
+        let ty = self.module.types.insert(
+            Type {
+                name: None,
+                inner: TypeInner::Struct {
+                    members: alloc::vec![StructMember {
+                        name: Some(String::from("value")),
+                        ty: scalar_ty,
+                        binding: None,
+                        offset: 0,
+                    }],
+                    span: 16,
+                },
+            },
+            span,
+        );
+        let binding = self.module.global_variables.len() as u32;
+        let global = self.module.global_variables.append(
+            GlobalVariable {
+                name: Some(String::from(name)),
+                space: AddressSpace::Uniform,
+                binding: Some(ResourceBinding { group: 0, binding }),
+                ty,
+                init: None,
+                memory_decorations: Default::default(),
+            },
+            span,
+        );
+        let base = self.append(Expression::GlobalVariable(global), span)?;
+        let field = self.append(Expression::AccessIndex { base, index: 0 }, span)?;
+        let value = self.append(Expression::Load { pointer: field }, span)?;
+        let local = self.function.local_variables.append(
+            LocalVariable {
+                name: Some(String::from(name)),
+                ty: scalar_ty,
+                init: None,
+            },
+            span,
+        );
+        let pointer = self.append(Expression::LocalVariable(local), span)?;
+        self.function
+            .body
+            .push(Statement::Store { pointer, value }, span);
+        self.symbols.insert(
+            name,
+            Symbol::Local {
                 pointer,
                 scalar,
                 writable: !is_const,
