@@ -6,9 +6,11 @@ and Metal backends. It does not require an NVIDIA driver or CUDA toolkit.
 The initial implementation accepts the source subset described below.
 
 ```cuda
-extern "C" __global__ void add(const float *a, const float *b, float *out) {
+extern "C" __global__ void add(const float *a, const float *b, float *out, unsigned int n) {
     unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
-    out[i] = a[i] + b[i] * 2.0f;
+    if (i < n) {
+        out[i] = a[i] + b[i] * 2.0f;
+    }
 }
 ```
 
@@ -73,8 +75,15 @@ as 32-bit values at byte offsets 0, 4, and 8. The library equivalent is
 ## Source subset
 
 Supported expressions include indexed buffer reads, initialized scalar locals,
-parentheses, and same-type binary `+`, `-`, `*`, and `/`. Statements include local
-declarations, assignments, indexed buffer stores, and a final `return;`.
+parentheses, same-type arithmetic and comparisons, and the logical operators
+`!`, `&&`, and `||`. Logical operators preserve short-circuit evaluation. Numeric
+conditions are false when equal to zero; boolean locals and `true`/`false`
+literals are supported.
+
+Statements include local declarations, assignments, indexed buffer stores,
+scoped blocks, `if`/`else`, and `return;`. Nested blocks support local shadowing.
+Statements after a guaranteed return are still checked for source errors and
+then omitted from the generated body.
 Line and block comments are accepted. Expression nesting and generated expression
 depth are bounded; line continuations and trigraphs are unsupported.
 
@@ -85,15 +94,15 @@ and assignments produce errors. Use matching types in this initial subset.
 
 Unsupported syntax produces a parse error with a source span. This includes
 preprocessor directives and includes, host code and launch syntax,
-general pointer operations, device functions and calls, control
-flow, shared memory, atomics, synchronization, templates, double precision,
+general pointer operations, device functions and calls, loops and switches,
+shared memory, atomics, synchronization, templates, double precision,
 and inline PTX. No CUDA runtime ABI or NVIDIA device code is generated.
 
 ## Further increments
 
 Add each capability with a failing acceptance test and rejection tests before
-changing the parser or lowering. Useful next increments are guarded indexing
-and structured control flow, explicit casts,
+changing the parser or lowering. Useful next increments are numeric conversions,
+explicit casts, loops,
 device functions, shared storage and barriers. Each increment must preserve
 validation and backend compatibility; CUDA-specific features need an explicit
 portable representation or an unsupported-feature diagnostic.

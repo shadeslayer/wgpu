@@ -1,5 +1,8 @@
 use alloc::{format, string::String, vec::Vec};
 
+mod expressions;
+mod statements;
+
 use crate::{
     AddressSpace, ArraySize, BinaryOperator, Binding, BuiltIn, EntryPoint, Expression, FastHashMap,
     Function, FunctionArgument, GlobalVariable, Handle, Literal, LocalVariable, Module,
@@ -38,7 +41,8 @@ pub(super) struct Parser<'a> {
     position: usize,
     module: Module,
     function: Function,
-    symbols: FastHashMap<&'a str, Symbol>,
+    scopes: Vec<FastHashMap<&'a str, Symbol>>,
+    statement_depth: u32,
     builtin_arguments: [Option<Handle<Expression>>; 3],
     workgroup_size: [u32; 3],
     expression_depth: u32,
@@ -52,7 +56,8 @@ impl<'a> Parser<'a> {
             position: 0,
             module: Module::default(),
             function: Function::default(),
-            symbols: FastHashMap::default(),
+            scopes: alloc::vec![FastHashMap::default()],
+            statement_depth: 0,
             builtin_arguments: [None; 3],
             workgroup_size: options.workgroup_size,
             expression_depth: 0,
@@ -86,17 +91,7 @@ impl<'a> Parser<'a> {
             }
         }
         self.expect_symbol('{')?;
-        while !self.take_symbol('}') {
-            if self.take_ident("return") {
-                let span = self.expect_symbol(';')?;
-                self.function
-                    .body
-                    .push(Statement::Return { value: None }, span);
-                self.expect_symbol('}')?;
-                break;
-            }
-            self.statement()?;
-        }
+        self.block_contents()?;
         if self.current().kind != TokenKind::End {
             return Err(self.error("only one CUDA kernel is supported"));
         }
@@ -118,6 +113,9 @@ impl<'a> Parser<'a> {
         let is_const = self.take_ident("const");
         let scalar = self.scalar_type()?;
         let is_const = self.const_suffix(is_const)?;
+        if scalar == Scalar::BOOL {
+            return Err(self.error("boolean kernel parameters are unsupported"));
+        }
         let is_pointer = self.take_symbol('*');
         let (name, span) = self.identifier()?;
         self.check_name(name, span)?;
@@ -154,7 +152,7 @@ impl<'a> Parser<'a> {
             span,
         );
         let pointer = self.append(Expression::GlobalVariable(global), span)?;
-        self.symbols.insert(
+        self.insert_symbol(
             name,
             Symbol::Buffer {
                 pointer,
@@ -215,7 +213,7 @@ impl<'a> Parser<'a> {
         self.function
             .body
             .push(Statement::Store { pointer, value }, span);
-        self.symbols.insert(
+        self.insert_symbol(
             name,
             Symbol::Local {
                 pointer,
@@ -224,218 +222,6 @@ impl<'a> Parser<'a> {
             },
         );
         Ok(())
-    }
-
-    fn statement(&mut self) -> Result<(), ParseError> {
-        if self.take_symbol(';') {
-            return Ok(());
-        }
-        if matches!(
-            self.current().kind,
-            TokenKind::Ident("const" | "float" | "int" | "unsigned")
-        ) {
-            return self.local_declaration();
-        }
-        let (name, span) = self.identifier()?;
-        let symbol = self.symbols.get(name).copied().ok_or_else(|| ParseError {
-            message: format!("unknown variable `{name}`"),
-            span,
-        })?;
-        let (pointer, scalar, writable) = match symbol {
-            Symbol::Buffer {
-                pointer,
-                scalar,
-                writable,
-            } => {
-                let pointer = self.buffer_element(pointer, span)?;
-                (pointer, scalar, writable)
-            }
-            Symbol::Local {
-                pointer,
-                scalar,
-                writable,
-            } => (pointer, scalar, writable),
-        };
-        if !writable {
-            return Err(ParseError {
-                message: format!("cannot write to const variable `{name}`"),
-                span,
-            });
-        }
-        self.expect_symbol('=')?;
-        let value = self.expression(0)?;
-        if value.scalar != scalar {
-            return Err(ParseError {
-                message: String::from("assignment requires matching scalar types"),
-                span: value.span,
-            });
-        }
-        let end = self.expect_symbol(';')?;
-        self.function.body.push(
-            Statement::Store {
-                pointer,
-                value: value.handle,
-            },
-            span.until(&end),
-        );
-        Ok(())
-    }
-
-    fn local_declaration(&mut self) -> Result<(), ParseError> {
-        let is_const = self.take_ident("const");
-        let scalar = self.scalar_type()?;
-        let is_const = self.const_suffix(is_const)?;
-        let (name, span) = self.identifier()?;
-        self.check_name(name, span)?;
-        self.expect_symbol('=')?;
-        let value = self.expression(0)?;
-        if value.scalar != scalar {
-            return Err(ParseError {
-                message: String::from("initializer requires a matching scalar type"),
-                span: value.span,
-            });
-        }
-        let end = self.expect_symbol(';')?;
-        let ty = self.scalar_handle(scalar, span);
-        let local = self.function.local_variables.append(
-            LocalVariable {
-                name: Some(String::from(name)),
-                ty,
-                init: None,
-            },
-            span,
-        );
-        let pointer = self.append(Expression::LocalVariable(local), span)?;
-        self.function.body.push(
-            Statement::Store {
-                pointer,
-                value: value.handle,
-            },
-            span.until(&end),
-        );
-        self.symbols.insert(
-            name,
-            Symbol::Local {
-                pointer,
-                scalar,
-                writable: !is_const,
-            },
-        );
-        Ok(())
-    }
-
-    fn expression(&mut self, minimum_precedence: u8) -> Result<Value, ParseError> {
-        self.expression_depth += 1;
-        if self.expression_depth > 64 {
-            return Err(self.error("CUDA expression nesting limit exceeded"));
-        }
-        let result = self.expression_inner(minimum_precedence);
-        self.expression_depth -= 1;
-        result
-    }
-
-    fn expression_inner(&mut self, minimum_precedence: u8) -> Result<Value, ParseError> {
-        let mut left = self.primary()?;
-        loop {
-            let (operator, precedence) = match self.current().kind {
-                TokenKind::Symbol('+') => (BinaryOperator::Add, 1),
-                TokenKind::Symbol('-') => (BinaryOperator::Subtract, 1),
-                TokenKind::Symbol('*') => (BinaryOperator::Multiply, 2),
-                TokenKind::Symbol('/') => (BinaryOperator::Divide, 2),
-                _ => break,
-            };
-            if precedence < minimum_precedence {
-                break;
-            }
-            self.advance();
-            let right = self.expression(precedence + 1)?;
-            if left.scalar != right.scalar {
-                return Err(ParseError {
-                    message: String::from("arithmetic requires matching scalar types"),
-                    span: left.span.until(&right.span),
-                });
-            }
-            let span = left.span.until(&right.span);
-            let handle = self.append(
-                Expression::Binary {
-                    op: operator,
-                    left: left.handle,
-                    right: right.handle,
-                },
-                span,
-            )?;
-            left = Value {
-                handle,
-                scalar: left.scalar,
-                span,
-            };
-        }
-        Ok(left)
-    }
-
-    fn primary(&mut self) -> Result<Value, ParseError> {
-        let token = self.current();
-        if self.take_symbol('(') {
-            let value = self.expression(0)?;
-            self.expect_symbol(')')?;
-            return Ok(value);
-        }
-        if self.take_symbol('-') || self.take_symbol('+') {
-            let value = self.expression(3)?;
-            if token.kind == TokenKind::Symbol('+') {
-                return Ok(value);
-            }
-            if value.scalar.kind == ScalarKind::Uint {
-                return Err(ParseError {
-                    message: String::from("unsigned negation is unsupported"),
-                    span: token.span.until(&value.span),
-                });
-            }
-            let span = token.span.until(&value.span);
-            let handle = self.append(
-                Expression::Unary {
-                    op: UnaryOperator::Negate,
-                    expr: value.handle,
-                },
-                span,
-            )?;
-            return Ok(Value {
-                handle,
-                scalar: value.scalar,
-                span,
-            });
-        }
-        match token.kind {
-            TokenKind::Number(text) => {
-                self.advance();
-                self.number(text, token.span)
-            }
-            TokenKind::Ident(name) => {
-                self.advance();
-                if matches!(name, "threadIdx" | "blockIdx" | "blockDim" | "gridDim") {
-                    return self.builtin(name, token.span);
-                }
-                let symbol = self.symbols.get(name).copied().ok_or_else(|| ParseError {
-                    message: format!("unknown variable `{name}`"),
-                    span: token.span,
-                })?;
-                let (pointer, scalar) = match symbol {
-                    Symbol::Buffer {
-                        pointer, scalar, ..
-                    } => (self.buffer_element(pointer, token.span)?, scalar),
-                    Symbol::Local {
-                        pointer, scalar, ..
-                    } => (pointer, scalar),
-                };
-                let handle = self.append(Expression::Load { pointer }, token.span)?;
-                Ok(Value {
-                    handle,
-                    scalar,
-                    span: token.span,
-                })
-            }
-            _ => Err(self.error("expected a supported scalar expression")),
-        }
     }
 
     fn buffer_element(
@@ -565,7 +351,9 @@ impl<'a> Parser<'a> {
     }
 
     fn scalar_type(&mut self) -> Result<Scalar, ParseError> {
-        if self.take_ident("float") {
+        if self.take_ident("bool") {
+            Ok(Scalar::BOOL)
+        } else if self.take_ident("float") {
             Ok(Scalar::F32)
         } else if self.take_ident("int") {
             Ok(Scalar::I32)
@@ -641,7 +429,10 @@ impl<'a> Parser<'a> {
     }
 
     fn check_name(&self, name: &str, span: Span) -> Result<(), ParseError> {
-        if self.symbols.contains_key(name)
+        if self
+            .scopes
+            .last()
+            .is_some_and(|scope| scope.contains_key(name))
             || matches!(
                 name,
                 "threadIdx"
@@ -760,6 +551,17 @@ impl<'a> Parser<'a> {
         } else {
             Ok(())
         }
+    }
+
+    fn insert_symbol(&mut self, name: &'a str, symbol: Symbol) {
+        self.scopes.last_mut().unwrap().insert(name, symbol);
+    }
+
+    fn lookup_symbol(&self, name: &str) -> Option<Symbol> {
+        self.scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(name).copied())
     }
 
     fn current(&self) -> Token<'a> {
