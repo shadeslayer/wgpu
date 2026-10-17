@@ -20,6 +20,7 @@ all-features = true
 
 [features]
 default = []
+cuda-in = []
 dot-out = []
 glsl-in = ["dep:pp-rs"]
 glsl-out = []

@@ -8,6 +8,8 @@ mod type_gen;
 
 #[cfg(feature = "spv-in")]
 pub mod atomic_upgrade;
+#[cfg(feature = "cuda-in")]
+pub mod cuda;
 #[cfg(feature = "glsl-in")]
 pub mod glsl;
 #[cfg(feature = "spv-in")]
