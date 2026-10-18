@@ -4,9 +4,10 @@
 //! shader is run on the input buffer which generates an output buffer. This
 //! buffer is then read and compared to a given output.
 
-use std::{borrow::Cow, fmt::Debug};
+use std::{borrow::Cow, collections::HashSet, fmt::Debug};
 
 use wgpu::{
+    util::{BufferInitDescriptor, DeviceExt},
     Backends, BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor, BindGroupLayoutEntry,
     BindingType, BufferDescriptor, BufferUsages, CommandEncoderDescriptor, ComputePassDescriptor,
     ComputePipelineDescriptor, MapMode, PipelineLayoutDescriptor, PollType, ShaderModuleDescriptor,
@@ -56,11 +57,34 @@ impl InputStorageType {
     }
 }
 
+struct ShaderBuffer {
+    binding: u32,
+    ty: wgpu::BufferBindingType,
+    contents: Vec<u8>,
+}
+
+impl ShaderBuffer {
+    fn new<T: bytemuck::Pod>(binding: u32, ty: wgpu::BufferBindingType, initial: &[T]) -> Self {
+        Self {
+            binding,
+            ty,
+            contents: bytemuck::cast_slice(initial).to_vec(),
+        }
+    }
+}
+
+struct ModuleBuffers {
+    buffers: Vec<ShaderBuffer>,
+    output_binding: u32,
+    workgroups: [u32; 3],
+}
+
 /// Describes a single test of a shader.
 struct ShaderTest {
     /// Human readable name
     name: String,
     module_source: Option<String>,
+    module_buffers: Option<ModuleBuffers>,
     entry_point: String,
     /// Header text. This is arbitrary code injected at the top of the shader. Replaces {{header}}
     header: String,
@@ -158,6 +182,7 @@ impl ShaderTest {
         Self {
             name,
             module_source: None,
+            module_buffers: None,
             entry_point: String::from("cs_main"),
             header: String::new(),
             custom_struct_members,
@@ -180,6 +205,21 @@ impl ShaderTest {
         self
     }
 
+    fn module_buffers(
+        mut self,
+        buffers: Vec<ShaderBuffer>,
+        output_binding: u32,
+        workgroups: [u32; 3],
+    ) -> Self {
+        self.module_buffers = Some(ModuleBuffers {
+            buffers,
+            output_binding,
+            workgroups,
+        });
+
+        self
+    }
+
     fn output_initial_values<O: bytemuck::Pod>(mut self, values: &[O]) -> Self {
         self.output_initial_values = bytemuck::pod_collect_to_vec(values);
 
@@ -187,6 +227,34 @@ impl ShaderTest {
     }
 
     fn buffer_sizes_valid(&self) -> bool {
+        if let Some(module) = &self.module_buffers {
+            if self.module_source.is_none()
+                || !self.output_initial_values.is_empty()
+                || module.workgroups.contains(&0)
+            {
+                return false;
+            }
+            let mut bindings = HashSet::new();
+            if !module.buffers.iter().all(|buffer| {
+                !buffer.contents.is_empty()
+                    && buffer.contents.len().is_multiple_of(4)
+                    && bindings.insert(buffer.binding)
+            }) {
+                return false;
+            }
+            let Some(output) = module
+                .buffers
+                .iter()
+                .find(|buffer| buffer.binding == module.output_binding)
+            else {
+                return false;
+            };
+            return output.ty == wgpu::BufferBindingType::Storage { read_only: false }
+                && self
+                    .output_values
+                    .iter()
+                    .all(|values| values.len() <= output.contents.len() / 4);
+        }
         let max_words = MAX_BUFFER_SIZE as usize / 4;
         self.input_values.len() <= max_words
             && self
@@ -239,40 +307,9 @@ async fn shader_input_output_test(
 ) {
     let source = String::from(include_str!("shader_test.wgsl"));
 
-    let bgl = ctx
-        .device
-        .create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: None,
-            entries: &[
-                BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Buffer {
-                        // We don't use this buffer for immediates, but for simplicity
-                        // we just use the storage buffer binding.
-                        ty: match storage_type {
-                            InputStorageType::Uniform => wgpu::BufferBindingType::Uniform,
-                            InputStorageType::Storage | InputStorageType::Immediate => {
-                                wgpu::BufferBindingType::Storage { read_only: true }
-                            }
-                        },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-        });
+    for test in &tests {
+        assert!(test.buffer_sizes_valid(), "invalid buffers: {}", test.name);
+    }
 
     let input_buffer = ctx.device.create_buffer(&BufferDescriptor {
         label: Some("input buffer"),
@@ -288,43 +325,9 @@ async fn shader_input_output_test(
         mapped_at_creation: false,
     });
 
-    let mapping_buffer = ctx.device.create_buffer(&BufferDescriptor {
-        label: Some("mapping buffer"),
-        size: MAX_BUFFER_SIZE,
-        usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-
-    let bg = ctx.device.create_bind_group(&BindGroupDescriptor {
-        label: None,
-        layout: &bgl,
-        entries: &[
-            BindGroupEntry {
-                binding: 0,
-                resource: input_buffer.as_entire_binding(),
-            },
-            BindGroupEntry {
-                binding: 1,
-                resource: output_buffer.as_entire_binding(),
-            },
-        ],
-    });
-
-    let pll = ctx
-        .device
-        .create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: None,
-            bind_group_layouts: &[Some(&bgl)],
-            immediate_size: match storage_type {
-                InputStorageType::Immediate => MAX_BUFFER_SIZE as u32,
-                _ => 0,
-            },
-        });
-
     let mut fail = false;
     for test in tests {
-        assert!(test.buffer_sizes_valid(), "buffer too large: {}", test.name);
-
+        let explicit_buffers = test.module_buffers.is_some();
         let test_name = test.name;
 
         // -- Building shader + pipeline --
@@ -350,6 +353,102 @@ async fn shader_input_output_test(
             }
         };
 
+        let (buffers, output_index, workgroups) = if let Some(module) = test.module_buffers {
+            let output_index = module
+                .buffers
+                .iter()
+                .position(|buffer| buffer.binding == module.output_binding)
+                .unwrap();
+            let buffers: Vec<_> = module
+                .buffers
+                .into_iter()
+                .map(|buffer| {
+                    let mut usage = BufferUsages::COPY_DST
+                        | match buffer.ty {
+                            wgpu::BufferBindingType::Uniform => BufferUsages::UNIFORM,
+                            wgpu::BufferBindingType::Storage { .. } => BufferUsages::STORAGE,
+                        };
+                    if buffer.binding == module.output_binding {
+                        usage |= BufferUsages::COPY_SRC;
+                    }
+                    let resource = ctx.device.create_buffer_init(&BufferInitDescriptor {
+                        label: Some(&test_name),
+                        contents: &buffer.contents,
+                        usage,
+                    });
+                    (buffer.binding, buffer.ty, resource)
+                })
+                .collect();
+            (buffers, output_index, module.workgroups)
+        } else {
+            let input_ty = match storage_type {
+                InputStorageType::Uniform => wgpu::BufferBindingType::Uniform,
+                InputStorageType::Storage | InputStorageType::Immediate => {
+                    wgpu::BufferBindingType::Storage { read_only: true }
+                }
+            };
+            (
+                vec![
+                    (0, input_ty, input_buffer.clone()),
+                    (
+                        1,
+                        wgpu::BufferBindingType::Storage { read_only: false },
+                        output_buffer.clone(),
+                    ),
+                ],
+                1,
+                [1; 3],
+            )
+        };
+        let output = &buffers[output_index].2;
+        let layout_entries: Vec<_> = buffers
+            .iter()
+            .map(|&(binding, ty, _)| BindGroupLayoutEntry {
+                binding,
+                visibility: ShaderStages::COMPUTE,
+                ty: BindingType::Buffer {
+                    ty,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            })
+            .collect();
+        let bgl = ctx
+            .device
+            .create_bind_group_layout(&BindGroupLayoutDescriptor {
+                label: None,
+                entries: &layout_entries,
+            });
+        let entries: Vec<_> = buffers
+            .iter()
+            .map(|(binding, _, buffer)| BindGroupEntry {
+                binding: *binding,
+                resource: buffer.as_entire_binding(),
+            })
+            .collect();
+        let bg = ctx.device.create_bind_group(&BindGroupDescriptor {
+            label: None,
+            layout: &bgl,
+            entries: &entries,
+        });
+        let pll = ctx
+            .device
+            .create_pipeline_layout(&PipelineLayoutDescriptor {
+                label: None,
+                bind_group_layouts: &[Some(&bgl)],
+                immediate_size: match storage_type {
+                    InputStorageType::Immediate => MAX_BUFFER_SIZE as u32,
+                    _ => 0,
+                },
+            });
+        let mapping_buffer = ctx.device.create_buffer(&BufferDescriptor {
+            label: Some("mapping buffer"),
+            size: output.size(),
+            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
         let sm = ctx.device.create_shader_module(ShaderModuleDescriptor {
             label: Some(&format!("shader {test_name}")),
             source: ShaderSource::Wgsl(Cow::Borrowed(&processed)),
@@ -368,23 +467,28 @@ async fn shader_input_output_test(
 
         // -- Initializing data --
 
-        let mut output_pre_init_data =
-            vec![test.output_initialization; MAX_BUFFER_SIZE as usize / 4];
-        output_pre_init_data[..test.output_initial_values.len()]
-            .copy_from_slice(&test.output_initial_values);
-        ctx.queue.write_buffer(
-            &output_buffer,
-            0,
-            bytemuck::cast_slice(&output_pre_init_data),
-        );
+        if !explicit_buffers {
+            let mut output_pre_init_data =
+                vec![test.output_initialization; MAX_BUFFER_SIZE as usize / 4];
+            output_pre_init_data[..test.output_initial_values.len()]
+                .copy_from_slice(&test.output_initial_values);
+            ctx.queue.write_buffer(
+                &output_buffer,
+                0,
+                bytemuck::cast_slice(&output_pre_init_data),
+            );
 
-        match storage_type {
-            InputStorageType::Uniform | InputStorageType::Storage => {
-                ctx.queue
-                    .write_buffer(&input_buffer, 0, bytemuck::cast_slice(&test.input_values));
-            }
-            _ => {
-                // Init happens in the compute pass
+            match storage_type {
+                InputStorageType::Uniform | InputStorageType::Storage => {
+                    ctx.queue.write_buffer(
+                        &input_buffer,
+                        0,
+                        bytemuck::cast_slice(&test.input_values),
+                    );
+                }
+                _ => {
+                    // Init happens in the compute pass
+                }
             }
         }
 
@@ -405,12 +509,12 @@ async fn shader_input_output_test(
             cpass.set_immediates(0, bytemuck::cast_slice(&test.input_values))
         }
 
-        cpass.dispatch_workgroups(1, 1, 1);
+        cpass.dispatch_workgroups(workgroups[0], workgroups[1], workgroups[2]);
         drop(cpass);
 
         // -- Pulldown data --
 
-        encoder.copy_buffer_to_buffer(&output_buffer, 0, &mapping_buffer, 0, MAX_BUFFER_SIZE);
+        encoder.copy_buffer_to_buffer(output, 0, &mapping_buffer, 0, output.size());
 
         ctx.queue.submit(Some(encoder.finish()));
 
