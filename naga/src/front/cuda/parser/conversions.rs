@@ -161,6 +161,23 @@ impl Parser<'_> {
     }
 
     pub(super) fn cast_type(&mut self) -> Result<TypeResolution, ParseError> {
-        Ok(self.parse_type()?.ty)
+        let span = self.lexer.peek()?.span;
+        let ty = self.parse_type()?.ty;
+        if !matches!(ty, TypeSpecifier::Scalar(_)) {
+            return Err(ParseError {
+                message: String::from("vector casts are unsupported"),
+                span,
+            });
+        }
+        Ok(self.lower_type(ty, span))
+    }
+
+    pub(super) fn cast_value(
+        &mut self,
+        value: ExpressionValue,
+        target: &TypeResolution,
+    ) -> Result<Value, ParseError> {
+        self.require_scalar_type(value.ty(), value.span())?;
+        self.convert_value(value, target)
     }
 }

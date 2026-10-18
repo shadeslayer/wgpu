@@ -28,6 +28,7 @@ mod streaming;
 mod type_aliases;
 mod uninitialized;
 mod updates;
+mod vector_values;
 mod void_functions;
 
 use naga::front::cuda::{parse_str, Options};

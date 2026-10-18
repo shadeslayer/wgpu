@@ -1,5 +1,6 @@
 use super::*;
 
+use super::types::VECTOR_TYPES;
 use crate::MathFunction;
 
 const MATH_BUILTINS: [(&str, MathFunction); 4] = [
@@ -45,17 +46,39 @@ fn math_builtins(name: &str) -> impl Iterator<Item = MathBuiltin> + Clone {
         })
 }
 
+fn vector_constructor(name: &str) -> Option<(VectorSize, Scalar)> {
+    VECTOR_TYPES
+        .into_iter()
+        .find_map(|(_, constructor, size, scalar)| (name == constructor).then_some((size, scalar)))
+}
+
 pub(super) fn builtin_declarations<'a>() -> FastHashMap<&'a str, GlobalDeclaration> {
     MATH_BUILTINS
         .into_iter()
         .map(|(name, _)| (name, GlobalDeclaration::Functions(Vec::new())))
+        .chain(
+            VECTOR_TYPES
+                .into_iter()
+                .flat_map(|(name, constructor, size, scalar)| {
+                    [
+                        (
+                            name,
+                            GlobalDeclaration::Type(QualifiedType {
+                                ty: TypeSpecifier::Vector { size, scalar },
+                                is_const: false,
+                            }),
+                        ),
+                        (constructor, GlobalDeclaration::Functions(Vec::new())),
+                    ]
+                }),
+        )
         .collect()
 }
 
 #[derive(Clone)]
 enum ReturnType {
     Void,
-    Value(TypeResolution),
+    Value(TypeSpecifier),
 }
 
 struct FunctionHeader<'a> {
@@ -71,6 +94,7 @@ enum FunctionCandidate {
     Defined(Handle<Function>),
     Current,
     Builtin(MathBuiltin),
+    Constructor { size: VectorSize, scalar: Scalar },
 }
 
 fn conversion_rank(
@@ -206,7 +230,7 @@ impl<'a> Parser<'a> {
                         return self.fail("incompatible or repeated return type specifier");
                     }
                     seen_int = true;
-                    result = Some(ReturnType::Value(scalar_resolution(if seen_unsigned {
+                    result = Some(ReturnType::Value(TypeSpecifier::Scalar(if seen_unsigned {
                         Scalar::U32
                     } else {
                         Scalar::I32
@@ -218,7 +242,7 @@ impl<'a> Parser<'a> {
                         return self.fail("incompatible or repeated return type specifier");
                     }
                     seen_unsigned = true;
-                    result = Some(ReturnType::Value(scalar_resolution(Scalar::U32)));
+                    result = Some(ReturnType::Value(TypeSpecifier::Scalar(Scalar::U32)));
                     result_span.get_or_insert(token.span);
                 }
                 TokenKind::Ident("void" | "float" | "bool") => {
@@ -228,9 +252,9 @@ impl<'a> Parser<'a> {
                     result = Some(match token.kind {
                         TokenKind::Ident("void") => ReturnType::Void,
                         TokenKind::Ident("float") => {
-                            ReturnType::Value(scalar_resolution(Scalar::F32))
+                            ReturnType::Value(TypeSpecifier::Scalar(Scalar::F32))
                         }
-                        _ => ReturnType::Value(scalar_resolution(Scalar::BOOL)),
+                        _ => ReturnType::Value(TypeSpecifier::Scalar(Scalar::BOOL)),
                     });
                     result_span.get_or_insert(token.span);
                 }
@@ -340,25 +364,31 @@ impl<'a> Parser<'a> {
     fn device_function(&mut self, header: FunctionHeader<'a>) -> Result<(), ParseError> {
         self.function.ir.name = Some(String::from(header.name));
         if let ReturnType::Value(ty) = header.result {
+            let ty = self.lower_type(ty, header.result_span);
             self.function.ir.result = Some(crate::FunctionResult {
                 ty: self.type_handle(&ty, header.result_span),
                 binding: None,
             });
         }
         self.parameters()?;
-        if math_builtins(header.name).any(|builtin| {
-            self.function.ir.arguments.len() == builtin.parameters.len()
-                && builtin
-                    .parameters
-                    .into_iter()
-                    .enumerate()
-                    .all(|(index, scalar)| {
+        if self
+            .function_candidates(header.name)
+            .filter(|candidate| {
+                matches!(
+                    candidate,
+                    FunctionCandidate::Builtin(_) | FunctionCandidate::Constructor { .. }
+                )
+            })
+            .any(|candidate| {
+                self.function.ir.arguments.len() == self.candidate_arity(candidate)
+                    && (0..self.candidate_arity(candidate)).all(|index| {
                         self.module.compare_types(
                             &self.candidate_type(FunctionCandidate::Current, index),
-                            &scalar_resolution(scalar),
+                            &self.candidate_type(candidate, index),
                         )
                     })
-        }) {
+            })
+        {
             return Err(ParseError {
                 message: format!("duplicate builtin definition `{}`", header.name),
                 span: header.name_span,
@@ -454,6 +484,26 @@ impl<'a> Parser<'a> {
         }
         let end = self.expect_symbol(')')?;
         let candidate = self.resolve_overload(name, &arguments, span)?;
+        if let FunctionCandidate::Constructor { size, scalar } = candidate {
+            let components = arguments
+                .into_iter()
+                .map(|value| {
+                    self.convert_scalar(value.into(), scalar)
+                        .map(|value| value.handle)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let span = span.until(&end);
+            let ty = self.lower_type(TypeSpecifier::Vector { size, scalar }, span);
+            let handle_ty = self.type_handle(&ty, span);
+            let handle = self.append(
+                Expression::Compose {
+                    ty: handle_ty,
+                    components,
+                },
+                span,
+            )?;
+            return Ok(Value { handle, ty, span }.into());
+        }
         if let FunctionCandidate::Builtin(builtin) = candidate {
             let mut arguments = arguments.into_iter();
             let left = self.convert_scalar(arguments.next().unwrap().into(), builtin.result)?;
@@ -674,6 +724,11 @@ impl<'a> Parser<'a> {
                     .filter(move |_| builtin_visible)
                     .map(FunctionCandidate::Builtin),
             )
+            .chain(
+                vector_constructor(name)
+                    .filter(move |_| builtin_visible)
+                    .map(|(size, scalar)| FunctionCandidate::Constructor { size, scalar }),
+            )
     }
 
     fn candidate_arity(&self, candidate: FunctionCandidate) -> usize {
@@ -681,6 +736,7 @@ impl<'a> Parser<'a> {
             FunctionCandidate::Defined(handle) => self.module.functions[handle].arguments.len(),
             FunctionCandidate::Current => self.function.ir.arguments.len(),
             FunctionCandidate::Builtin(builtin) => builtin.parameters.len(),
+            FunctionCandidate::Constructor { size, .. } => size as usize,
         }
     }
 
@@ -691,6 +747,7 @@ impl<'a> Parser<'a> {
             FunctionCandidate::Builtin(builtin) => {
                 return scalar_resolution(builtin.parameters[index])
             }
+            FunctionCandidate::Constructor { scalar, .. } => return scalar_resolution(scalar),
         };
         TypeResolution::Handle(argument.ty)
     }
@@ -763,7 +820,9 @@ impl<'a> Parser<'a> {
             });
         }
         match best_candidate {
-            FunctionCandidate::Defined(_) | FunctionCandidate::Builtin(_) => Ok(best_candidate),
+            FunctionCandidate::Defined(_)
+            | FunctionCandidate::Builtin(_)
+            | FunctionCandidate::Constructor { .. } => Ok(best_candidate),
             FunctionCandidate::Current => Err(ParseError {
                 message: String::from("recursive device helper calls are unsupported"),
                 span,

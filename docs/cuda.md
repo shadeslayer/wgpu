@@ -77,7 +77,8 @@ as 32-bit values at byte offsets 0, 4, and 8. The library equivalent is
 ## Device helpers
 
 `__device__` functions defined before the kernel can take `float`, `int`,
-`unsigned int`, or `bool` scalars and return a scalar or `void`. Helpers can use
+`unsigned int`, or `bool` scalars, or the vector value types described below,
+and return a supported value or `void`. Helpers can use
 local declarations, arithmetic, control flow, and calls to earlier helpers:
 
 ```cuda
@@ -98,15 +99,15 @@ implementation is not checked or emitted. Host-only definitions remain unsupport
 The frontend evaluates arguments left to right, converts them to the parameter
 types, and copies them into per-call locals. Assignments affect only those copies;
 `const` parameters cannot be assigned. Return values convert to the declared
-result type. Scalar-returning helpers must explicitly return on every supported
+result type. Value-returning helpers must explicitly return on every supported
 path; a return inside a loop alone does not satisfy this conservative check.
 
 Void helpers support bare `return;`, implicit fallthrough, and
 `return other_void_helper(...);`. Void calls are accepted as discarded
 expressions, including parenthesized calls and `for` initializer/update clauses.
-Using a void call where a scalar value is required produces a parse error.
+Using a void call where a value is required produces a parse error.
 
-Helpers can share a name when their scalar parameter types or counts differ.
+Helpers can share a name when their parameter types or counts differ.
 Calls prefer exact argument types, then promotion from `bool` to `int`, then
 other scalar conversions. The selected overload must be no worse for every
 argument and better for at least one; otherwise the call is ambiguous.
@@ -172,10 +173,10 @@ functions. Kernels and file-scope type aliases named `min`, `max`, `fminf`, or
 
 ## Source subset
 
-Scalar aliases support `typedef` and `using` for `bool`, `int`, `unsigned int`,
-and `float`, including alias chains and `const` qualification. For example,
+Aliases support `typedef` and `using` for `bool`, `int`, `unsigned int`,
+`float`, and the vector types below, including alias chains and `const` qualification. For example,
 `typedef unsigned int Count, Index;` and `using Sample = const float;` preserve
-the underlying scalar type and resource layout. Repeating an alias declaration
+the underlying type and its layout. Repeating an alias declaration
 with the same type and qualification is allowed. Explicit duplicate `const`
 qualifiers are rejected; requalifying an already const alias is allowed.
 
@@ -184,17 +185,45 @@ blocks and `for` initializers. Local values can hide outer type names, and local
 aliases can hide outer values or functions. A `using` alias in a `for` initializer
 uses C++23 syntax. Pointer, array, function, and void aliases remain unsupported.
 
-Mutable scalar locals can omit an initializer and be assigned before reading.
+Vector values support `float2`, `float3`, `float4`, `int2`, `int3`, `int4`,
+`uint2`, `uint3`, and `uint4`. These types can appear in local variables,
+fixed local arrays, and helper parameters and results. Copies, assignments,
+and conditional arms require matching vector types. Const qualification
+prevents writes to individual fields as well as the complete value.
+
+The fields `.x`, `.y`, `.z`, and `.w` select one scalar component, up to the
+vector's width. Field access works on locals, array elements, helper results,
+and conditional references. Individual fields use the existing scalar operators;
+modifiable fields also support assignments and updates.
+`make_float3(x, y, z)` and the corresponding `make_` functions take exactly
+one scalar argument per component, with the existing scalar conversions and
+left-to-right argument evaluation. Additional user-defined overloads participate
+in the same overload resolution as other helpers.
+
+These types follow CUDA's [built-in vector definitions](https://docs.nvidia.com/cuda/archive/13.0.0/cuda-c-programming-guide/index.html#built-in-vector-types).
+In particular, three-component arrays have a 12-byte element stride and
+4-byte alignment. Vector arithmetic, comparisons, truthiness, indexing, and
+swizzles are unsupported; use individual fields. Vector casts, nonempty
+aggregate initialization, and parenthesized aggregate initialization remain
+unsupported. Kernel parameters and shared declarations still require the scalar
+types described in their sections.
+
+Empty local vector initialization, such as `float3 value{};` or
+`const float4 value = {};`, zeroes every field each time execution reaches the
+declaration, including inside loops.
+
+Mutable scalar and vector locals can omit an initializer and be assigned before
+reading.
 Const locals, including const-qualified aliases, require an initializer.
 Local declarations can list comma-separated names, as in
 `int first = 1, next = first + 1;`. Each initializer finishes before the next
-declarator, and all names share the declared scalar type and qualification.
+declarator, and all names share the declared type and qualification.
 
-Fixed one-dimensional local arrays support `bool`, `int`, `unsigned int`,
-`float`, and their scalar aliases, in both kernels and device helpers. Extents
+Fixed one-dimensional local arrays support the scalar and vector types above
+and their aliases, in both kernels and device helpers. Extents
 must be positive integer literals. Each invocation owns its array storage;
 elements use the same indexing, assignments, and updates as buffer elements.
-Arrays and scalars can share a declaration, as in `int values[3], next = 1;`.
+Arrays and other locals can share a declaration, as in `int values[3], next = 1;`.
 
 An empty initializer, `int values[3]{};` or `int values[3] = {};`, zeroes every
 element each time execution reaches the declaration, including inside loops.
@@ -213,12 +242,14 @@ literals are supported.
 
 Conditional expressions `condition ? accept : reject` evaluate the condition
 once and only evaluate the selected arm. They associate right to left. Matching
-scalar lvalue arms preserve their reference, including for assignment, compound
-assignment, and prefix/postfix updates; a const arm prevents modification.
+scalar or vector lvalue arms preserve their reference and support assignment.
+Scalar references and vector fields also support compound assignments and
+prefix/postfix updates; a const arm prevents modification.
 Discarding a reference preserves its side effects without reading the selected
 storage value. Other scalar arms use a common arithmetic type, with matching
-boolean arms retaining `bool`. Both arms may be void in discarded expressions
-or void returns; mixing void and scalar arms is unsupported.
+boolean arms retaining `bool`. Matching vector arms retain their exact type;
+other vector combinations are unsupported. Both arms may be void in discarded
+expressions or void returns; mixing void and value arms is unsupported.
 
 Statements include local declarations, expression statements, scoped blocks,
 `if`/`else`, `for`, `while`, `do`/`while`, `break`, `continue`, and `return`.
@@ -273,8 +304,8 @@ remainder by zero, `INT_MIN / -1`, `INT_MIN % -1`, and shift counts outside
 Assignments are expressions and associate right to left. Compound assignments
 `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, and `>>=` evaluate the
 indexed destination once; both prefix and postfix `++`/`--` are supported on
-mutable numeric values. Assignment evaluates its right operand before its left
-operand. Logical short-circuiting also applies to assignments and updates inside
+mutable numeric scalars, including vector fields. Assignment evaluates its right
+operand before its left operand. Logical short-circuiting also applies to assignments and updates inside
 the right operand.
 
 Static `__shared__` declarations support `float`, `int`, and `unsigned int`

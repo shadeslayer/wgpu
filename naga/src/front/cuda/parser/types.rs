@@ -1,8 +1,26 @@
 use super::*;
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum TypeSpecifier {
+    Scalar(Scalar),
+    Vector { size: VectorSize, scalar: Scalar },
+}
+
+pub(super) const VECTOR_TYPES: [(&str, &str, VectorSize, Scalar); 9] = [
+    ("float2", "make_float2", VectorSize::Bi, Scalar::F32),
+    ("float3", "make_float3", VectorSize::Tri, Scalar::F32),
+    ("float4", "make_float4", VectorSize::Quad, Scalar::F32),
+    ("int2", "make_int2", VectorSize::Bi, Scalar::I32),
+    ("int3", "make_int3", VectorSize::Tri, Scalar::I32),
+    ("int4", "make_int4", VectorSize::Quad, Scalar::I32),
+    ("uint2", "make_uint2", VectorSize::Bi, Scalar::U32),
+    ("uint3", "make_uint3", VectorSize::Tri, Scalar::U32),
+    ("uint4", "make_uint4", VectorSize::Quad, Scalar::U32),
+];
+
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct QualifiedType {
-    pub ty: TypeResolution,
+    pub ty: TypeSpecifier,
     pub is_const: bool,
 }
 
@@ -35,7 +53,7 @@ fn type_name(
         }
     };
     Some(QualifiedType {
-        ty: scalar_resolution(scalar),
+        ty: TypeSpecifier::Scalar(scalar),
         is_const: false,
     })
 }
@@ -78,6 +96,40 @@ fn parse_type(
 }
 
 impl<'a> Parser<'a> {
+    pub(super) fn lower_type(&mut self, ty: TypeSpecifier, span: Span) -> TypeResolution {
+        let (size, scalar) = match ty {
+            TypeSpecifier::Scalar(scalar) => return scalar_resolution(scalar),
+            TypeSpecifier::Vector { size, scalar } => (size, scalar),
+        };
+        if size != VectorSize::Tri {
+            return TypeResolution::Value(TypeInner::Vector { size, scalar });
+        }
+        let base = self.scalar_handle(scalar, span);
+        let name = VECTOR_TYPES
+            .into_iter()
+            .find_map(|(name, _, candidate_size, candidate_scalar)| {
+                (size == candidate_size && scalar == candidate_scalar).then_some(name)
+            })
+            .unwrap();
+        let members = ["x", "y", "z"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, name)| StructMember {
+                name: Some(String::from(name)),
+                ty: base,
+                binding: None,
+                offset: index as u32 * 4,
+            })
+            .collect();
+        TypeResolution::Handle(self.module.types.insert(
+            Type {
+                name: Some(String::from(name)),
+                inner: TypeInner::Struct { members, span: 12 },
+            },
+            span,
+        ))
+    }
+
     pub(super) fn type_handle(&mut self, ty: &TypeResolution, span: Span) -> Handle<Type> {
         match ty.clone() {
             TypeResolution::Handle(handle) => handle,
@@ -174,10 +226,7 @@ impl<'a> Parser<'a> {
                 .insert(name, GlobalDeclaration::Type(ty.clone()))
             {
                 None => true,
-                Some(GlobalDeclaration::Type(previous)) => {
-                    ty.is_const == previous.is_const
-                        && self.module.compare_types(&ty.ty, &previous.ty)
-                }
+                Some(GlobalDeclaration::Type(previous)) => ty == previous,
                 Some(_) => false,
             }
         } else {
@@ -187,10 +236,7 @@ impl<'a> Parser<'a> {
                 .add(name, Symbol::Type(ty.clone()))
             {
                 None => true,
-                Some(Symbol::Type(previous)) => {
-                    ty.is_const == previous.is_const
-                        && self.module.compare_types(&ty.ty, &previous.ty)
-                }
+                Some(Symbol::Type(previous)) => ty == previous,
                 Some(_) => false,
             }
         };

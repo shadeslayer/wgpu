@@ -16,7 +16,7 @@ mod updates;
 use crate::proc::TypeResolution;
 use context::{FunctionContext, FunctionKind};
 use types::scalar_resolution;
-use types::{GlobalDeclaration, QualifiedType};
+use types::{GlobalDeclaration, QualifiedType, TypeSpecifier};
 
 use crate::{
     front::SymbolTable, AddressSpace, Arena, ArraySize, BinaryOperator, Binding, BuiltIn,
@@ -174,7 +174,15 @@ impl<'a> Parser<'a> {
     }
 
     fn parameter(&mut self) -> Result<(), ParseError> {
+        let type_span = self.lexer.peek()?.span;
         let QualifiedType { ty, is_const } = self.parse_type()?;
+        if self.function.kind == FunctionKind::Kernel && !matches!(ty, TypeSpecifier::Scalar(_)) {
+            return Err(ParseError {
+                message: String::from("vector kernel parameters are unsupported"),
+                span: type_span,
+            });
+        }
+        let ty = self.lower_type(ty, type_span);
         if self.function.kind == FunctionKind::Kernel
             && self
                 .module
@@ -438,6 +446,14 @@ impl<'a> Parser<'a> {
             } => {
                 self.function.expression_graph_depths[left.index()]
                     .max(self.function.expression_graph_depths[right.index()])
+                    + 1
+            }
+            Expression::Compose { ref components, .. } => {
+                components
+                    .iter()
+                    .map(|handle| self.function.expression_graph_depths[handle.index()])
+                    .max()
+                    .unwrap_or(0)
                     + 1
             }
             Expression::Math {

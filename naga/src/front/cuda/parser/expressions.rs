@@ -118,11 +118,19 @@ impl Parser<'_> {
 
     fn primary(&mut self) -> Result<ExpressionResult, ParseError> {
         let mut value = self.primary_inner()?;
-        while let TokenKind::Operator(operator @ ("++" | "--")) = self.lexer.peek()?.kind {
-            let operand = value.require_value()?;
-            let span = operand.span().until(&self.lexer.peek()?.span);
-            self.lexer.next()?;
-            value = ExpressionResult::Value(self.update(operand, operator == "++", true, span)?);
+        loop {
+            if self.take_symbol('.')? {
+                let (field, span) = self.identifier()?;
+                value = ExpressionResult::Value(self.field(value.require_value()?, field, span)?);
+            } else if let TokenKind::Operator(operator @ ("++" | "--")) = self.lexer.peek()?.kind {
+                let operand = value.require_value()?;
+                let span = operand.span().until(&self.lexer.peek()?.span);
+                self.lexer.next()?;
+                value =
+                    ExpressionResult::Value(self.update(operand, operator == "++", true, span)?);
+            } else {
+                break;
+            }
         }
         Ok(value)
     }
@@ -143,7 +151,7 @@ impl Parser<'_> {
                 let target = self.cast_type()?;
                 if self.take_symbol(')')? {
                     let value = self.expression(UNARY_PRECEDENCE)?;
-                    let mut value = self.convert_value(value, &target)?;
+                    let mut value = self.cast_value(value, &target)?;
                     value.span = token.span.until(&value.span);
                     return Ok(value.into());
                 }
@@ -233,7 +241,7 @@ impl Parser<'_> {
                     self.expect_symbol('(')?;
                     let value = self.comma_expression()?;
                     let end = self.expect_symbol(')')?;
-                    let mut value = self.convert_value(value, &target)?;
+                    let mut value = self.cast_value(value, &target)?;
                     value.span = token.span.until(&end);
                     return Ok(value.into());
                 }
@@ -241,7 +249,14 @@ impl Parser<'_> {
                     self.expect_symbol('(')?;
                     let value = self.expression(0)?;
                     let end = self.expect_symbol(')')?;
-                    let mut value = self.convert_value(value, &target.ty)?;
+                    if !matches!(target.ty, TypeSpecifier::Scalar(_)) {
+                        return Err(ParseError {
+                            message: String::from("vector casts are unsupported"),
+                            span: token.span.until(&end),
+                        });
+                    }
+                    let target = self.lower_type(target.ty, token.span);
+                    let mut value = self.cast_value(value, &target)?;
                     value.span = token.span.until(&end);
                     return Ok(value.into());
                 }

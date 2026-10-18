@@ -178,12 +178,13 @@ impl<'a> Parser<'a> {
             return self.shared_declaration();
         }
         let QualifiedType {
-            ty: declared_ty,
+            ty: specifier,
             is_const,
         } = self.parse_type()?;
         loop {
             let (name, span) = self.identifier()?;
             self.check_name(name, span)?;
+            let declared_ty = self.lower_type(specifier, span);
             let base = self.type_handle(&declared_ty, span);
             let is_array = self.take_symbol('[')?;
             let ty = if is_array {
@@ -229,9 +230,18 @@ impl<'a> Parser<'a> {
             } else if !is_const && matches!(self.lexer.peek()?.kind, TokenKind::Symbol(',' | ';')) {
                 None
             } else {
-                self.expect_symbol('=')?;
-                let value = self.expression(0)?;
-                Some(self.convert_value(value, &declared_ty)?.handle)
+                let direct_empty = matches!(specifier, TypeSpecifier::Vector { .. })
+                    && self.lexer.peek()?.kind == TokenKind::Symbol('{');
+                if !direct_empty {
+                    self.expect_symbol('=')?;
+                }
+                if matches!(specifier, TypeSpecifier::Vector { .. }) && self.take_symbol('{')? {
+                    let end = self.expect_symbol('}')?;
+                    Some(self.append(Expression::ZeroValue(ty), span.until(&end))?)
+                } else {
+                    let value = self.expression(0)?;
+                    Some(self.convert_value(value, &declared_ty)?.handle)
+                }
             };
             let end = self.lexer.peek()?.span;
             let has_next = self.take_symbol(',')?;
@@ -253,13 +263,10 @@ impl<'a> Parser<'a> {
         }
         let type_span = self.lexer.peek()?.span;
         let QualifiedType {
-            ty: declared_ty,
+            ty: specifier,
             is_const,
         } = self.parse_type()?;
-        if self
-            .module
-            .compare_types(&declared_ty, &scalar_resolution(Scalar::BOOL))
-            || is_const
+        if !matches!(specifier, TypeSpecifier::Scalar(scalar) if scalar != Scalar::BOOL) || is_const
         {
             return Err(ParseError {
                 message: String::from("shared storage requires a non-const 32-bit numeric type"),
@@ -268,6 +275,7 @@ impl<'a> Parser<'a> {
         }
         let (name, span) = self.identifier()?;
         self.check_name(name, span)?;
+        let declared_ty = self.lower_type(specifier, span);
         let base = self.type_handle(&declared_ty, span);
         let is_array = self.take_symbol('[')?;
         let ty = if is_array {

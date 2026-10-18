@@ -1,6 +1,93 @@
 use super::*;
 
 impl Parser<'_> {
+    pub(super) fn field(
+        &mut self,
+        value: ExpressionValue,
+        field: &str,
+        field_span: Span,
+    ) -> Result<ExpressionValue, ParseError> {
+        let invalid = || ParseError {
+            message: format!("unknown or unsupported field `{field}`"),
+            span: field_span,
+        };
+        let index = match field {
+            "x" => 0,
+            "y" => 1,
+            "z" => 2,
+            "w" => 3,
+            _ => return Err(invalid()),
+        };
+        let ty = match *value.ty().inner_with(&self.module.types) {
+            TypeInner::Vector { size, scalar } if index < size as u32 => scalar_resolution(scalar),
+            TypeInner::Struct { ref members, .. }
+                if members
+                    .get(index as usize)
+                    .is_some_and(|member| member.name.as_deref() == Some(field)) =>
+            {
+                TypeResolution::Handle(members[index as usize].ty)
+            }
+            _ => return Err(invalid()),
+        };
+        let span = value.span().until(&field_span);
+        match value {
+            ExpressionValue::Plain(value) => {
+                let handle = self.append(
+                    Expression::AccessIndex {
+                        base: value.handle,
+                        index,
+                    },
+                    span,
+                )?;
+                Ok(Value { handle, ty, span }.into())
+            }
+            ExpressionValue::Reference(reference) => self
+                .project_reference(reference, index, &ty, span)
+                .map(ExpressionValue::Reference),
+        }
+    }
+
+    fn project_reference(
+        &mut self,
+        mut reference: ReferenceValue,
+        index: u32,
+        ty: &TypeResolution,
+        span: Span,
+    ) -> Result<ReferenceValue, ParseError> {
+        match reference.reference {
+            Reference::Pointer(base) => {
+                reference.reference =
+                    Reference::Pointer(self.append(Expression::AccessIndex { base, index }, span)?);
+            }
+            Reference::Conditional(handle) => {
+                let ConditionalReference {
+                    condition,
+                    accept,
+                    reject,
+                    depth,
+                } = self.function.conditional_references[handle].take().unwrap();
+                let mut project = |branch: ReferenceBranch| -> Result<ReferenceBranch, ParseError> {
+                    let (reference, body) = self.capture_block(|parser| {
+                        parser.append_block(branch.body);
+                        parser.project_reference(branch.reference, index, ty, span)
+                    })?;
+                    Ok(ReferenceBranch { body, reference })
+                };
+                let accept = project(accept)?;
+                let reject = project(reject)?;
+                self.function.conditional_references[handle] = Some(ConditionalReference {
+                    condition,
+                    accept,
+                    reject,
+                    depth,
+                });
+            }
+        }
+        reference.ty = ty.clone();
+        reference.span = span;
+        Ok(reference)
+    }
+
     pub(super) fn temporary_pointer(
         &mut self,
         ty: &TypeResolution,
