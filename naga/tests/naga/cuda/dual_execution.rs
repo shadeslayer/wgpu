@@ -407,7 +407,7 @@ fn cuda_dual_execution_keeps_existing_helper_body_and_signature_restrictions() {
         "__host__ __device__ int helper(int value) { return value; } __host__ __device__ int helper(int other) { return other; } __global__ void kernel() {}",
         "__host__ __device__ int helper(int *value) { return value[0]; } __global__ void kernel() {}",
         "__host__ __device__ int *helper(int value) { return value; } __global__ void kernel() {}",
-        "__host__ __device__ int helper() { return threadIdx.x; } __global__ void kernel() {}",
+        "__host__ __device__ int helper() { return threadIdx.w; } __global__ void kernel() {}",
         "__host__ __device__ void helper() { __shared__ int value; } __global__ void kernel() {}",
         "__host__ __device__ void helper() { __syncthreads(); } __global__ void kernel() {}",
         "__host__ __device__ int helper(const int value) { return ++value; } __global__ void kernel() {}",

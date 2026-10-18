@@ -19,6 +19,7 @@ mod fabs;
 mod float_math;
 mod float_separators;
 mod floorf;
+mod helper_builtins;
 mod inferred_arrays;
 mod inline;
 mod integer_intrinsics;
@@ -53,6 +54,7 @@ pub fn all_tests(tests: &mut Vec<GpuTestInitializer>) {
         CUDA_FLOAT_MATH,
         CUDA_FLOAT_SEPARATORS,
         CUDA_FLOORF,
+        CUDA_HELPER_BUILTINS,
         CUDA_INFERRED_ARRAYS,
         CUDA_INLINE,
         CUDA_INTEGER_INTRINSICS,
@@ -226,6 +228,8 @@ static CUDA_FLOAT_MATH: GpuTestConfiguration = configuration(float_math::cases);
 static CUDA_FLOAT_SEPARATORS: GpuTestConfiguration = configuration(float_separators::cases);
 #[apply(gpu_test!)]
 static CUDA_FLOORF: GpuTestConfiguration = configuration(floorf::cases);
+#[apply(gpu_test!)]
+static CUDA_HELPER_BUILTINS: GpuTestConfiguration = configuration(helper_builtins::cases);
 #[apply(gpu_test!)]
 static CUDA_INFERRED_ARRAYS: GpuTestConfiguration = configuration(inferred_arrays::cases);
 #[apply(gpu_test!)]

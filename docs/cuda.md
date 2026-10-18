@@ -87,6 +87,10 @@ as 32-bit values at byte offsets 0, 4, and 8. The library equivalent is
 `gridDim` produce an HLSL error if this binding is missing. Kernels using only
 `threadIdx`, `blockIdx`, and `blockDim` do not need this buffer.
 
+Inputs referenced by helper definitions are retained even when those helpers
+are unused. An unused helper that reads `gridDim` can therefore require this
+HLSL constants binding. Helper builtin reads do not add kernel buffer bindings.
+
 ## Device helpers
 
 `__device__` functions defined before the kernel can take `float`, `int`,
@@ -95,15 +99,24 @@ and return a supported value or `void`. Helpers can use
 local declarations, arithmetic, control flow, and calls to earlier helpers:
 
 ```cuda
+__device__ unsigned global_index() {
+    return blockIdx.x * blockDim.x + threadIdx.x;
+}
 __device__ float scale(float value, float factor) {
     value *= factor;
     return value;
 }
 __global__ void apply(float *out, const float *input) {
-    unsigned i = threadIdx.x;
+    unsigned i = global_index();
     out[i] = scale(input[i], 2.0f);
 }
 ```
+
+Helpers can read `.x`, `.y`, and `.z` of `threadIdx`, `blockIdx`, `blockDim`,
+and `gridDim`. Each component is a read-only 32-bit unsigned integer and has
+the same invocation or dispatch value as a read in the kernel. `blockDim`
+comes from `Options::workgroup_size`; none of these reads is a C++ constant
+expression, including `blockDim`.
 
 Helpers may also carry `__host__`. Translation checks and emits their device
 implementation, including calls to earlier device-only helpers; the host
@@ -131,8 +144,7 @@ C++ [conversion ranking](https://eel.is/c++draft/over.ics.rank) and
 [overload selection](https://eel.is/c++draft/over.match.best.general).
 
 Helpers have no resource bindings. Prototypes, recursion, forward
-calls, pointers, references, shared storage, barriers, and
-compute builtins in helpers remain unsupported.
+calls, pointers, references, shared storage, and barriers remain unsupported.
 
 Both helpers and kernels accept `static` and standard `inline` in the function
 header. `static` cannot be combined with the direct `extern "C"` prefix.

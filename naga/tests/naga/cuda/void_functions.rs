@@ -280,14 +280,14 @@ fn cuda_void_helpers_preserve_function_lookup_and_arity_checks() {
 }
 
 #[test]
-fn cuda_void_helpers_still_reject_resources_builtins_and_barriers() {
+fn cuda_void_helpers_still_reject_resources_invalid_builtins_and_barriers() {
     for body in [
         "__shared__ int value;",
         "__syncthreads();",
-        "unsigned value = threadIdx.x;",
-        "unsigned value = blockIdx.x;",
-        "unsigned value = blockDim.x;",
-        "unsigned value = gridDim.x;",
+        "unsigned value = threadIdx.w;",
+        "unsigned value = blockIdx.w;",
+        "unsigned value = blockDim.w;",
+        "unsigned value = gridDim.w;",
         "output[0] = 1;",
     ] {
         assert_rejected(&format!(

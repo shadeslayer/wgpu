@@ -403,7 +403,7 @@ fn cuda_device_functions_reject_unsupported_signatures_and_captures() {
     ] {
         assert_rejected(source);
     }
-    for builtin in ["threadIdx.x", "blockIdx.x", "blockDim.x", "gridDim.x"] {
+    for builtin in ["threadIdx.w", "blockIdx.w", "blockDim.w", "gridDim.w"] {
         assert_rejected(&format!(
             "__device__ unsigned helper() {{ return {builtin}; }} __global__ void kernel(unsigned *out) {{ out[0] = helper(); }}"
         ));

@@ -384,7 +384,7 @@ fn cuda_inline_does_not_enable_other_function_directives_or_signatures() {
         "__device__ inline int helper(int value) { return value; } __device__ inline int helper(int other) { return other; } __global__ void kernel() {}",
         "__device__ inline int helper(int *value) { return value[0]; } __global__ void kernel() {}",
         "__device__ inline int *helper(int value) { return value; } __global__ void kernel() {}",
-        "__device__ inline int helper() { return threadIdx.x; } __global__ void kernel() {}",
+        "__device__ inline int helper() { return threadIdx.w; } __global__ void kernel() {}",
         "__device__ inline void helper() { __shared__ int value; } __global__ void kernel() {}",
     ] { rejected(source); }
 }

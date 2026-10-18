@@ -15,6 +15,7 @@ mod fabs;
 mod float_math;
 mod float_separators;
 mod floorf;
+mod helper_builtins;
 mod helpers;
 mod inferred_arrays;
 mod inline;

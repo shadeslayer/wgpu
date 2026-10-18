@@ -36,6 +36,12 @@ use super::{
     number, Options, ParseError,
 };
 
+const BUILTIN_INPUTS: [(&str, BuiltIn); 3] = [
+    ("threadIdx", BuiltIn::LocalInvocationId),
+    ("blockIdx", BuiltIn::WorkGroupId),
+    ("gridDim", BuiltIn::NumWorkGroups),
+];
+
 #[derive(Clone, Debug)]
 enum Symbol {
     Type(QualifiedType),
@@ -198,6 +204,7 @@ pub(super) struct Parser<'a> {
     global_declarations: FastHashMap<&'a str, GlobalDeclaration>,
     function: FunctionContext<'a>,
     sqrtf_function: Option<Handle<Function>>,
+    helper_builtin_globals: [Option<Handle<GlobalVariable>>; 3],
     workgroup_size: [u32; 3],
 }
 
@@ -210,6 +217,7 @@ impl<'a> Parser<'a> {
             global_declarations: functions::builtin_declarations(),
             function: FunctionContext::new(FunctionKind::Kernel),
             sqrtf_function: None,
+            helper_builtin_globals: [None; 3],
             workgroup_size: options.workgroup_size,
         }
     }
@@ -241,7 +249,7 @@ impl<'a> Parser<'a> {
         Ok(self.module)
     }
 
-    fn parameter(&mut self) -> Result<(), ParseError> {
+    fn parameter(&mut self, parameter_index: u32) -> Result<(), ParseError> {
         let type_span = self.lexer.peek()?.span;
         let QualifiedType {
             ty: specifier,
@@ -278,11 +286,10 @@ impl<'a> Parser<'a> {
             return self.device_parameter(name, span, &ty, is_const);
         }
         if !is_pointer {
-            return self.value_parameter(name, span, &ty, is_const);
+            return self.value_parameter(parameter_index, name, span, &ty, is_const);
         }
         let base = self.type_handle(&ty, span);
         let array_ty = self.array_type(base, ArraySize::Dynamic, type_span, span)?;
-        let binding = self.module.global_variables.len() as u32;
         let access = if is_const {
             StorageAccess::LOAD
         } else {
@@ -292,7 +299,10 @@ impl<'a> Parser<'a> {
             GlobalVariable {
                 name: Some(String::from(name)),
                 space: AddressSpace::Storage { access },
-                binding: Some(ResourceBinding { group: 0, binding }),
+                binding: Some(ResourceBinding {
+                    group: 0,
+                    binding: parameter_index,
+                }),
                 ty: array_ty,
                 init: None,
                 memory_decorations: Default::default(),
@@ -314,6 +324,7 @@ impl<'a> Parser<'a> {
 
     fn value_parameter(
         &mut self,
+        parameter_index: u32,
         name: &'a str,
         span: Span,
         parameter_ty: &TypeResolution,
@@ -335,12 +346,14 @@ impl<'a> Parser<'a> {
             },
             span,
         );
-        let binding = self.module.global_variables.len() as u32;
         let global = self.module.global_variables.append(
             GlobalVariable {
                 name: Some(String::from(name)),
                 space: AddressSpace::Uniform,
-                binding: Some(ResourceBinding { group: 0, binding }),
+                binding: Some(ResourceBinding {
+                    group: 0,
+                    binding: parameter_index,
+                }),
                 ty,
                 init: None,
                 memory_decorations: Default::default(),
@@ -412,12 +425,6 @@ impl<'a> Parser<'a> {
     }
 
     fn builtin(&mut self, name: &str, start: Span) -> Result<Value, ParseError> {
-        if self.function.kind == FunctionKind::Device {
-            return Err(ParseError {
-                message: String::from("compute builtins are unsupported in device helpers"),
-                span: start,
-            });
-        }
         self.expect_symbol('.')?;
         let (component, span) = self.identifier()?;
         let index = match component {
@@ -438,33 +445,15 @@ impl<'a> Parser<'a> {
                 span,
             )?
         } else {
-            let (slot, builtin) = match name {
-                "threadIdx" => (0, BuiltIn::LocalInvocationId),
-                "blockIdx" => (1, BuiltIn::WorkGroupId),
-                _ => (2, BuiltIn::NumWorkGroups),
+            let slot = match name {
+                "threadIdx" => 0,
+                "blockIdx" => 1,
+                _ => 2,
             };
-            let base = if let Some(base) = self.function.builtin_arguments[slot] {
-                base
+            let base = if self.function.kind == FunctionKind::Device {
+                self.helper_builtin_value(slot, span)?
             } else {
-                let ty = self.module.types.insert(
-                    Type {
-                        name: None,
-                        inner: TypeInner::Vector {
-                            size: VectorSize::Tri,
-                            scalar: Scalar::U32,
-                        },
-                    },
-                    span,
-                );
-                let argument_index = self.function.ir.arguments.len() as u32;
-                self.function.ir.arguments.push(FunctionArgument {
-                    name: Some(String::from(name)),
-                    ty,
-                    binding: Some(Binding::BuiltIn(builtin)),
-                });
-                let base = self.append(Expression::FunctionArgument(argument_index), span)?;
-                self.function.builtin_arguments[slot] = Some(base);
-                base
+                self.builtin_input(slot, span)?
             };
             self.append(Expression::AccessIndex { base, index }, span)?
         };
@@ -474,6 +463,76 @@ impl<'a> Parser<'a> {
             ty: scalar_resolution(Scalar::U32),
             span,
         })
+    }
+
+    fn builtin_vector_type(&mut self, span: Span) -> Handle<Type> {
+        self.module.types.insert(
+            Type {
+                name: None,
+                inner: TypeInner::Vector {
+                    size: VectorSize::Tri,
+                    scalar: Scalar::U32,
+                },
+            },
+            span,
+        )
+    }
+
+    fn builtin_input(&mut self, slot: usize, span: Span) -> Result<Handle<Expression>, ParseError> {
+        if let Some(argument) = self.function.builtin_arguments[slot] {
+            return Ok(argument);
+        }
+        let (name, builtin) = BUILTIN_INPUTS[slot];
+        let ty = self.builtin_vector_type(span);
+        let argument_index = self.function.ir.arguments.len() as u32;
+        self.function.ir.arguments.push(FunctionArgument {
+            name: Some(String::from(name)),
+            ty,
+            binding: Some(Binding::BuiltIn(builtin)),
+        });
+        let argument = self.append(Expression::FunctionArgument(argument_index), span)?;
+        self.function.builtin_arguments[slot] = Some(argument);
+        Ok(argument)
+    }
+
+    fn helper_builtin_value(
+        &mut self,
+        slot: usize,
+        span: Span,
+    ) -> Result<Handle<Expression>, ParseError> {
+        let global_handle = if let Some(global_handle) = self.helper_builtin_globals[slot] {
+            global_handle
+        } else {
+            let ty = self.builtin_vector_type(span);
+            let global_handle = self.module.global_variables.append(
+                GlobalVariable {
+                    name: Some(String::from(BUILTIN_INPUTS[slot].0)),
+                    space: AddressSpace::Private,
+                    binding: None,
+                    ty,
+                    init: None,
+                    memory_decorations: Default::default(),
+                },
+                span,
+            );
+            self.helper_builtin_globals[slot] = Some(global_handle);
+            global_handle
+        };
+        let pointer = self.append(Expression::GlobalVariable(global_handle), span)?;
+        self.append(Expression::Load { pointer }, span)
+    }
+
+    fn initialize_helper_builtins(&mut self) -> Result<(), ParseError> {
+        for (slot, global_handle) in self.helper_builtin_globals.into_iter().enumerate() {
+            let Some(global_handle) = global_handle else {
+                continue;
+            };
+            let span = self.module.global_variables.get_span(global_handle);
+            let value = self.builtin_input(slot, span)?;
+            let pointer = self.append(Expression::GlobalVariable(global_handle), span)?;
+            self.push_statement(Statement::Store { pointer, value }, span);
+        }
+        Ok(())
     }
 
     fn number(&mut self, text: &str, span: Span) -> Result<Value, ParseError> {

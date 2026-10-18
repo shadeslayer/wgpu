@@ -192,12 +192,17 @@ impl<'a> Parser<'a> {
             if self.take_ident("void")? {
                 self.expect_symbol(')')?;
             } else {
+                let mut parameter_index = 0u32;
                 loop {
-                    self.parameter()?;
+                    self.parameter(parameter_index)?;
                     if self.take_symbol(')')? {
                         break;
                     }
-                    self.expect_symbol(',')?;
+                    let separator_span = self.expect_symbol(',')?;
+                    parameter_index = parameter_index.checked_add(1).ok_or_else(|| ParseError {
+                        message: String::from("too many CUDA function parameters"),
+                        span: separator_span,
+                    })?;
                 }
             }
         }
@@ -400,6 +405,7 @@ impl<'a> Parser<'a> {
         }
         self.parameters()?;
         self.expect_symbol('{')?;
+        self.initialize_helper_builtins()?;
         self.block_contents()?;
         self.function
             .ir
