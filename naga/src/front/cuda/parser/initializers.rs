@@ -5,22 +5,22 @@ use core::num::NonZeroU32;
 impl Parser<'_> {
     pub(super) fn starts_list_initializer(&self) -> Result<bool, ParseError> {
         let mut lookahead = self.lexer.clone();
-        lookahead.next_if(TokenKind::Symbol('='))?;
-        Ok(lookahead.peek()?.kind == TokenKind::Symbol('{'))
+        lookahead.next_if(Token::Operation('='))?;
+        Ok(lookahead.peek()?.0 == Token::Paren('{'))
     }
 
     pub(super) fn value_initializer(
         &mut self,
         target: &TypeResolution,
     ) -> Result<Value, ParseError> {
-        let has_equals = self.take_symbol('=')?;
-        if self.lexer.peek()?.kind == TokenKind::Symbol('{') {
-            let span = self.lexer.peek()?.span;
+        let has_equals = self.lexer.next_if(Token::Operation('='))?;
+        if self.lexer.peek()?.0 == Token::Paren('{') {
+            let span = self.lexer.peek()?.1;
             let scalar = self.require_scalar_type(target, span)?;
             return self.scalar_list_initializer(scalar);
         }
         if !has_equals {
-            self.expect_symbol('=')?;
+            self.lexer.expect_span(Token::Operation('='))?;
         }
         let value = self.expression(0)?;
         self.convert_value(value, target)
@@ -33,9 +33,9 @@ impl Parser<'_> {
         actual_ty: Handle<Type>,
         array_count: Option<NonZeroU32>,
     ) -> Result<(), ParseError> {
-        self.take_symbol('=')?;
-        let span = self.expect_symbol('{')?;
-        if self.take_symbol('}')? {
+        self.lexer.next_if(Token::Operation('='))?;
+        let span = self.lexer.expect_span(Token::Paren('{'))?;
+        if self.lexer.next_if(Token::Paren('}'))? {
             let value = self.append(Expression::ZeroValue(actual_ty), span)?;
             self.push_statement(Statement::Store { pointer, value }, span);
             return Ok(());
@@ -55,7 +55,7 @@ impl Parser<'_> {
             Some(array_count),
             span,
         )?;
-        let end = self.expect_symbol('}')?;
+        let end = self.lexer.expect_span(Token::Paren('}'))?;
         if initialized_count < array_count.get() {
             self.zero_array_tail(
                 pointer,
@@ -74,13 +74,13 @@ impl Parser<'_> {
         specifier: TypeSpecifier,
         element_ty: Handle<Type>,
     ) -> Result<NonZeroU32, ParseError> {
-        self.take_symbol('=')?;
-        let span = self.expect_symbol('{')?;
-        if self.lexer.peek()?.kind == TokenKind::Symbol('}') {
+        self.lexer.next_if(Token::Operation('='))?;
+        let span = self.lexer.expect_span(Token::Paren('{'))?;
+        if self.lexer.peek()?.0 == Token::Paren('}') {
             return self.fail("cannot infer an array bound from an empty initializer list");
         }
         let count = self.array_initializer_clauses(pointer, specifier, element_ty, None, span)?;
-        let end = self.expect_symbol('}')?;
+        let end = self.lexer.expect_span(Token::Paren('}'))?;
         NonZeroU32::new(count).ok_or_else(|| ParseError {
             message: String::from("array initializer requires at least one element"),
             span: span.until(&end),
@@ -119,8 +119,8 @@ impl Parser<'_> {
                     );
                 }
                 TypeSpecifier::Vector { .. } => {
-                    let opening = self.lexer.peek()?.span;
-                    let has_braces = self.take_symbol('{')?;
+                    let opening = self.lexer.peek()?.1;
+                    let has_braces = self.lexer.next_if(Token::Paren('{'))?;
                     self.vector_list_initializer(
                         element, specifier, element_ty, has_braces, opening,
                     )?;
@@ -130,7 +130,9 @@ impl Parser<'_> {
                 message: String::from("too many array initializer clauses"),
                 span,
             })?;
-            if !self.take_symbol(',')? || self.lexer.peek()?.kind == TokenKind::Symbol('}') {
+            if !self.lexer.next_if(Token::Separator(','))?
+                || self.lexer.peek()?.0 == Token::Paren('}')
+            {
                 break;
             }
         }
@@ -138,7 +140,7 @@ impl Parser<'_> {
     }
 
     fn scalar_initializer_clause(&mut self, scalar: Scalar) -> Result<Value, ParseError> {
-        if self.lexer.peek()?.kind == TokenKind::Symbol('{') {
+        if self.lexer.peek()?.0 == Token::Paren('{') {
             self.scalar_list_initializer(scalar)
         } else {
             let expression = self.expression(0)?;
@@ -148,8 +150,8 @@ impl Parser<'_> {
     }
 
     fn scalar_list_initializer(&mut self, scalar: Scalar) -> Result<Value, ParseError> {
-        let start = self.expect_symbol('{')?;
-        let mut value = if self.lexer.peek()?.kind == TokenKind::Symbol('}') {
+        let start = self.lexer.expect_span(Token::Paren('{'))?;
+        let mut value = if self.lexer.peek()?.0 == Token::Paren('}') {
             let literal = match scalar {
                 Scalar::BOOL => Literal::Bool(false),
                 Scalar::I32 => Literal::I32(0),
@@ -164,16 +166,16 @@ impl Parser<'_> {
                 constant: literal.into(),
             }
         } else {
-            if self.lexer.peek()?.kind == TokenKind::Symbol('{') {
+            if self.lexer.peek()?.0 == Token::Paren('{') {
                 return self.fail("nested scalar initializer lists are unsupported");
             }
             let expression = self.expression(0)?;
             let value = self.rvalue(expression)?;
             let value = self.list_convert_scalar(value, scalar)?;
-            self.take_symbol(',')?;
+            self.lexer.next_if(Token::Separator(','))?;
             value
         };
-        let end = self.expect_symbol('}')?;
+        let end = self.lexer.expect_span(Token::Paren('}'))?;
         value.span = start.until(&end);
         Ok(value)
     }
@@ -225,13 +227,13 @@ impl Parser<'_> {
         let TypeSpecifier::Vector { size, scalar } = specifier else {
             return self.fail("expected a vector initializer");
         };
-        if has_braces && self.take_symbol('}')? {
+        if has_braces && self.lexer.next_if(Token::Paren('}'))? {
             let value = self.append(Expression::ZeroValue(actual_ty), span)?;
             self.push_statement(Statement::Store { pointer, value }, span);
             return Ok(());
         }
 
-        let mut pending_value = if self.lexer.peek()?.kind == TokenKind::Symbol('{') {
+        let mut pending_value = if self.lexer.peek()?.0 == Token::Paren('{') {
             None
         } else {
             let expression = self.expression(0)?;
@@ -248,8 +250,8 @@ impl Parser<'_> {
                     value.span,
                 );
                 if has_braces {
-                    self.take_symbol(',')?;
-                    self.expect_symbol('}')?;
+                    self.lexer.next_if(Token::Separator(','))?;
+                    self.lexer.expect_span(Token::Paren('}'))?;
                 }
                 return Ok(());
             }
@@ -280,16 +282,18 @@ impl Parser<'_> {
             if initialized_count == size as u32 {
                 break;
             }
-            if !self.take_symbol(',')? || self.lexer.peek()?.kind == TokenKind::Symbol('}') {
+            if !self.lexer.next_if(Token::Separator(','))?
+                || self.lexer.peek()?.0 == Token::Paren('}')
+            {
                 break;
             }
         }
 
         if has_braces {
             if initialized_count == size as u32 {
-                self.take_symbol(',')?;
+                self.lexer.next_if(Token::Separator(','))?;
             }
-            self.expect_symbol('}')?;
+            self.lexer.expect_span(Token::Paren('}'))?;
         }
         let scalar_ty = self.scalar_handle(scalar, span);
         for index in initialized_count..size as u32 {

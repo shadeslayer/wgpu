@@ -4,10 +4,10 @@ impl<'a> Parser<'a> {
     pub(super) fn starts_constexpr_declaration(&mut self) -> Result<bool, ParseError> {
         let mut lexer = self.lexer.clone();
         loop {
-            match lexer.peek()?.kind {
-                TokenKind::Ident("constexpr") => return Ok(true),
-                TokenKind::Ident("const" | "int" | "unsigned") => {}
-                TokenKind::Ident(name) if self.type_name(name).is_some() => {}
+            match lexer.peek()?.0 {
+                Token::Word("constexpr") => return Ok(true),
+                Token::Word("const" | "int" | "unsigned") => {}
+                Token::Word(name) if self.type_name(name).is_some() => {}
                 _ => return Ok(false),
             }
             lexer.next()?;
@@ -59,8 +59,8 @@ impl<'a> Parser<'a> {
                 },
             );
             self.function = FunctionContext::new(FunctionKind::Kernel);
-            if !self.take_symbol(',')? {
-                self.expect_symbol(';')?;
+            if !self.lexer.next_if(Token::Separator(','))? {
+                self.lexer.expect_span(Token::Separator(';'))?;
                 return Ok(());
             }
         }

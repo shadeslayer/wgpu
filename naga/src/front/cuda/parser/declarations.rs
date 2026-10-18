@@ -7,44 +7,44 @@ pub(super) fn parenthesized_declaration(
     if !declarator(parser, &mut lexer, 0)? {
         return Ok(false);
     }
-    if lexer.peek()?.kind == TokenKind::Symbol('(') && !balanced(&mut lexer, 0)? {
+    if lexer.peek()?.0 == Token::Paren('(') && !balanced(&mut lexer, 0)? {
         return Ok(false);
     }
     Ok(matches!(
-        lexer.peek()?.kind,
-        TokenKind::Symbol(';' | '=' | ',' | '{')
+        lexer.peek()?.0,
+        Token::Separator(';') | Token::Operation('=') | Token::Separator(',') | Token::Paren('{')
     ))
 }
 
 fn declarator(parser: &Parser<'_>, lexer: &mut Lexer<'_>, depth: u32) -> Result<bool, ParseError> {
     check_depth(lexer, depth)?;
     while matches!(
-        lexer.peek()?.kind,
-        TokenKind::Symbol('*' | '&') | TokenKind::Operator("&&")
+        lexer.peek()?.0,
+        Token::Operation('*' | '&') | Token::LogicalOperation('&')
     ) {
         lexer.next()?;
-        lexer.next_if(TokenKind::Ident("const"))?;
+        lexer.next_if(Token::Word("const"))?;
     }
-    match lexer.peek()?.kind {
-        TokenKind::Ident(name) if !Parser::reserved_name(name) => {
+    match lexer.peek()?.0 {
+        Token::Word(name) if !Parser::reserved_name(name) => {
             lexer.next()?;
         }
-        TokenKind::Symbol('(') => {
+        Token::Paren('(') => {
             lexer.next()?;
-            if !declarator(parser, lexer, depth + 1)? || !lexer.next_if(TokenKind::Symbol(')'))? {
+            if !declarator(parser, lexer, depth + 1)? || !lexer.next_if(Token::Paren(')'))? {
                 return Ok(false);
             }
         }
         _ => return Ok(false),
     }
     loop {
-        match lexer.peek()?.kind {
-            TokenKind::Symbol('[') => {
+        match lexer.peek()?.0 {
+            Token::Paren('[') => {
                 if !balanced(lexer, depth + 1)? {
                     return Ok(false);
                 }
             }
-            TokenKind::Symbol('(') => {
+            Token::Paren('(') => {
                 let checkpoint = lexer.clone();
                 if !parameters(parser, lexer, depth + 1)? {
                     *lexer = checkpoint;
@@ -60,42 +60,44 @@ fn declarator(parser: &Parser<'_>, lexer: &mut Lexer<'_>, depth: u32) -> Result<
 fn parameters(parser: &Parser<'_>, lexer: &mut Lexer<'_>, depth: u32) -> Result<bool, ParseError> {
     check_depth(lexer, depth)?;
     lexer.next()?;
-    if lexer.next_if(TokenKind::Symbol(')'))? {
+    if lexer.next_if(Token::Paren(')'))? {
         return Ok(true);
     }
     loop {
-        if !lexer.next_if(TokenKind::Ident("void"))? {
-            match lexer.peek()?.kind {
-                TokenKind::Ident("const") => {}
-                TokenKind::Ident(name) if parser.type_name(name).is_some() => {}
+        if !lexer.next_if(Token::Word("void"))? {
+            match lexer.peek()?.0 {
+                Token::Word("const") => {}
+                Token::Word(name) if parser.type_name(name).is_some() => {}
                 _ => return Ok(false),
             }
             parser.parse_type_from(lexer)?;
         }
-        if !matches!(lexer.peek()?.kind, TokenKind::Symbol(',' | ')' | '='))
-            && !declarator(parser, lexer, depth + 1)?
+        if !matches!(
+            lexer.peek()?.0,
+            Token::Separator(',') | Token::Paren(')') | Token::Operation('=')
+        ) && !declarator(parser, lexer, depth + 1)?
         {
             return Ok(false);
         }
-        if lexer.next_if(TokenKind::Symbol('='))? {
-            while !matches!(lexer.peek()?.kind, TokenKind::Symbol(',' | ')')) {
-                match lexer.peek()?.kind {
-                    TokenKind::Symbol('(' | '[' | '{') => {
+        if lexer.next_if(Token::Operation('='))? {
+            while !matches!(lexer.peek()?.0, Token::Separator(',') | Token::Paren(')')) {
+                match lexer.peek()?.0 {
+                    Token::Paren('(' | '[' | '{') => {
                         if !balanced(lexer, depth + 1)? {
                             return Ok(false);
                         }
                     }
-                    TokenKind::End => return Ok(false),
+                    Token::End => return Ok(false),
                     _ => {
                         lexer.next()?;
                     }
                 }
             }
         }
-        if lexer.next_if(TokenKind::Symbol(')'))? {
+        if lexer.next_if(Token::Paren(')'))? {
             return Ok(true);
         }
-        if !lexer.next_if(TokenKind::Symbol(','))? {
+        if !lexer.next_if(Token::Separator(','))? {
             return Ok(false);
         }
     }
@@ -103,23 +105,23 @@ fn parameters(parser: &Parser<'_>, lexer: &mut Lexer<'_>, depth: u32) -> Result<
 
 fn balanced(lexer: &mut Lexer<'_>, depth: u32) -> Result<bool, ParseError> {
     check_depth(lexer, depth)?;
-    let closing = match lexer.next()?.kind {
-        TokenKind::Symbol('(') => ')',
-        TokenKind::Symbol('[') => ']',
-        TokenKind::Symbol('{') => '}',
+    let closing = match lexer.next()?.0 {
+        Token::Paren('(') => ')',
+        Token::Paren('[') => ']',
+        Token::Paren('{') => '}',
         _ => unreachable!(),
     };
     loop {
-        match lexer.peek()?.kind {
-            TokenKind::Symbol('(' | '[' | '{') => {
+        match lexer.peek()?.0 {
+            Token::Paren('(' | '[' | '{') => {
                 if !balanced(lexer, depth + 1)? {
                     return Ok(false);
                 }
             }
-            TokenKind::Symbol(')' | ']' | '}') => {
-                return lexer.next_if(TokenKind::Symbol(closing));
+            Token::Paren(')' | ']' | '}') => {
+                return lexer.next_if(Token::Paren(closing));
             }
-            TokenKind::End => return Ok(false),
+            Token::End => return Ok(false),
             _ => {
                 lexer.next()?;
             }
@@ -131,7 +133,7 @@ fn check_depth(lexer: &mut Lexer<'_>, depth: u32) -> Result<(), ParseError> {
     if depth > 64 {
         Err(ParseError {
             message: String::from("CUDA declaration nesting limit exceeded"),
-            span: lexer.peek()?.span,
+            span: lexer.peek()?.1,
         })
     } else {
         Ok(())

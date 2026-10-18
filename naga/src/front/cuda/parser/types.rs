@@ -86,16 +86,16 @@ fn declaration_type(
         let token = lexer.peek()?;
         let invalid = |message: &str| ParseError {
             message: String::from(message),
-            span: token.span,
+            span: token.1,
         };
-        match token.kind {
-            TokenKind::Ident("const") => {
+        match token.0 {
+            Token::Word("const") => {
                 if explicit_const {
                     return Err(invalid("duplicate const qualifier"));
                 }
                 explicit_const = true;
             }
-            TokenKind::Ident("constexpr") => {
+            Token::Word("constexpr") => {
                 if !allow_constexpr {
                     return Err(invalid("constexpr is unsupported in this type"));
                 }
@@ -104,8 +104,8 @@ fn declaration_type(
                 }
                 is_constexpr = true;
             }
-            TokenKind::Ident("int" | "unsigned") => {
-                let unsigned = token.kind == TokenKind::Ident("unsigned");
+            Token::Word("int" | "unsigned") => {
+                let unsigned = token.0 == Token::Word("unsigned");
                 if (unsigned && seen_unsigned)
                     || (!unsigned && seen_int)
                     || (ty.is_some() && !seen_int && !seen_unsigned)
@@ -123,10 +123,10 @@ fn declaration_type(
                     is_const: false,
                 });
             }
-            TokenKind::Ident(name) if ty.is_none() => {
+            Token::Word(name) if ty.is_none() => {
                 ty = Some(type_name(name, symbols, globals).ok_or_else(|| ParseError {
                     message: format!("unknown or unsupported scalar type `{name}`"),
-                    span: token.span,
+                    span: token.1,
                 })?);
             }
             _ => break,
@@ -136,7 +136,7 @@ fn declaration_type(
     let Some(mut ty) = ty else {
         return Err(ParseError {
             message: String::from("expected a scalar type"),
-            span: lexer.peek()?.span,
+            span: lexer.peek()?.1,
         });
     };
     ty.is_const |= explicit_const || is_constexpr;
@@ -261,17 +261,17 @@ impl<'a> Parser<'a> {
     }
 
     pub(super) fn starts_type(&mut self) -> Result<bool, ParseError> {
-        Ok(match self.lexer.peek()?.kind {
-            TokenKind::Ident("const" | "constexpr") => true,
-            TokenKind::Ident(name) => self.type_name(name).is_some(),
+        Ok(match self.lexer.peek()?.0 {
+            Token::Word("const" | "constexpr") => true,
+            Token::Word(name) => self.type_name(name).is_some(),
             _ => false,
         })
     }
 
     pub(super) fn starts_alias(&mut self) -> Result<bool, ParseError> {
         Ok(matches!(
-            self.lexer.peek()?.kind,
-            TokenKind::Ident("typedef" | "using")
+            self.lexer.peek()?.0,
+            Token::Word("typedef" | "using")
         ))
     }
 
@@ -281,18 +281,18 @@ impl<'a> Parser<'a> {
             loop {
                 let (name, span) = self.identifier()?;
                 self.insert_type(name, ty.clone(), span, global)?;
-                if self.take_symbol(';')? {
+                if self.lexer.next_if(Token::Separator(';'))? {
                     return Ok(());
                 }
-                self.expect_symbol(',')?;
+                self.lexer.expect_span(Token::Separator(','))?;
             }
         }
         self.expect_ident("using")?;
         let (name, span) = self.identifier()?;
         self.check_name(name, span)?;
-        self.expect_symbol('=')?;
+        self.lexer.expect_span(Token::Operation('='))?;
         let ty = self.parse_type()?;
-        self.expect_symbol(';')?;
+        self.lexer.expect_span(Token::Separator(';'))?;
         self.insert_type(name, ty, span, global)
     }
 

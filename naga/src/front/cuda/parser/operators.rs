@@ -4,7 +4,7 @@ pub(super) const ADDITION_NAME: &str = "operator+";
 
 impl Parser<'_> {
     pub(super) fn operator_addition_name(&mut self, span: Span) -> Result<Span, ParseError> {
-        let end = self.expect_symbol('+')?;
+        let end = self.lexer.expect_span(Token::Operation('+'))?;
         Ok(span.until(&end))
     }
 

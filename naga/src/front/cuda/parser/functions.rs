@@ -187,18 +187,18 @@ fn conversion_rank(
 
 impl<'a> Parser<'a> {
     pub(super) fn parameters(&mut self) -> Result<(), ParseError> {
-        self.expect_symbol('(')?;
-        if !self.take_symbol(')')? {
+        self.lexer.expect_span(Token::Paren('('))?;
+        if !self.lexer.next_if(Token::Paren(')'))? {
             if self.take_ident("void")? {
-                self.expect_symbol(')')?;
+                self.lexer.expect_span(Token::Paren(')'))?;
             } else {
                 let mut parameter_index = 0u32;
                 loop {
                     self.parameter(parameter_index)?;
-                    if self.take_symbol(')')? {
+                    if self.lexer.next_if(Token::Paren(')'))? {
                         break;
                     }
-                    let separator_span = self.expect_symbol(',')?;
+                    let separator_span = self.lexer.expect_span(Token::Separator(','))?;
                     parameter_index = parameter_index.checked_add(1).ok_or_else(|| ParseError {
                         message: String::from("too many CUDA function parameters"),
                         span: separator_span,
@@ -243,8 +243,8 @@ impl<'a> Parser<'a> {
         let mut seen_unsigned = false;
         loop {
             let token = self.lexer.peek()?;
-            match token.kind {
-                TokenKind::Ident("inline") => {
+            match token.0 {
+                Token::Word("inline") => {
                     if inline {
                         return self.fail("duplicate inline specifier");
                     }
@@ -253,7 +253,7 @@ impl<'a> Parser<'a> {
                     }
                     inline = true;
                 }
-                TokenKind::Ident("static") => {
+                Token::Word("static") => {
                     if extern_c {
                         return self.fail("static conflicts with an extern C declaration");
                     }
@@ -262,40 +262,40 @@ impl<'a> Parser<'a> {
                     }
                     seen_static = true;
                 }
-                TokenKind::Ident("__forceinline__" | "__noinline__") => {
+                Token::Word("__forceinline__" | "__noinline__") => {
                     if inline || cuda_inline_span.is_some() {
                         return self.fail("duplicate or incompatible inlining specifiers");
                     }
-                    cuda_inline_span = Some(token.span);
+                    cuda_inline_span = Some(token.1);
                 }
-                TokenKind::Ident("__host__") => {
+                Token::Word("__host__") => {
                     if host_span.is_some() || kind == Some(FunctionKind::Kernel) {
                         return self
                             .fail("duplicate or incompatible CUDA execution space specifier");
                     }
-                    host_span = Some(token.span);
+                    host_span = Some(token.1);
                 }
-                TokenKind::Ident("__device__" | "__global__") => {
+                Token::Word("__device__" | "__global__") => {
                     if kind.is_some()
-                        || (host_span.is_some() && token.kind == TokenKind::Ident("__global__"))
+                        || (host_span.is_some() && token.0 == Token::Word("__global__"))
                     {
                         return self
                             .fail("duplicate or incompatible CUDA execution space specifier");
                     }
-                    kind = Some(if token.kind == TokenKind::Ident("__device__") {
+                    kind = Some(if token.0 == Token::Word("__device__") {
                         FunctionKind::Device
                     } else {
                         FunctionKind::Kernel
                     });
                 }
-                TokenKind::Ident("const") => {
+                Token::Word("const") => {
                     if explicit_const {
                         return self.fail("duplicate const qualifier");
                     }
                     explicit_const = true;
-                    result_span.get_or_insert(token.span);
+                    result_span.get_or_insert(token.1);
                 }
-                TokenKind::Ident("int") => {
+                Token::Word("int") => {
                     if seen_int || (result.is_some() && !seen_unsigned) {
                         return self.fail("incompatible or repeated return type specifier");
                     }
@@ -305,35 +305,35 @@ impl<'a> Parser<'a> {
                     } else {
                         Scalar::I32
                     })));
-                    result_span.get_or_insert(token.span);
+                    result_span.get_or_insert(token.1);
                 }
-                TokenKind::Ident("unsigned") => {
+                Token::Word("unsigned") => {
                     if seen_unsigned || (result.is_some() && !seen_int) {
                         return self.fail("incompatible or repeated return type specifier");
                     }
                     seen_unsigned = true;
                     result = Some(ReturnType::Value(TypeSpecifier::Scalar(Scalar::U32)));
-                    result_span.get_or_insert(token.span);
+                    result_span.get_or_insert(token.1);
                 }
-                TokenKind::Ident("void" | "float" | "bool") => {
+                Token::Word("void" | "float" | "bool") => {
                     if result.is_some() {
                         return self.fail("incompatible or repeated return type specifier");
                     }
-                    result = Some(match token.kind {
-                        TokenKind::Ident("void") => ReturnType::Void,
-                        TokenKind::Ident("float") => {
+                    result = Some(match token.0 {
+                        Token::Word("void") => ReturnType::Void,
+                        Token::Word("float") => {
                             ReturnType::Value(TypeSpecifier::Scalar(Scalar::F32))
                         }
                         _ => ReturnType::Value(TypeSpecifier::Scalar(Scalar::BOOL)),
                     });
-                    result_span.get_or_insert(token.span);
+                    result_span.get_or_insert(token.1);
                 }
-                TokenKind::Ident(name) if result.is_none() => {
+                Token::Word(name) if result.is_none() => {
                     let Some(ty) = self.type_name(name) else {
                         break;
                     };
                     result = Some(ReturnType::Value(ty.ty));
-                    result_span.get_or_insert(token.span);
+                    result_span.get_or_insert(token.1);
                 }
                 _ => break,
             }
@@ -361,7 +361,7 @@ impl<'a> Parser<'a> {
         let (name, name_span) = if self.take_ident("operator")? {
             (
                 operators::ADDITION_NAME,
-                self.operator_addition_name(token.span)?,
+                self.operator_addition_name(token.1)?,
             )
         } else {
             self.identifier()?
@@ -385,7 +385,7 @@ impl<'a> Parser<'a> {
     pub(super) fn function_definition(&mut self) -> Result<FunctionKind, ParseError> {
         let extern_c = self.take_ident("extern")?;
         if extern_c {
-            if self.lexer.peek()?.kind != TokenKind::String("C") {
+            if self.lexer.peek()?.0 != Token::String("C") {
                 return self.fail("expected `\"C\"` after `extern`");
             }
             self.lexer.next()?;
@@ -418,7 +418,7 @@ impl<'a> Parser<'a> {
             });
         }
         self.parameters()?;
-        self.expect_symbol('{')?;
+        self.lexer.expect_span(Token::Paren('{'))?;
         self.initialize_helper_builtins()?;
         self.block_contents()?;
         self.function
@@ -516,7 +516,7 @@ impl<'a> Parser<'a> {
                 });
             }
         }
-        self.expect_symbol('{')?;
+        self.lexer.expect_span(Token::Paren('{'))?;
         let terminated = self.block_contents()?;
         if self.function.ir.result.is_some() && !terminated {
             return Err(ParseError {
@@ -575,19 +575,19 @@ impl<'a> Parser<'a> {
                 span,
             });
         }
-        self.expect_symbol('(')?;
+        self.lexer.expect_span(Token::Paren('('))?;
         let mut arguments = Vec::new();
-        if self.lexer.peek()?.kind != TokenKind::Symbol(')') {
+        if self.lexer.peek()?.0 != Token::Paren(')') {
             loop {
                 let value = self.expression(0)?;
                 arguments.push(self.rvalue(value)?);
-                if self.lexer.peek()?.kind == TokenKind::Symbol(')') {
+                if self.lexer.peek()?.0 == Token::Paren(')') {
                     break;
                 }
-                self.expect_symbol(',')?;
+                self.lexer.expect_span(Token::Separator(','))?;
             }
         }
-        let end = self.expect_symbol(')')?;
+        let end = self.lexer.expect_span(Token::Paren(')'))?;
         self.call_with_arguments(name, arguments, span, span.until(&end))
     }
 

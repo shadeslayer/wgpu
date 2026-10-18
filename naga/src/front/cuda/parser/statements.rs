@@ -5,8 +5,8 @@ use core::num::NonZeroU32;
 impl<'a> Parser<'a> {
     pub(super) fn block_contents(&mut self) -> Result<bool, ParseError> {
         let mut terminated = false;
-        while !self.take_symbol('}')? {
-            if self.lexer.peek()?.kind == TokenKind::End {
+        while !self.lexer.next_if(Token::Paren('}'))? {
+            if self.lexer.peek()?.0 == Token::End {
                 return self.fail("expected `}`");
             }
             if terminated {
@@ -19,7 +19,7 @@ impl<'a> Parser<'a> {
     }
 
     pub(super) fn scoped_statement(&mut self) -> Result<(crate::Block, bool), ParseError> {
-        let compound = self.take_symbol('{')?;
+        let compound = self.lexer.next_if(Token::Paren('{'))?;
         self.function.symbol_table.push_scope();
         let result = self.capture_block(|parser| {
             if compound {
@@ -44,20 +44,20 @@ impl<'a> Parser<'a> {
 
     fn statement_inner(&mut self) -> Result<bool, ParseError> {
         let token = self.lexer.peek()?;
-        let start = token.span;
-        if self.take_symbol(';')? {
+        let start = token.1;
+        if self.lexer.next_if(Token::Separator(';'))? {
             return Ok(false);
         }
-        if self.lexer.peek()?.kind == TokenKind::Symbol('{') {
+        if self.lexer.peek()?.0 == Token::Paren('{') {
             let (body, terminated) = self.scoped_statement()?;
             self.push_statement(Statement::Block(body), start);
             return Ok(terminated);
         }
         if self.take_ident("if")? {
-            self.expect_symbol('(')?;
+            self.lexer.expect_span(Token::Paren('('))?;
             let value = self.comma_expression()?;
             let condition = self.truthy(value)?;
-            self.expect_symbol(')')?;
+            self.lexer.expect_span(Token::Paren(')'))?;
             let (accept, accept_terminated) = self.scoped_statement()?;
             let (reject, reject_terminated) = if self.take_ident("else")? {
                 self.scoped_statement()?
@@ -80,7 +80,7 @@ impl<'a> Parser<'a> {
                 let value = self.comma_expression()?;
                 Some(self.convert_value(value, &ty)?.handle)
             } else {
-                if self.lexer.peek()?.kind != TokenKind::Symbol(';') {
+                if self.lexer.peek()?.0 != Token::Separator(';') {
                     if let ExpressionResult::Value(value) = self.comma_expression_result()? {
                         return Err(ParseError {
                             message: String::from("cannot return a value from a void function"),
@@ -90,7 +90,7 @@ impl<'a> Parser<'a> {
                 }
                 None
             };
-            let end = self.expect_symbol(';')?;
+            let end = self.lexer.expect_span(Token::Separator(';'))?;
             self.push_statement(Statement::Return { value }, start.until(&end));
             return Ok(true);
         }
@@ -101,9 +101,9 @@ impl<'a> Parser<'a> {
                     span: start,
                 });
             }
-            self.expect_symbol('(')?;
-            self.expect_symbol(')')?;
-            let end = self.expect_symbol(';')?;
+            self.lexer.expect_span(Token::Paren('('))?;
+            self.lexer.expect_span(Token::Paren(')'))?;
+            let end = self.lexer.expect_span(Token::Separator(';'))?;
             self.push_statement(
                 Statement::ControlBarrier(crate::Barrier::WORK_GROUP | crate::Barrier::STORAGE),
                 start.until(&end),
@@ -122,7 +122,7 @@ impl<'a> Parser<'a> {
             self.do_loop(start)?;
             return Ok(false);
         }
-        if matches!(token.kind, TokenKind::Ident("break" | "continue")) {
+        if matches!(token.0, Token::Word("break" | "continue")) {
             self.lexer.next()?;
             if self.function.loop_depth == 0 {
                 return Err(ParseError {
@@ -130,12 +130,12 @@ impl<'a> Parser<'a> {
                     span: start,
                 });
             }
-            let statement = if token.kind == TokenKind::Ident("break") {
+            let statement = if token.0 == Token::Word("break") {
                 Statement::Break
             } else {
                 Statement::Continue
             };
-            let end = self.expect_symbol(';')?;
+            let end = self.lexer.expect_span(Token::Separator(';'))?;
             self.push_statement(statement, start.until(&end));
             return Ok(true);
         }
@@ -144,12 +144,12 @@ impl<'a> Parser<'a> {
             return Ok(false);
         }
         self.discard_expression()?;
-        self.expect_symbol(';')?;
+        self.lexer.expect_span(Token::Separator(';'))?;
         Ok(false)
     }
 
     pub(super) fn starts_declaration(&mut self) -> Result<bool, ParseError> {
-        if self.starts_alias()? || self.lexer.peek()?.kind == TokenKind::Ident("__shared__") {
+        if self.starts_alias()? || self.lexer.peek()?.0 == Token::Word("__shared__") {
             return Ok(true);
         }
         if !self.starts_type()? {
@@ -158,13 +158,13 @@ impl<'a> Parser<'a> {
         let mut lookahead = self.lexer.clone();
         lookahead.next()?;
         let next = lookahead.peek()?;
-        if next.kind != TokenKind::Symbol('(') {
+        if next.0 != Token::Paren('(') {
             return Ok(true);
         }
         if declarations::parenthesized_declaration(self, lookahead)? {
             return Err(ParseError {
                 message: String::from("parenthesized declarators are unsupported"),
-                span: next.span,
+                span: next.1,
             });
         }
         Ok(false)
@@ -192,19 +192,19 @@ impl<'a> Parser<'a> {
             self.check_name(name, span)?;
             let declared_ty = self.lower_type(specifier, span);
             let base = self.type_handle(&declared_ty, span);
-            let is_array = self.take_symbol('[')?;
+            let is_array = self.lexer.next_if(Token::Paren('['))?;
             if is_constexpr && is_array {
                 return self.fail("constexpr arrays are unsupported");
             }
             let (ty, array_count) = if is_array {
-                let explicit_extent = if self.take_symbol(']')? {
+                let explicit_extent = if self.lexer.next_if(Token::Paren(']'))? {
                     None
                 } else {
                     let extent = self.array_size()?;
-                    self.expect_symbol(']')?;
+                    self.lexer.expect_span(Token::Paren(']'))?;
                     Some(extent)
                 };
-                if self.lexer.peek()?.kind == TokenKind::Symbol('[') {
+                if self.lexer.peek()?.0 == Token::Paren('[') {
                     return self.fail("multidimensional local arrays are unsupported");
                 }
                 match explicit_extent {
@@ -251,7 +251,7 @@ impl<'a> Parser<'a> {
                 let literal = self.constant_initializer(&declared_ty)?;
                 self.function.constant_locals.insert(local, literal);
                 Some(self.append(Expression::Literal(literal), span)?)
-            } else if !is_const && matches!(self.lexer.peek()?.kind, TokenKind::Symbol(',' | ';')) {
+            } else if !is_const && matches!(self.lexer.peek()?.0, Token::Separator(',' | ';')) {
                 None
             } else if is_array
                 || (matches!(specifier, TypeSpecifier::Vector { .. })
@@ -277,10 +277,10 @@ impl<'a> Parser<'a> {
             } else {
                 Some(self.value_initializer(&declared_ty)?.handle)
             };
-            let end = self.lexer.peek()?.span;
-            let has_next_declarator = self.take_symbol(',')?;
+            let end = self.lexer.peek()?.1;
+            let has_next_declarator = self.lexer.next_if(Token::Separator(','))?;
             if !has_next_declarator {
-                self.expect_symbol(';')?;
+                self.lexer.expect_span(Token::Separator(';'))?;
             }
             if let Some(initializer) = initializer {
                 self.push_statement(
@@ -301,7 +301,7 @@ impl<'a> Parser<'a> {
         if self.function.kind == FunctionKind::Device {
             return self.fail("shared storage is unsupported in device helpers");
         }
-        let type_span = self.lexer.peek()?.span;
+        let type_span = self.lexer.peek()?.1;
         let QualifiedType {
             ty: specifier,
             is_const,
@@ -318,21 +318,21 @@ impl<'a> Parser<'a> {
         self.check_name(name, span)?;
         let declared_ty = self.lower_type(specifier, span);
         let base = self.type_handle(&declared_ty, span);
-        let is_array = self.take_symbol('[')?;
+        let is_array = self.lexer.next_if(Token::Paren('['))?;
         let ty = if is_array {
             let (size, extent_span) = self.array_size()?;
-            self.expect_symbol(']')?;
+            self.lexer.expect_span(Token::Paren(']'))?;
             self.array_type(base, ArraySize::Constant(size), extent_span, span)?
         } else {
             base
         };
-        if self.lexer.peek()?.kind == TokenKind::Symbol('[') {
+        if self.lexer.peek()?.0 == Token::Paren('[') {
             return self.fail("multidimensional shared arrays are unsupported");
         }
-        if self.lexer.peek()?.kind == TokenKind::Symbol('=') {
+        if self.lexer.peek()?.0 == Token::Operation('=') {
             return self.fail("shared variables cannot have initializers");
         }
-        self.expect_symbol(';')?;
+        self.lexer.expect_span(Token::Separator(';'))?;
         let global = self.module.global_variables.append(
             GlobalVariable {
                 name: Some(String::from(name)),

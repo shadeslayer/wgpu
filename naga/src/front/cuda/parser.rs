@@ -33,7 +33,7 @@ use crate::{
 };
 
 use super::{
-    lexer::{Lexer, TokenKind},
+    lexer::{Lexer, Token},
     number, Options, ParseError,
 };
 
@@ -242,7 +242,7 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
-        if self.lexer.peek()?.kind != TokenKind::End {
+        if self.lexer.peek()?.0 != Token::End {
             return self.fail("only one CUDA kernel is supported");
         }
         // Remove call results from source statements discarded after a jump.
@@ -251,7 +251,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parameter(&mut self, parameter_index: u32) -> Result<(), ParseError> {
-        let type_span = self.lexer.peek()?.span;
+        let type_span = self.lexer.peek()?.1;
         let QualifiedType {
             ty: specifier,
             is_const,
@@ -264,8 +264,8 @@ impl<'a> Parser<'a> {
         {
             return self.fail("boolean kernel parameters are unsupported");
         }
-        let pointer_span = self.lexer.peek()?.span;
-        let is_pointer = self.take_symbol('*')?;
+        let pointer_span = self.lexer.peek()?.1;
+        let is_pointer = self.lexer.next_if(Token::Operation('*'))?;
         if self.function.kind == FunctionKind::Kernel
             && !is_pointer
             && !matches!(specifier, TypeSpecifier::Scalar(_))
@@ -403,7 +403,7 @@ impl<'a> Parser<'a> {
         base: Handle<Expression>,
         span: Span,
     ) -> Result<(Handle<Expression>, bool), ParseError> {
-        self.expect_symbol('[')?;
+        self.lexer.expect_span(Token::Paren('['))?;
         let index = self.expression(0)?;
         let index = self.rvalue(index)?;
         let scalar = self.require_scalar_type(&index.ty, index.span)?;
@@ -413,7 +413,7 @@ impl<'a> Parser<'a> {
                 span: index.span,
             });
         }
-        let end = self.expect_symbol(']')?;
+        let end = self.lexer.expect_span(Token::Paren(']'))?;
         let is_discardable = self.constant_array_address(base, index.constant.literal);
         let pointer = self.append(
             Expression::Access {
@@ -426,7 +426,7 @@ impl<'a> Parser<'a> {
     }
 
     fn builtin(&mut self, name: &str, start: Span) -> Result<Value, ParseError> {
-        self.expect_symbol('.')?;
+        self.lexer.expect_span(Token::Separator('.'))?;
         let (component, span) = self.identifier()?;
         let index = match component {
             "x" => 0,
@@ -792,31 +792,23 @@ impl<'a> Parser<'a> {
             })
     }
 
-    fn take_symbol(&mut self, symbol: char) -> Result<bool, ParseError> {
-        self.lexer.next_if(TokenKind::Symbol(symbol))
-    }
-
-    fn expect_symbol(&mut self, symbol: char) -> Result<Span, ParseError> {
-        self.lexer.expect_span(TokenKind::Symbol(symbol))
-    }
-
     fn take_ident(&mut self, identifier: &str) -> Result<bool, ParseError> {
-        self.lexer.next_if(TokenKind::Ident(identifier))
+        self.lexer.next_if(Token::Word(identifier))
     }
 
     fn expect_ident(&mut self, identifier: &str) -> Result<(), ParseError> {
-        self.lexer.expect_span(TokenKind::Ident(identifier))?;
+        self.lexer.expect_span(Token::Word(identifier))?;
         Ok(())
     }
 
     fn identifier(&mut self) -> Result<(&'a str, Span), ParseError> {
         let token = self.lexer.next()?;
-        if let TokenKind::Ident(name) = token.kind {
-            Ok((name, token.span))
+        if let Token::Word(name) = token.0 {
+            Ok((name, token.1))
         } else {
             Err(ParseError {
                 message: String::from("expected an identifier"),
-                span: token.span,
+                span: token.1,
             })
         }
     }
@@ -824,7 +816,7 @@ impl<'a> Parser<'a> {
     fn fail<T>(&mut self, message: &str) -> Result<T, ParseError> {
         Err(ParseError {
             message: String::from(message),
-            span: self.lexer.peek()?.span,
+            span: self.lexer.peek()?.1,
         })
     }
 }

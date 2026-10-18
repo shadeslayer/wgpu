@@ -5,28 +5,30 @@ use crate::{front::consume_any, Span};
 use super::ParseError;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) enum TokenKind<'a> {
-    Ident(&'a str),
+pub(super) enum Token<'a> {
+    Word(&'a str),
     Number(&'a str),
     String(&'a str),
-    Operator(&'a str),
-    Symbol(char),
+    Separator(char),
+    Paren(char),
+    Operation(char),
+    LogicalOperation(char),
+    ShiftOperation(char),
+    AssignmentOperation(char),
+    IncrementOperation,
+    DecrementOperation,
     Trivia,
     End,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub(super) struct Token<'a> {
-    pub kind: TokenKind<'a>,
-    pub span: Span,
-}
+pub(super) type TokenSpan<'a> = (Token<'a>, Span);
 
 #[derive(Clone)]
 pub(super) struct Lexer<'a> {
     source: &'a str,
     input: &'a str,
     last_end_offset: usize,
-    lookahead: Option<(Token<'a>, &'a str)>,
+    lookahead: Option<(TokenSpan<'a>, &'a str)>,
 }
 
 impl<'a> Lexer<'a> {
@@ -40,7 +42,7 @@ impl<'a> Lexer<'a> {
         })
     }
 
-    pub(super) fn next(&mut self) -> Result<Token<'a>, ParseError> {
+    pub(super) fn next(&mut self) -> Result<TokenSpan<'a>, ParseError> {
         let (token, rest) = match self.lookahead.take() {
             Some(next) => next,
             None => self.scan()?,
@@ -50,30 +52,27 @@ impl<'a> Lexer<'a> {
         Ok(token)
     }
 
-    fn scan(&self) -> Result<(Token<'a>, &'a str), ParseError> {
+    fn scan(&self) -> Result<(TokenSpan<'a>, &'a str), ParseError> {
         let mut input = self.input;
         loop {
             let offset = self.source.len() - input.len();
-            let (kind, rest) = consume_token(input).map_err(|mut error| {
+            let (token, rest) = consume_token(input).map_err(|mut error| {
                 let range = error.span.to_range().unwrap_or(0..0);
                 error.span = Span::from(offset + range.start..offset + range.end);
                 error
             })?;
-            if kind == TokenKind::Trivia {
+            if token == Token::Trivia {
                 input = rest;
                 continue;
             }
             return Ok((
-                Token {
-                    kind,
-                    span: Span::from(offset..self.source.len() - rest.len()),
-                },
+                (token, Span::from(offset..self.source.len() - rest.len())),
                 rest,
             ));
         }
     }
 
-    pub(super) fn peek(&mut self) -> Result<Token<'a>, ParseError> {
+    pub(super) fn peek(&mut self) -> Result<TokenSpan<'a>, ParseError> {
         let input = self.input;
         let last_end_offset = self.last_end_offset;
         let token = self.next()?;
@@ -83,8 +82,8 @@ impl<'a> Lexer<'a> {
         Ok(token)
     }
 
-    pub(super) fn next_if(&mut self, expected: TokenKind<'_>) -> Result<bool, ParseError> {
-        if self.peek()?.kind == expected {
+    pub(super) fn next_if(&mut self, expected: Token<'_>) -> Result<bool, ParseError> {
+        if self.peek()?.0 == expected {
             self.next()?;
             Ok(true)
         } else {
@@ -92,21 +91,35 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    pub(super) fn expect_span(&mut self, expected: TokenKind<'_>) -> Result<Span, ParseError> {
-        let token = self.next()?;
-        if token.kind == expected {
-            return Ok(token.span);
+    pub(super) fn expect_span(&mut self, expected: Token<'_>) -> Result<Span, ParseError> {
+        let (token, span) = self.next()?;
+        if token == expected {
+            return Ok(span);
         }
         let message = match expected {
-            TokenKind::Ident(text) | TokenKind::Operator(text) => format!("expected `{text}`"),
-            TokenKind::Symbol(symbol) => format!("expected `{symbol}`"),
-            TokenKind::End => String::from("expected end of source"),
+            Token::Word(text) => format!("expected `{text}`"),
+            Token::Separator(character) | Token::Paren(character) | Token::Operation(character) => {
+                format!("expected `{character}`")
+            }
+            Token::LogicalOperation(character) => {
+                let second = if matches!(character, '&' | '|') {
+                    character
+                } else {
+                    '='
+                };
+                format!("expected `{character}{second}`")
+            }
+            Token::ShiftOperation(character) => format!("expected `{character}{character}`"),
+            Token::AssignmentOperation(character @ ('<' | '>')) => {
+                format!("expected `{character}{character}=`")
+            }
+            Token::AssignmentOperation(character) => format!("expected `{character}=`"),
+            Token::IncrementOperation => String::from("expected `++`"),
+            Token::DecrementOperation => String::from("expected `--`"),
+            Token::End => String::from("expected end of source"),
             _ => format!("expected {expected:?}"),
         };
-        Err(ParseError {
-            message,
-            span: token.span,
-        })
+        Err(ParseError { message, span })
     }
 
     pub(super) fn span_from(&self, offset: usize) -> Span {
@@ -137,25 +150,25 @@ fn check_source(source: &str) -> Result<(), ParseError> {
     Ok(())
 }
 
-fn consume_token(input: &str) -> Result<(TokenKind<'_>, &str), ParseError> {
+fn consume_token(input: &str) -> Result<(Token<'_>, &str), ParseError> {
     let Some(character) = input.chars().next() else {
-        return Ok((TokenKind::End, input));
+        return Ok((Token::End, input));
     };
     if character.is_ascii_whitespace() {
         return Ok((
-            TokenKind::Trivia,
+            Token::Trivia,
             consume_any(input, |c| c.is_ascii_whitespace()).1,
         ));
     }
     if input.starts_with("//") {
         return Ok((
-            TokenKind::Trivia,
+            Token::Trivia,
             consume_any(input, |c| !matches!(c, '\n' | '\r')).1,
         ));
     }
     if let Some(content) = input.strip_prefix("/*") {
         return match content.find("*/") {
-            Some(end) => Ok((TokenKind::Trivia, &content[end + 2..])),
+            Some(end) => Ok((Token::Trivia, &content[end + 2..])),
             None => Err(ParseError {
                 message: String::from("unterminated block comment"),
                 span: Span::from(0..input.len()),
@@ -164,7 +177,7 @@ fn consume_token(input: &str) -> Result<(TokenKind<'_>, &str), ParseError> {
     }
     if character.is_ascii_alphabetic() || character == '_' {
         let (word, rest) = consume_any(input, |c| c.is_ascii_alphanumeric() || c == '_');
-        return Ok((TokenKind::Ident(word), rest));
+        return Ok((Token::Word(word), rest));
     }
     if character.is_ascii_digit()
         || (character == '.' && input.as_bytes().get(1).is_some_and(u8::is_ascii_digit))
@@ -187,12 +200,12 @@ fn consume_token(input: &str) -> Result<(TokenKind<'_>, &str), ParseError> {
             rest = consume_any(&rest[1..], is_number_part).1;
             number = &input[..input.len() - rest.len()];
         }
-        return Ok((TokenKind::Number(number), rest));
+        return Ok((Token::Number(number), rest));
     }
     if let Some(content) = input.strip_prefix('"') {
         return match content.find(['"', '\\', '\n', '\r']) {
             Some(end) if content.as_bytes()[end] == b'"' => {
-                Ok((TokenKind::String(&content[..end]), &content[end + 1..]))
+                Ok((Token::String(&content[..end]), &content[end + 1..]))
             }
             Some(end) => Err(ParseError {
                 message: String::from("unsupported string literal"),
@@ -204,40 +217,87 @@ fn consume_token(input: &str) -> Result<(TokenKind<'_>, &str), ParseError> {
             }),
         };
     }
-    for operator in [
-        "<<=", ">>=", "==", "!=", "<=", ">=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "++",
-        "--", "&&", "||", "<<", ">>",
-    ] {
-        if let Some(rest) = input.strip_prefix(operator) {
-            return Ok((TokenKind::Operator(&input[..operator.len()]), rest));
-        }
-    }
     if input.starts_with("->") {
         return Err(ParseError {
             message: String::from("unsupported CUDA operator"),
             span: Span::from(0..2),
         });
     }
-    if "(){}[],;=.+-*/<>!%~&|^?:".contains(character) {
-        return Ok((TokenKind::Symbol(character), &input[1..]));
-    }
-    Err(ParseError {
-        message: format!("unsupported character `{}`", character.escape_debug()),
-        span: Span::from(0..character.len_utf8()),
+    let rest = &input[character.len_utf8()..];
+    Ok(match character {
+        ':' | ';' | ',' | '.' => (Token::Separator(character), rest),
+        '(' | ')' | '{' | '}' | '[' | ']' => (Token::Paren(character), rest),
+        '<' | '>' => {
+            if let Some(rest) = rest.strip_prefix('=') {
+                (Token::LogicalOperation(character), rest)
+            } else if let Some(rest) = rest.strip_prefix(character) {
+                if let Some(rest) = rest.strip_prefix('=') {
+                    (Token::AssignmentOperation(character), rest)
+                } else {
+                    (Token::ShiftOperation(character), rest)
+                }
+            } else {
+                (Token::Paren(character), rest)
+            }
+        }
+        '+' | '-' => {
+            if let Some(rest) = rest.strip_prefix(character) {
+                let token = if character == '+' {
+                    Token::IncrementOperation
+                } else {
+                    Token::DecrementOperation
+                };
+                (token, rest)
+            } else if let Some(rest) = rest.strip_prefix('=') {
+                (Token::AssignmentOperation(character), rest)
+            } else {
+                (Token::Operation(character), rest)
+            }
+        }
+        '&' | '|' => {
+            if let Some(rest) = rest.strip_prefix(character) {
+                (Token::LogicalOperation(character), rest)
+            } else if let Some(rest) = rest.strip_prefix('=') {
+                (Token::AssignmentOperation(character), rest)
+            } else {
+                (Token::Operation(character), rest)
+            }
+        }
+        '=' | '!' => {
+            if let Some(rest) = rest.strip_prefix('=') {
+                (Token::LogicalOperation(character), rest)
+            } else {
+                (Token::Operation(character), rest)
+            }
+        }
+        '*' | '/' | '%' | '^' => {
+            if let Some(rest) = rest.strip_prefix('=') {
+                (Token::AssignmentOperation(character), rest)
+            } else {
+                (Token::Operation(character), rest)
+            }
+        }
+        '~' | '?' => (Token::Operation(character), rest),
+        _ => {
+            return Err(ParseError {
+                message: format!("unsupported character `{}`", character.escape_debug()),
+                span: Span::from(0..character.len_utf8()),
+            })
+        }
     })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Lexer, ParseError, Token, TokenKind};
+    use super::{Lexer, ParseError, Token, TokenSpan};
 
-    fn lex(source: &str) -> Result<alloc::vec::Vec<Token<'_>>, ParseError> {
+    fn lex(source: &str) -> Result<alloc::vec::Vec<TokenSpan<'_>>, ParseError> {
         let mut lexer = Lexer::new(source)?;
         let mut tokens = alloc::vec::Vec::new();
         loop {
             let token = lexer.next()?;
             tokens.push(token);
-            if token.kind == TokenKind::End {
+            if token.0 == Token::End {
                 return Ok(tokens);
             }
         }
@@ -249,12 +309,12 @@ mod tests {
         let tokens = lex(source).unwrap();
         let numbers: alloc::vec::Vec<_> = tokens
             .iter()
-            .filter_map(|token| match token.kind {
-                TokenKind::Number(text) => {
-                    assert_eq!(&source[token.span.to_range().unwrap()], text);
+            .filter_map(|token| match token.0 {
+                Token::Number(text) => {
+                    assert_eq!(&source[token.1.to_range().unwrap()], text);
                     Some(text)
                 }
-                TokenKind::End => None,
+                Token::End => None,
                 other => panic!("unexpected token: {other:?}"),
             })
             .collect();
@@ -271,36 +331,32 @@ mod tests {
         ] {
             let mut lexer = Lexer::new(text).unwrap();
             let token = lexer.next().unwrap();
-            assert_eq!(token.kind, TokenKind::Number(text), "{text}");
-            assert_eq!(&text[token.span.to_range().unwrap()], text);
-            assert_eq!(lexer.next().unwrap().kind, TokenKind::End);
+            assert_eq!(token.0, Token::Number(text), "{text}");
+            assert_eq!(&text[token.1.to_range().unwrap()], text);
+            assert_eq!(lexer.next().unwrap().0, Token::End);
         }
     }
 
     #[test]
     fn cuda_scanner_number_boundaries_preserve_comments_and_operators() {
         let source = "0x1e/* 漢 */+2 0x1f+3 1e-2f-4 0b1<<2";
-        let kinds: alloc::vec::Vec<_> = lex(source)
-            .unwrap()
-            .iter()
-            .map(|token| token.kind)
-            .collect();
+        let kinds: alloc::vec::Vec<_> = lex(source).unwrap().iter().map(|token| token.0).collect();
         assert_eq!(
             kinds,
             [
-                TokenKind::Number("0x1e"),
-                TokenKind::Symbol('+'),
-                TokenKind::Number("2"),
-                TokenKind::Number("0x1f"),
-                TokenKind::Symbol('+'),
-                TokenKind::Number("3"),
-                TokenKind::Number("1e-2f"),
-                TokenKind::Symbol('-'),
-                TokenKind::Number("4"),
-                TokenKind::Number("0b1"),
-                TokenKind::Operator("<<"),
-                TokenKind::Number("2"),
-                TokenKind::End,
+                Token::Number("0x1e"),
+                Token::Operation('+'),
+                Token::Number("2"),
+                Token::Number("0x1f"),
+                Token::Operation('+'),
+                Token::Number("3"),
+                Token::Number("1e-2f"),
+                Token::Operation('-'),
+                Token::Number("4"),
+                Token::Number("0b1"),
+                Token::ShiftOperation('<'),
+                Token::Number("2"),
+                Token::End,
             ]
         );
     }
@@ -312,16 +368,16 @@ mod tests {
             assert_eq!(
                 tokens
                     .iter()
-                    .map(|token| token.kind)
+                    .map(|token| token.0)
                     .collect::<alloc::vec::Vec<_>>(),
                 [
-                    TokenKind::Number(number),
-                    TokenKind::Symbol(operator),
-                    TokenKind::Number("2"),
-                    TokenKind::End
+                    Token::Number(number),
+                    Token::Operation(operator),
+                    Token::Number("2"),
+                    Token::End
                 ]
             );
-            assert_eq!(&source[tokens[0].span.to_range().unwrap()], number);
+            assert_eq!(&source[tokens[0].1.to_range().unwrap()], number);
         }
     }
 
@@ -329,7 +385,7 @@ mod tests {
     fn cuda_scanner_is_lazy_and_repeats_lexical_errors() {
         let source = "first /* 漢 */ @";
         let mut lexer = Lexer::new(source).unwrap();
-        assert_eq!(lexer.next().unwrap().kind, TokenKind::Ident("first"));
+        assert_eq!(lexer.next().unwrap().0, Token::Word("first"));
         let checkpoint = lexer.clone();
         for error in [
             lexer.peek().unwrap_err(),
@@ -348,27 +404,27 @@ mod tests {
         let mut lexer = Lexer::new(source).unwrap();
         for _ in 0..3 {
             let token = lexer.peek().unwrap();
-            assert_eq!(token.kind, TokenKind::Ident("first"));
-            assert_eq!(&source[token.span.to_range().unwrap()], "first");
+            assert_eq!(token.0, Token::Word("first"));
+            assert_eq!(&source[token.1.to_range().unwrap()], "first");
             assert_eq!(lexer.input, source);
             assert_eq!(lexer.last_end_offset, 0);
         }
-        assert!(!lexer.next_if(TokenKind::Symbol('(')).unwrap());
-        assert_eq!(lexer.next().unwrap().kind, TokenKind::Ident("first"));
+        assert!(!lexer.next_if(Token::Paren('(')).unwrap());
+        assert_eq!(lexer.next().unwrap().0, Token::Word("first"));
         assert_eq!(lexer.last_end_offset, 7);
         let before = lexer.input;
-        assert_eq!(lexer.peek().unwrap().kind, TokenKind::Operator("+="));
+        assert_eq!(lexer.peek().unwrap().0, Token::AssignmentOperation('+'));
         assert_eq!(lexer.input, before);
-        assert!(!lexer.next_if(TokenKind::Symbol('+')).unwrap());
-        assert!(lexer.next_if(TokenKind::Operator("+=")).unwrap());
-        assert_eq!(lexer.next().unwrap().kind, TokenKind::Ident("second"));
+        assert!(!lexer.next_if(Token::Operation('+')).unwrap());
+        assert!(lexer.next_if(Token::AssignmentOperation('+')).unwrap());
+        assert_eq!(lexer.next().unwrap().0, Token::Word("second"));
         let last_end = lexer.last_end_offset;
-        assert_eq!(lexer.peek().unwrap().kind, TokenKind::End);
+        assert_eq!(lexer.peek().unwrap().0, Token::End);
         assert_eq!(lexer.last_end_offset, last_end);
-        assert!(!lexer.next_if(TokenKind::Symbol(';')).unwrap());
+        assert!(!lexer.next_if(Token::Separator(';')).unwrap());
         for _ in 0..3 {
             assert_eq!(
-                lexer.next().unwrap().span,
+                lexer.next().unwrap().1,
                 crate::Span::from(source.len()..source.len())
             );
         }
@@ -378,19 +434,19 @@ mod tests {
     fn cuda_scanner_checkpoint_restores_cached_lookahead() {
         let source = "( /* 漢 */ int) value";
         let mut lexer = Lexer::new(source).unwrap();
-        lexer.expect_span(TokenKind::Symbol('(')).unwrap();
-        assert_eq!(lexer.peek().unwrap().kind, TokenKind::Ident("int"));
+        lexer.expect_span(Token::Paren('(')).unwrap();
+        assert_eq!(lexer.peek().unwrap().0, Token::Word("int"));
         let checkpoint = lexer.clone();
-        lexer.expect_span(TokenKind::Ident("int")).unwrap();
-        lexer.expect_span(TokenKind::Symbol(')')).unwrap();
+        lexer.expect_span(Token::Word("int")).unwrap();
+        lexer.expect_span(Token::Paren(')')).unwrap();
         assert_eq!(
             &source[lexer.span_from(0).to_range().unwrap()],
             "( /* 漢 */ int)"
         );
         lexer = checkpoint;
-        assert_eq!(lexer.next().unwrap().kind, TokenKind::Ident("int"));
-        assert_eq!(lexer.next().unwrap().kind, TokenKind::Symbol(')'));
-        assert_eq!(lexer.next().unwrap().kind, TokenKind::Ident("value"));
+        assert_eq!(lexer.next().unwrap().0, Token::Word("int"));
+        assert_eq!(lexer.next().unwrap().0, Token::Paren(')'));
+        assert_eq!(lexer.next().unwrap().0, Token::Word("value"));
     }
 
     #[test]
@@ -419,11 +475,11 @@ mod tests {
         let source = "first /* 漢 */ second @";
         let mut lexer = Lexer::new(source).unwrap();
         lexer.next().unwrap();
-        let error = lexer.expect_span(TokenKind::Symbol(';')).unwrap_err();
+        let error = lexer.expect_span(Token::Separator(';')).unwrap_err();
         assert_eq!(&source[error.span.to_range().unwrap()], "second");
         for error in [
-            lexer.next_if(TokenKind::End).unwrap_err(),
-            lexer.expect_span(TokenKind::End).unwrap_err(),
+            lexer.next_if(Token::End).unwrap_err(),
+            lexer.expect_span(Token::End).unwrap_err(),
         ] {
             assert_eq!(&source[error.span.to_range().unwrap()], "@");
         }
@@ -432,14 +488,14 @@ mod tests {
     #[test]
     fn cuda_scanner_comments_do_not_nest_and_eof_spans_are_stable() {
         let mut lexer = Lexer::new("/* outer /* inner */ value").unwrap();
-        assert_eq!(lexer.next().unwrap().kind, TokenKind::Ident("value"));
+        assert_eq!(lexer.next().unwrap().0, Token::Word("value"));
         for source in ["", " \r\n", "/* 漢 */ // tail\r\n"] {
             let mut lexer = Lexer::new(source).unwrap();
             for _ in 0..2 {
                 let token = lexer.peek().unwrap();
-                assert_eq!(token.kind, TokenKind::End);
-                assert_eq!(token.span, crate::Span::from(source.len()..source.len()));
-                assert_eq!(lexer.next().unwrap().kind, TokenKind::End);
+                assert_eq!(token.0, Token::End);
+                assert_eq!(token.1, crate::Span::from(source.len()..source.len()));
+                assert_eq!(lexer.next().unwrap().0, Token::End);
             }
         }
     }
@@ -456,35 +512,37 @@ mod tests {
     fn cuda_comparison_and_logical_tokens() {
         let source = "a<=b && c!=d || e>=f == !g < h > i";
         let tokens = lex(source).unwrap();
-        let kinds: alloc::vec::Vec<_> = tokens.iter().map(|token| token.kind).collect();
+        let kinds: alloc::vec::Vec<_> = tokens.iter().map(|token| token.0).collect();
         assert_eq!(
             kinds,
             [
-                TokenKind::Ident("a"),
-                TokenKind::Operator("<="),
-                TokenKind::Ident("b"),
-                TokenKind::Operator("&&"),
-                TokenKind::Ident("c"),
-                TokenKind::Operator("!="),
-                TokenKind::Ident("d"),
-                TokenKind::Operator("||"),
-                TokenKind::Ident("e"),
-                TokenKind::Operator(">="),
-                TokenKind::Ident("f"),
-                TokenKind::Operator("=="),
-                TokenKind::Symbol('!'),
-                TokenKind::Ident("g"),
-                TokenKind::Symbol('<'),
-                TokenKind::Ident("h"),
-                TokenKind::Symbol('>'),
-                TokenKind::Ident("i"),
-                TokenKind::End,
+                Token::Word("a"),
+                Token::LogicalOperation('<'),
+                Token::Word("b"),
+                Token::LogicalOperation('&'),
+                Token::Word("c"),
+                Token::LogicalOperation('!'),
+                Token::Word("d"),
+                Token::LogicalOperation('|'),
+                Token::Word("e"),
+                Token::LogicalOperation('>'),
+                Token::Word("f"),
+                Token::LogicalOperation('='),
+                Token::Operation('!'),
+                Token::Word("g"),
+                Token::Paren('<'),
+                Token::Word("h"),
+                Token::Paren('>'),
+                Token::Word("i"),
+                Token::End,
             ]
         );
-        for token in &tokens {
-            if let TokenKind::Operator(operator) = token.kind {
-                assert_eq!(&source[token.span.to_range().unwrap()], operator);
-            }
+        for (&(_, span), spelling) in tokens
+            .iter()
+            .filter(|token| matches!(token.0, Token::LogicalOperation(_)))
+            .zip(["<=", "&&", "!=", "||", ">=", "=="])
+        {
+            assert_eq!(&source[span.to_range().unwrap()], spelling);
         }
     }
 
@@ -492,44 +550,53 @@ mod tests {
     fn cuda_operators_do_not_join_across_comments() {
         for (source, symbol) in [("a &/* split */& b", '&'), ("a | | b", '|')] {
             let tokens = lex(source).unwrap();
-            assert_eq!(tokens[1].kind, TokenKind::Symbol(symbol));
-            assert_eq!(tokens[2].kind, TokenKind::Symbol(symbol));
+            assert_eq!(tokens[1].0, Token::Operation(symbol));
+            assert_eq!(tokens[2].0, Token::Operation(symbol));
         }
         let tokens = lex("a < /* comment */ = b").unwrap();
-        assert_eq!(tokens[1].kind, TokenKind::Symbol('<'));
-        assert_eq!(tokens[2].kind, TokenKind::Symbol('='));
+        assert_eq!(tokens[1].0, Token::Paren('<'));
+        assert_eq!(tokens[2].0, Token::Operation('='));
     }
 
     #[test]
     fn cuda_update_and_assignment_operators_use_maximal_munch() {
         let source = "a+++b---c+=d-=e*=f/=g";
         let tokens = lex(source).unwrap();
-        let kinds: alloc::vec::Vec<_> = tokens.iter().map(|token| token.kind).collect();
+        let kinds: alloc::vec::Vec<_> = tokens.iter().map(|token| token.0).collect();
         assert_eq!(
             kinds,
             [
-                TokenKind::Ident("a"),
-                TokenKind::Operator("++"),
-                TokenKind::Symbol('+'),
-                TokenKind::Ident("b"),
-                TokenKind::Operator("--"),
-                TokenKind::Symbol('-'),
-                TokenKind::Ident("c"),
-                TokenKind::Operator("+="),
-                TokenKind::Ident("d"),
-                TokenKind::Operator("-="),
-                TokenKind::Ident("e"),
-                TokenKind::Operator("*="),
-                TokenKind::Ident("f"),
-                TokenKind::Operator("/="),
-                TokenKind::Ident("g"),
-                TokenKind::End,
+                Token::Word("a"),
+                Token::IncrementOperation,
+                Token::Operation('+'),
+                Token::Word("b"),
+                Token::DecrementOperation,
+                Token::Operation('-'),
+                Token::Word("c"),
+                Token::AssignmentOperation('+'),
+                Token::Word("d"),
+                Token::AssignmentOperation('-'),
+                Token::Word("e"),
+                Token::AssignmentOperation('*'),
+                Token::Word("f"),
+                Token::AssignmentOperation('/'),
+                Token::Word("g"),
+                Token::End,
             ]
         );
-        for token in &tokens {
-            if let TokenKind::Operator(operator) = token.kind {
-                assert_eq!(&source[token.span.to_range().unwrap()], operator);
-            }
+        for (&(_, span), spelling) in tokens
+            .iter()
+            .filter(|token| {
+                matches!(
+                    token.0,
+                    Token::AssignmentOperation(_)
+                        | Token::IncrementOperation
+                        | Token::DecrementOperation
+                )
+            })
+            .zip(["++", "--", "+=", "-=", "*=", "/="])
+        {
+            assert_eq!(&source[span.to_range().unwrap()], spelling);
         }
     }
 
@@ -553,14 +620,24 @@ mod tests {
                 let source = alloc::format!("left {first}{separator}{second} right");
                 let tokens = lex(&source).unwrap();
                 assert_eq!(tokens.len(), 5);
-                assert_eq!(tokens[1].kind, TokenKind::Symbol(first));
-                assert_eq!(tokens[2].kind, TokenKind::Symbol(second));
+                let first_token = if matches!(first, '<' | '>') {
+                    Token::Paren(first)
+                } else {
+                    Token::Operation(first)
+                };
+                let second_token = if matches!(second, '<' | '>') {
+                    Token::Paren(second)
+                } else {
+                    Token::Operation(second)
+                };
+                assert_eq!(tokens[1].0, first_token);
+                assert_eq!(tokens[2].0, second_token);
                 assert_eq!(
-                    &source[tokens[1].span.to_range().unwrap()],
+                    &source[tokens[1].1.to_range().unwrap()],
                     alloc::format!("{first}")
                 );
                 assert_eq!(
-                    &source[tokens[2].span.to_range().unwrap()],
+                    &source[tokens[2].1.to_range().unwrap()],
                     alloc::format!("{second}")
                 );
             }
@@ -578,79 +655,91 @@ mod tests {
     #[test]
     fn cuda_integer_operators_use_maximal_munch() {
         for (source, expected) in [
-            ("%", TokenKind::Symbol('%')),
-            ("~", TokenKind::Symbol('~')),
-            ("&", TokenKind::Symbol('&')),
-            ("|", TokenKind::Symbol('|')),
-            ("^", TokenKind::Symbol('^')),
-            ("<<", TokenKind::Operator("<<")),
-            (">>", TokenKind::Operator(">>")),
-            ("%=", TokenKind::Operator("%=")),
-            ("&=", TokenKind::Operator("&=")),
-            ("|=", TokenKind::Operator("|=")),
-            ("^=", TokenKind::Operator("^=")),
-            ("<<=", TokenKind::Operator("<<=")),
-            (">>=", TokenKind::Operator(">>=")),
+            ("%", Token::Operation('%')),
+            ("~", Token::Operation('~')),
+            ("&", Token::Operation('&')),
+            ("|", Token::Operation('|')),
+            ("^", Token::Operation('^')),
+            ("<<", Token::ShiftOperation('<')),
+            (">>", Token::ShiftOperation('>')),
+            ("%=", Token::AssignmentOperation('%')),
+            ("&=", Token::AssignmentOperation('&')),
+            ("|=", Token::AssignmentOperation('|')),
+            ("^=", Token::AssignmentOperation('^')),
+            ("<<=", Token::AssignmentOperation('<')),
+            (">>=", Token::AssignmentOperation('>')),
         ] {
             let tokens = lex(source).unwrap();
             assert_eq!(tokens.len(), 2, "{source}");
-            assert_eq!(tokens[0].kind, expected);
-            assert_eq!(&source[tokens[0].span.to_range().unwrap()], source);
-            assert_eq!(tokens[1].kind, TokenKind::End);
+            assert_eq!(tokens[0].0, expected);
+            assert_eq!(&source[tokens[0].1.to_range().unwrap()], source);
+            assert_eq!(tokens[1].0, Token::End);
         }
         let source = "<<=>>=<<>>";
         let tokens = lex(source).unwrap();
-        let kinds: alloc::vec::Vec<_> = tokens.iter().map(|token| token.kind).collect();
+        let kinds: alloc::vec::Vec<_> = tokens.iter().map(|token| token.0).collect();
         assert_eq!(
             kinds,
             [
-                TokenKind::Operator("<<="),
-                TokenKind::Operator(">>="),
-                TokenKind::Operator("<<"),
-                TokenKind::Operator(">>"),
-                TokenKind::End,
+                Token::AssignmentOperation('<'),
+                Token::AssignmentOperation('>'),
+                Token::ShiftOperation('<'),
+                Token::ShiftOperation('>'),
+                Token::End,
             ]
         );
-        for token in &tokens {
-            if let TokenKind::Operator(operator) = token.kind {
-                assert_eq!(&source[token.span.to_range().unwrap()], operator);
-            }
+        for (&(_, span), spelling) in tokens
+            .iter()
+            .filter(|token| {
+                matches!(
+                    token.0,
+                    Token::AssignmentOperation(_) | Token::ShiftOperation(_)
+                )
+            })
+            .zip(["<<=", ">>=", "<<", ">>"])
+        {
+            assert_eq!(&source[span.to_range().unwrap()], spelling);
         }
     }
 
     #[test]
     fn cuda_shift_assignments_do_not_join_across_comments() {
-        for (source, left, right) in [
+        for (source, left, right, left_spelling, right_spelling) in [
             (
                 "a < /* split */ <= b",
-                TokenKind::Symbol('<'),
-                TokenKind::Operator("<="),
+                Token::Paren('<'),
+                Token::LogicalOperation('<'),
+                "<",
+                "<=",
             ),
             (
                 "a > // split\n >= b",
-                TokenKind::Symbol('>'),
-                TokenKind::Operator(">="),
+                Token::Paren('>'),
+                Token::LogicalOperation('>'),
+                ">",
+                ">=",
             ),
             (
                 "a << /* split */ = b",
-                TokenKind::Operator("<<"),
-                TokenKind::Symbol('='),
+                Token::ShiftOperation('<'),
+                Token::Operation('='),
+                "<<",
+                "=",
             ),
             (
                 "a >> // split\n = b",
-                TokenKind::Operator(">>"),
-                TokenKind::Symbol('='),
+                Token::ShiftOperation('>'),
+                Token::Operation('='),
+                ">>",
+                "=",
             ),
         ] {
             let tokens = lex(source).unwrap();
             assert_eq!(tokens.len(), 5, "{source}");
-            assert_eq!(tokens[1].kind, left);
-            assert_eq!(tokens[2].kind, right);
-            for token in &tokens {
-                if let TokenKind::Operator(operator) = token.kind {
-                    assert_eq!(&source[token.span.to_range().unwrap()], operator);
-                }
-            }
+            assert_eq!(tokens[1].0, left);
+            assert_eq!(tokens[2].0, right);
+            assert_eq!(&source[tokens[1].1.to_range().unwrap()], left_spelling);
+            assert_eq!(&source[tokens[2].1.to_range().unwrap()], right_spelling);
         }
     }
 }

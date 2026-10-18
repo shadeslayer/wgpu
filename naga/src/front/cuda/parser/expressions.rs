@@ -9,7 +9,7 @@ impl Parser<'_> {
 
     pub(super) fn comma_expression_result(&mut self) -> Result<ExpressionResult, ParseError> {
         let mut result = self.expression_result(0)?;
-        while self.take_symbol(',')? {
+        while self.lexer.next_if(Token::Separator(','))? {
             let earlier = match result {
                 ExpressionResult::Value(ref value) => value.constant(),
                 ExpressionResult::Void(_) => ConstantValue::default(),
@@ -51,34 +51,34 @@ impl Parser<'_> {
     }
 
     fn expression_inner(&mut self, minimum_precedence: u8) -> Result<ExpressionResult, ParseError> {
-        let start = self.lexer.peek()?.span.to_range().unwrap().start;
+        let start = self.lexer.peek()?.1.to_range().unwrap().start;
         let mut left = self.primary()?;
         loop {
-            let (operator, precedence) = match self.lexer.peek()?.kind {
-                TokenKind::Operator("||") => (BinaryOperator::LogicalOr, 1),
-                TokenKind::Operator("&&") => (BinaryOperator::LogicalAnd, 2),
-                TokenKind::Symbol('|') => (BinaryOperator::InclusiveOr, 3),
-                TokenKind::Symbol('^') => (BinaryOperator::ExclusiveOr, 4),
-                TokenKind::Symbol('&') => (BinaryOperator::And, 5),
-                TokenKind::Operator("==") => (BinaryOperator::Equal, 6),
-                TokenKind::Operator("!=") => (BinaryOperator::NotEqual, 6),
-                TokenKind::Symbol('<') => (BinaryOperator::Less, 7),
-                TokenKind::Symbol('>') => (BinaryOperator::Greater, 7),
-                TokenKind::Operator("<=") => (BinaryOperator::LessEqual, 7),
-                TokenKind::Operator(">=") => (BinaryOperator::GreaterEqual, 7),
-                TokenKind::Operator("<<") => (BinaryOperator::ShiftLeft, 8),
-                TokenKind::Operator(">>") => (BinaryOperator::ShiftRight, 8),
-                TokenKind::Symbol('+') => (BinaryOperator::Add, 9),
-                TokenKind::Symbol('-') => (BinaryOperator::Subtract, 9),
-                TokenKind::Symbol('*') => (BinaryOperator::Multiply, 10),
-                TokenKind::Symbol('/') => (BinaryOperator::Divide, 10),
-                TokenKind::Symbol('%') => (BinaryOperator::Modulo, 10),
+            let (operator, precedence) = match self.lexer.peek()?.0 {
+                Token::LogicalOperation('|') => (BinaryOperator::LogicalOr, 1),
+                Token::LogicalOperation('&') => (BinaryOperator::LogicalAnd, 2),
+                Token::Operation('|') => (BinaryOperator::InclusiveOr, 3),
+                Token::Operation('^') => (BinaryOperator::ExclusiveOr, 4),
+                Token::Operation('&') => (BinaryOperator::And, 5),
+                Token::LogicalOperation('=') => (BinaryOperator::Equal, 6),
+                Token::LogicalOperation('!') => (BinaryOperator::NotEqual, 6),
+                Token::Paren('<') => (BinaryOperator::Less, 7),
+                Token::Paren('>') => (BinaryOperator::Greater, 7),
+                Token::LogicalOperation('<') => (BinaryOperator::LessEqual, 7),
+                Token::LogicalOperation('>') => (BinaryOperator::GreaterEqual, 7),
+                Token::ShiftOperation('<') => (BinaryOperator::ShiftLeft, 8),
+                Token::ShiftOperation('>') => (BinaryOperator::ShiftRight, 8),
+                Token::Operation('+') => (BinaryOperator::Add, 9),
+                Token::Operation('-') => (BinaryOperator::Subtract, 9),
+                Token::Operation('*') => (BinaryOperator::Multiply, 10),
+                Token::Operation('/') => (BinaryOperator::Divide, 10),
+                Token::Operation('%') => (BinaryOperator::Modulo, 10),
                 _ => break,
             };
             if precedence < minimum_precedence {
                 break;
             }
-            let operator_span = self.lexer.next()?.span;
+            let operator_span = self.lexer.next()?.1;
             let mut left_value = left.require_value()?;
             if matches!(
                 operator,
@@ -101,21 +101,24 @@ impl Parser<'_> {
             left = self.binary_value(operator, left_value, right)?.into();
         }
         if minimum_precedence == 0 {
-            if self.take_symbol('?')? {
+            if self.lexer.next_if(Token::Operation('?'))? {
                 left = self.conditional(left, start)?;
             }
-            let operator = match self.lexer.peek()?.kind {
-                TokenKind::Symbol('=') => Some(None),
-                TokenKind::Operator("+=") => Some(Some(BinaryOperator::Add)),
-                TokenKind::Operator("-=") => Some(Some(BinaryOperator::Subtract)),
-                TokenKind::Operator("*=") => Some(Some(BinaryOperator::Multiply)),
-                TokenKind::Operator("/=") => Some(Some(BinaryOperator::Divide)),
-                TokenKind::Operator("%=") => Some(Some(BinaryOperator::Modulo)),
-                TokenKind::Operator("&=") => Some(Some(BinaryOperator::And)),
-                TokenKind::Operator("|=") => Some(Some(BinaryOperator::InclusiveOr)),
-                TokenKind::Operator("^=") => Some(Some(BinaryOperator::ExclusiveOr)),
-                TokenKind::Operator("<<=") => Some(Some(BinaryOperator::ShiftLeft)),
-                TokenKind::Operator(">>=") => Some(Some(BinaryOperator::ShiftRight)),
+            let operator = match self.lexer.peek()?.0 {
+                Token::Operation('=') => Some(None),
+                Token::AssignmentOperation(character) => Some(Some(match character {
+                    '+' => BinaryOperator::Add,
+                    '-' => BinaryOperator::Subtract,
+                    '*' => BinaryOperator::Multiply,
+                    '/' => BinaryOperator::Divide,
+                    '%' => BinaryOperator::Modulo,
+                    '&' => BinaryOperator::And,
+                    '|' => BinaryOperator::InclusiveOr,
+                    '^' => BinaryOperator::ExclusiveOr,
+                    '<' => BinaryOperator::ShiftLeft,
+                    '>' => BinaryOperator::ShiftRight,
+                    _ => unreachable!(),
+                })),
                 _ => None,
             };
             if let Some(operator) = operator {
@@ -130,15 +133,21 @@ impl Parser<'_> {
     fn primary(&mut self) -> Result<ExpressionResult, ParseError> {
         let mut value = self.primary_inner()?;
         loop {
-            if self.take_symbol('.')? {
+            if self.lexer.next_if(Token::Separator('.'))? {
                 let (field, span) = self.identifier()?;
                 value = ExpressionResult::Value(self.field(value.require_value()?, field, span)?);
-            } else if let TokenKind::Operator(operator @ ("++" | "--")) = self.lexer.peek()?.kind {
+            } else if let operator @ (Token::IncrementOperation | Token::DecrementOperation) =
+                self.lexer.peek()?.0
+            {
                 let operand = value.require_value()?;
-                let span = operand.span().until(&self.lexer.peek()?.span);
+                let span = operand.span().until(&self.lexer.peek()?.1);
                 self.lexer.next()?;
-                value =
-                    ExpressionResult::Value(self.update(operand, operator == "++", true, span)?);
+                value = ExpressionResult::Value(self.update(
+                    operand,
+                    operator == Token::IncrementOperation,
+                    true,
+                    span,
+                )?);
             } else {
                 break;
             }
@@ -148,39 +157,39 @@ impl Parser<'_> {
 
     fn primary_inner(&mut self) -> Result<ExpressionResult, ParseError> {
         let token = self.lexer.peek()?;
-        if let TokenKind::Operator(operator @ ("++" | "--")) = token.kind {
+        if let operator @ (Token::IncrementOperation | Token::DecrementOperation) = token.0 {
             self.lexer.next()?;
             let value = self.expression(UNARY_PRECEDENCE)?;
-            let span = token.span.until(&value.span());
+            let span = token.1.until(&value.span());
             return self
-                .update(value, operator == "++", false, span)
+                .update(value, operator == Token::IncrementOperation, false, span)
                 .map(ExpressionResult::Value);
         }
-        if self.take_symbol('(')? {
+        if self.lexer.next_if(Token::Paren('('))? {
             let checkpoint = self.lexer.clone();
             if self.starts_type()? {
                 let target = self.cast_type()?;
-                if self.take_symbol(')')? {
+                if self.lexer.next_if(Token::Paren(')'))? {
                     let value = self.expression(UNARY_PRECEDENCE)?;
                     let mut value = self.cast_value(value, &target)?;
-                    value.span = token.span.until(&value.span);
+                    value.span = token.1.until(&value.span);
                     return Ok(value.into());
                 }
                 self.lexer = checkpoint;
             }
             let value = self.comma_expression_result()?;
-            self.expect_symbol(')')?;
+            self.lexer.expect_span(Token::Paren(')'))?;
             return Ok(value);
         }
-        if self.take_symbol('-')?
-            || self.take_symbol('+')?
-            || self.take_symbol('!')?
-            || self.take_symbol('~')?
+        if self.lexer.next_if(Token::Operation('-'))?
+            || self.lexer.next_if(Token::Operation('+'))?
+            || self.lexer.next_if(Token::Operation('!'))?
+            || self.lexer.next_if(Token::Operation('~'))?
         {
             let value = self.expression(UNARY_PRECEDENCE)?;
-            if token.kind == TokenKind::Symbol('!') {
+            if token.0 == Token::Operation('!') {
                 let value = self.truthy(value)?;
-                let span = token.span.until(&value.span);
+                let span = token.1.until(&value.span);
                 let handle = self.append(
                     Expression::Unary {
                         op: UnaryOperator::LogicalNot,
@@ -198,9 +207,9 @@ impl Parser<'_> {
                 }
                 .into());
             }
-            if token.kind == TokenKind::Symbol('~') {
+            if token.0 == Token::Operation('~') {
                 let value = self.integral_operand(value)?;
-                let span = token.span.until(&value.span);
+                let span = token.1.until(&value.span);
                 let handle = self.append(
                     Expression::Unary {
                         op: UnaryOperator::BitwiseNot,
@@ -219,10 +228,10 @@ impl Parser<'_> {
                 .into());
             }
             let value = self.promote_integral(value)?;
-            if token.kind == TokenKind::Symbol('+') {
+            if token.0 == Token::Operation('+') {
                 return Ok(value.into());
             }
-            let span = token.span.until(&value.span);
+            let span = token.1.until(&value.span);
             let expression = if self.require_scalar_type(&value.ty, value.span)? == Scalar::U32 {
                 let zero = self.append(Expression::Literal(Literal::U32(0)), span)?;
                 Expression::Binary {
@@ -247,71 +256,69 @@ impl Parser<'_> {
             }
             .into());
         }
-        match token.kind {
-            TokenKind::Number(text) => {
+        match token.0 {
+            Token::Number(text) => {
                 self.lexer.next()?;
-                self.number(text, token.span).map(Into::into)
+                self.number(text, token.1).map(Into::into)
             }
-            TokenKind::Ident(name) => {
+            Token::Word(name) => {
                 self.lexer.next()?;
                 if name == "operator" {
-                    let span = self.operator_addition_name(token.span)?;
+                    let span = self.operator_addition_name(token.1)?;
                     return self.call(operators::ADDITION_NAME, span);
                 }
                 if name == "static_cast" {
-                    self.expect_symbol('<')?;
+                    self.lexer.expect_span(Token::Paren('<'))?;
                     let target = self.cast_type()?;
-                    self.expect_symbol('>')?;
-                    self.expect_symbol('(')?;
+                    self.lexer.expect_span(Token::Paren('>'))?;
+                    self.lexer.expect_span(Token::Paren('('))?;
                     let value = self.comma_expression()?;
-                    let end = self.expect_symbol(')')?;
+                    let end = self.lexer.expect_span(Token::Paren(')'))?;
                     let mut value = self.cast_value(value, &target)?;
-                    value.span = token.span.until(&end);
+                    value.span = token.1.until(&end);
                     return Ok(value.into());
                 }
                 if let Some(target) = self.type_name(name) {
-                    self.expect_symbol('(')?;
+                    self.lexer.expect_span(Token::Paren('('))?;
                     let value = self.expression(0)?;
-                    let end = self.expect_symbol(')')?;
+                    let end = self.lexer.expect_span(Token::Paren(')'))?;
                     if !matches!(target.ty, TypeSpecifier::Scalar(_)) {
                         return Err(ParseError {
                             message: String::from("vector casts are unsupported"),
-                            span: token.span.until(&end),
+                            span: token.1.until(&end),
                         });
                     }
-                    let target = self.lower_type(target.ty, token.span);
+                    let target = self.lower_type(target.ty, token.1);
                     let mut value = self.cast_value(value, &target)?;
-                    value.span = token.span.until(&end);
+                    value.span = token.1.until(&end);
                     return Ok(value.into());
                 }
                 if matches!(name, "true" | "false") {
-                    let handle = self.append(
-                        Expression::Literal(Literal::Bool(name == "true")),
-                        token.span,
-                    )?;
+                    let handle =
+                        self.append(Expression::Literal(Literal::Bool(name == "true")), token.1)?;
                     return Ok(Value {
                         constant: Literal::Bool(name == "true").into(),
                         handle,
                         ty: scalar_resolution(Scalar::BOOL),
-                        span: token.span,
+                        span: token.1,
                     }
                     .into());
                 }
                 if matches!(name, "threadIdx" | "blockIdx" | "blockDim" | "gridDim") {
-                    return self.builtin(name, token.span).map(Into::into);
+                    return self.builtin(name, token.1).map(Into::into);
                 }
-                if self.lexer.peek()?.kind == TokenKind::Symbol('(') {
-                    return self.call(name, token.span);
+                if self.lexer.peek()?.0 == Token::Paren('(') {
+                    return self.call(name, token.1);
                 }
                 let symbol = self.lookup_symbol(name).ok_or_else(|| ParseError {
                     message: format!("unknown variable `{name}`"),
-                    span: token.span,
+                    span: token.1,
                 })?;
                 let (pointer, ty, writable, span, constant) = match symbol {
                     Symbol::Type(_) => {
                         return Err(ParseError {
                             message: format!("type `{name}` cannot be used as a value"),
-                            span: token.span,
+                            span: token.1,
                         });
                     }
                     Symbol::Array {
@@ -319,7 +326,7 @@ impl Parser<'_> {
                         ty,
                         writable,
                     } => {
-                        let (pointer, is_discardable) = self.array_element(pointer, token.span)?;
+                        let (pointer, is_discardable) = self.array_element(pointer, token.1)?;
                         (
                             pointer,
                             ty,
@@ -339,7 +346,7 @@ impl Parser<'_> {
                         pointer,
                         ty,
                         writable,
-                        token.span,
+                        token.1,
                         self.pointer_constant(pointer),
                     ),
                     Symbol::Constant {
@@ -352,7 +359,7 @@ impl Parser<'_> {
                                 reference: Reference::Constant(handle),
                                 writable: false,
                                 ty: scalar_resolution(scalar),
-                                span: token.span,
+                                span: token.1,
                                 constant: ConstantValue {
                                     literal,
                                     is_discardable: true,

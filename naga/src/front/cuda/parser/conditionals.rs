@@ -9,7 +9,7 @@ impl Parser<'_> {
         let condition = self.truthy(condition.require_value()?)?;
         let (accept, accept_body) =
             self.capture_block(|parser| parser.comma_expression_result())?;
-        self.expect_symbol(':')?;
+        self.lexer.expect_span(Token::Separator(':'))?;
         let (reject, reject_body) = self.capture_block(|parser| parser.expression_result(0))?;
         let span = self.lexer.span_from(start);
         match (accept, reject) {

@@ -18,10 +18,10 @@ impl Parser<'_> {
     }
 
     pub(super) fn while_loop(&mut self, start: Span) -> Result<(), ParseError> {
-        self.expect_symbol('(')?;
+        self.lexer.expect_span(Token::Paren('('))?;
         let ((), body) = self.capture_block(|parser| {
             parser.loop_condition()?;
-            parser.expect_symbol(')')?;
+            parser.lexer.expect_span(Token::Paren(')'))?;
             parser.function.loop_depth += 1;
             let result = parser.scoped_statement();
             parser.function.loop_depth -= 1;
@@ -41,7 +41,7 @@ impl Parser<'_> {
     }
 
     pub(super) fn for_loop(&mut self, start: Span) -> Result<(), ParseError> {
-        self.expect_symbol('(')?;
+        self.lexer.expect_span(Token::Paren('('))?;
         self.function.symbol_table.push_scope();
         let result = self.for_loop_body(start);
         self.function.symbol_table.pop_scope();
@@ -51,33 +51,33 @@ impl Parser<'_> {
 
     fn for_loop_body(&mut self, start: Span) -> Result<crate::Block, ParseError> {
         let ((), mut init) = self.capture_block(|parser| {
-            if !parser.take_symbol(';')? {
+            if !parser.lexer.next_if(Token::Separator(';'))? {
                 if parser.starts_declaration()? {
                     parser.local_declaration()?;
                 } else {
                     parser.discard_expression()?;
-                    parser.expect_symbol(';')?;
+                    parser.lexer.expect_span(Token::Separator(';'))?;
                 }
             }
             Ok(())
         })?;
         let ((), mut body) = self.capture_block(|parser| {
-            if !parser.take_symbol(';')? {
+            if !parser.lexer.next_if(Token::Separator(';'))? {
                 parser.loop_condition()?;
-                parser.expect_symbol(';')?;
+                parser.lexer.expect_span(Token::Separator(';'))?;
             }
             Ok(())
         })?;
         let ((), continuing) = self.capture_block(|parser| {
-            if !parser.take_symbol(')')? {
+            if !parser.lexer.next_if(Token::Paren(')'))? {
                 parser.discard_expression()?;
-                parser.expect_symbol(')')?;
+                parser.lexer.expect_span(Token::Paren(')'))?;
             }
             Ok(())
         })?;
         self.function.loop_depth += 1;
         let result = self.capture_block(|parser| {
-            if parser.take_symbol('{')? {
+            if parser.lexer.next_if(Token::Paren('{'))? {
                 parser.block_contents()
             } else {
                 parser.statement()
@@ -103,7 +103,7 @@ impl Parser<'_> {
         self.function.loop_depth -= 1;
         let (body, _) = result?;
         self.expect_ident("while")?;
-        self.expect_symbol('(')?;
+        self.lexer.expect_span(Token::Paren('('))?;
         let ((break_if, end), continuing) = self.capture_block(|parser| {
             let value = parser.comma_expression()?;
             let condition = parser.truthy(value)?;
@@ -114,8 +114,8 @@ impl Parser<'_> {
                 },
                 condition.span,
             )?;
-            parser.expect_symbol(')')?;
-            let end = parser.expect_symbol(';')?;
+            parser.lexer.expect_span(Token::Paren(')'))?;
+            let end = parser.lexer.expect_span(Token::Separator(';'))?;
             Ok((break_if, end))
         })?;
         self.push_statement(

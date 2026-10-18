@@ -184,7 +184,7 @@ impl Parser<'_> {
     }
 
     pub(super) fn cast_type(&mut self) -> Result<TypeResolution, ParseError> {
-        let span = self.lexer.peek()?.span;
+        let span = self.lexer.peek()?.1;
         let ty = self.parse_type()?.ty;
         if !matches!(ty, TypeSpecifier::Scalar(_)) {
             return Err(ParseError {
