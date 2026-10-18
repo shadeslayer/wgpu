@@ -2,7 +2,7 @@
 
 use naga::front::cuda::{parse_str, Options};
 
-use super::helpers::{execute, validate};
+use super::helpers::validate;
 
 fn literal(text: &str) -> naga::Literal {
     let source = format!("__global__ void kernel() {{ unsigned int value = {text}; }}");
@@ -132,36 +132,6 @@ fn cuda_hexadecimal_f_digits_are_not_float_suffixes() {
         };
         assert_eq!(literal(text), expected, "{text}");
     }
-}
-
-#[test]
-fn cuda_nondecimal_signedness_controls_arithmetic_and_comparisons() {
-    let source = "__global__ void kernel(int *out) {
-        out[0] = -1 < 0xffffffff;
-        out[1] = -1 < 0x7fffffff;
-        out[2] = (037777777777 + 1u) == 0u;
-        out[3] = (-0b11111111111111111111111111111111) == 1u;
-    }";
-    assert_eq!(execute(source, &[9; 4]), [0, 1, 1, 1]);
-}
-
-#[test]
-fn cuda_integer_bases_and_separators_preserve_arithmetic_precedence() {
-    let source = "__global__ void kernel(int *out) {
-        out[0] = 010 + 0x10 * 0b10 - 1'0;
-        out[1] = 0x1e + 2;
-        out[2] = 0x1E/* separated */+2;
-    }";
-    assert_eq!(execute(source, &[0; 3]), [30, 32, 32]);
-}
-
-#[test]
-fn cuda_quoted_hexadecimal_exponent_digits_do_not_absorb_adjacent_operators() {
-    let source = "__global__ void kernel(int *out) {
-        out[0] = 0x1'e+2;
-        out[1] = 0x1'E-2;
-    }";
-    assert_eq!(execute(source, &[0; 2]), [32, 28]);
 }
 
 #[test]

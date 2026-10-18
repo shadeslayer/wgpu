@@ -2,7 +2,7 @@
 
 use naga::front::cuda::{parse_str, Options};
 
-use super::helpers::{execute, validate};
+use super::helpers::validate;
 
 fn rejected(source: &str) -> naga::front::cuda::ParseError {
     let error = parse_str(source, &Options::default()).unwrap_err();
@@ -46,27 +46,6 @@ fn cuda_static_helpers_accept_each_header_order() {
         ));
         assert_eq!(module.functions.len(), 1);
         assert_eq!(helper(&module, "advance").arguments.len(), 1);
-    }
-}
-
-#[test]
-fn cuda_static_kernels_accept_each_header_order() {
-    for header in [
-        "static __global__ void",
-        "static void __global__",
-        "__global__ static void",
-        "__global__ void static",
-        "void static __global__",
-        "void __global__ static",
-    ] {
-        assert_eq!(
-            execute(
-                &format!("{header} kernel(int *out) {{ out[0] = 7; }}"),
-                &[0]
-            ),
-            [7],
-            "{header}"
-        );
     }
 }
 

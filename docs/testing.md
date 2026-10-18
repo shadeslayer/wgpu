@@ -90,7 +90,7 @@ they should be easy to copy into a standalone project.
 - Located in: `naga/tests/naga/cuda/`
 - Run with `cargo nextest run -p naga -E 'test(cuda)'`
 - Verify the supported CUDA source subset, rejection of unsupported syntax,
-  arithmetic semantics, parser depth limits, and output from every shader backend.
+  IR structure, parser depth limits, and output from every shader backend.
 
 The CLI integration tests live in `naga-cli/tests/cuda.rs` and run with
 `cargo nextest run -p naga-cli --test cuda`.
@@ -99,6 +99,11 @@ GPU tests in `tests/tests/wgpu-gpu/cuda.rs` run generated WGSL through the avail
 backends and check scalar uniform parameters, guarded vector addition, numeric
 conversions, and loop execution. Run
 them with `cargo xtask test -E 'binary(wgpu-gpu) & test(wgpu_gpu::cuda)'`.
+
+Scalar execution tests in `tests/tests/wgpu-gpu/shader/cuda/` use the shared
+`ShaderTest` framework to check arithmetic, conversions, evaluation order, and
+local declarations. Run them with
+`cargo xtask test -E 'binary(wgpu-gpu) & test(wgpu_gpu::shader::cuda)'`.
 
 ## `naga` Example Tests
 

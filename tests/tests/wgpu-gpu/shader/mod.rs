@@ -17,6 +17,7 @@ use wgpu_test::{GpuTestInitializer, TestingContext};
 
 pub mod array_size_overrides;
 pub mod compilation_messages;
+pub mod cuda;
 pub mod data_builtins;
 pub mod module_label;
 pub mod module_source;
@@ -28,6 +29,7 @@ pub mod zero_init_workgroup_mem;
 pub fn all_tests(tests: &mut Vec<GpuTestInitializer>) {
     array_size_overrides::all_tests(tests);
     compilation_messages::all_tests(tests);
+    cuda::all_tests(tests);
     data_builtins::all_tests(tests);
     module_label::all_tests(tests);
     module_source::all_tests(tests);

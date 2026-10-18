@@ -2,7 +2,7 @@
 
 use naga::front::cuda::{parse_str, Options};
 
-use super::helpers::{execute, validate};
+use super::helpers::validate;
 
 const ALIASES: &str = "typedef unsigned int Count, Position;
 using Sample = float;
@@ -55,17 +55,6 @@ fn cuda_both_alias_syntaxes_support_each_existing_scalar_type() {
         ));
         assert_eq!(local_scalar(&module, "value"), expected);
     }
-}
-
-#[test]
-fn cuda_scalar_alias_chains_and_multiple_declarators_keep_the_same_type() {
-    let source = "typedef int Whole, Distance, Position;
-        using Coordinate = Position;
-        typedef Coordinate Index;
-        __global__ void kernel(int *out) {
-            Whole a = 3; Distance b = 4; Index c = 5; out[0] = a + b + c;
-        }";
-    assert_eq!(execute(source, &[0]), [12]);
 }
 
 #[test]
@@ -161,14 +150,6 @@ fn cuda_aliases_work_in_device_results_and_const_parameter_copies() {
 
 #[test]
 fn cuda_inherited_const_is_preserved_and_redundant_qualification_is_ignored() {
-    let source = "typedef const int Frozen;
-        using Fixed = Frozen;
-        typedef const Fixed Again;
-        __global__ void kernel(int *out) {
-            const Fixed a = 2; Fixed const b = 3; Again c = 4;
-            out[0] = a + b + c;
-        }";
-    assert_eq!(execute(source, &[0]), [9]);
     for body in ["value = 2;", "value += 1;", "++value;", "value--;"] {
         rejected(&format!(
             "typedef const int Frozen;
@@ -193,28 +174,11 @@ fn cuda_aliases_do_not_allow_repeated_explicit_const_qualifiers() {
 
 #[test]
 fn cuda_alias_casts_use_all_existing_scalar_cast_forms() {
-    let source = "typedef int Whole;
-        using Frozen = const Whole;
-        __global__ void kernel(int *out) {
-            Whole a = (Whole)3.5f;
-            Whole b = static_cast<Whole>(4.5f);
-            Whole c = Whole(5.5f);
-            Whole d = Frozen(6.5f);
-            out[0] = a + b + c + d;
-        }";
-    assert_eq!(execute(source, &[0]), [18]);
     rejected("using Whole = int; __global__ void kernel() { Whole(1) = 2; }");
 }
 
 #[test]
 fn cuda_alias_expression_contexts_keep_functional_casts_unambiguous() {
-    let source = "using Whole = int;
-        __global__ void kernel(int *out) {
-            int value = 3;
-            Whole(4); Whole(value + 1);
-            out[0] = Whole(value); out[1] = Whole((value));
-        }";
-    assert_eq!(execute(source, &[0; 2]), [3, 3]);
     validate(
         "using Whole = int;
         __global__ void kernel() { int count = 0; for (; count < 1; Whole(count)) ++count; }",
@@ -262,23 +226,7 @@ fn cuda_alias_parameter_declarators_are_distinguished_from_cast_arguments() {
 }
 
 #[test]
-fn cuda_block_aliases_shadow_outer_types_and_restore_them_after_exit() {
-    let source = "using Quantity = int;
-        __global__ void kernel(int *out) {
-            Quantity outer = 2;
-            { using Quantity = float; Quantity inner = 1.5f; out[0] = inner * 2.0f; }
-            Quantity after = 5; out[1] = outer + after;
-        }";
-    assert_eq!(execute(source, &[0; 2]), [3, 7]);
-}
-
-#[test]
 fn cuda_local_values_can_hide_global_aliases() {
-    let source = "typedef int Quantity;
-        __global__ void kernel(int *out) {
-            Quantity Quantity = 3; Quantity += 2; out[0] = Quantity;
-        }";
-    assert_eq!(execute(source, &[0]), [5]);
     validate(
         "using Element = int;
         __device__ int identity(int Element) { return Element; }
@@ -287,33 +235,7 @@ fn cuda_local_values_can_hide_global_aliases() {
 }
 
 #[test]
-fn cuda_block_aliases_can_hide_values_and_restore_the_original_value() {
-    let source = "__global__ void kernel(int *out) {
-        int Quantity = 7;
-        { typedef int Quantity; Quantity inner = 3; out[0] = inner; }
-        out[1] = Quantity;
-    }";
-    assert_eq!(execute(source, &[0; 2]), [3, 7]);
-}
-
-#[test]
-fn cuda_local_aliases_hide_helpers_in_functional_cast_syntax() {
-    let source = "__device__ int Measure(int value) { return value + 100; }
-        __global__ void kernel(int *out) { using Measure = int; out[0] = Measure(3.5f); }";
-    assert_eq!(execute(source, &[0]), [3]);
-}
-
-#[test]
 fn cuda_alias_declaration_locus_preserves_outer_type_lookup() {
-    for declaration in ["typedef Element Element;", "using Element = Element;"] {
-        let source = format!(
-            "using Element = int;
-            __global__ void kernel(int *out) {{
-                {{ {declaration} Element value = 4; out[0] = value; }}
-            }}"
-        );
-        assert_eq!(execute(&source, &[0]), [4]);
-    }
     rejected(
         "using Element = int;
         __global__ void kernel() { int Element = Element(1); }",
@@ -337,22 +259,6 @@ fn cuda_hidden_aliases_are_not_rediscovered_in_type_positions() {
         __device__ int bad(int Element, Element other) { return other; }
         __global__ void kernel() {}",
     );
-}
-
-#[test]
-fn cuda_alias_redeclarations_accept_the_same_canonical_type() {
-    let source = "typedef int Element;
-        using Element = int;
-        typedef Element Element;
-        using Frozen = const Element;
-        typedef const Frozen Frozen;
-        __global__ void kernel(int *out) {
-            typedef unsigned Count;
-            using Count = unsigned int;
-            Element value = 3; Count amount = 4u;
-            out[0] = value + amount;
-        }";
-    assert_eq!(execute(source, &[0]), [7]);
 }
 
 #[test]
@@ -485,16 +391,6 @@ fn cuda_aliases_in_dead_code_still_define_names_and_check_source() {
     validate("__global__ void kernel() { return; typedef int Local; Local value = 1; }");
     rejected("__global__ void kernel() { return; using Bad = Missing; }");
     rejected("__global__ void kernel() {} using Bad = Missing;");
-}
-
-#[test]
-fn cuda_alias_chains_resolve_without_recursive_type_expansion() {
-    let mut source = String::from("typedef int Element0;\n");
-    for index in 1..256 {
-        source.push_str(&format!("using Element{index} = Element{};\n", index - 1));
-    }
-    source.push_str("__global__ void kernel(int *out) { Element255 value = 7; out[0] = value; }");
-    assert_eq!(execute(&source, &[0]), [7]);
 }
 
 #[cfg(all(feature = "wgsl-in", feature = "wgsl-out"))]

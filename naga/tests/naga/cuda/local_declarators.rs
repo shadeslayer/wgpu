@@ -2,7 +2,7 @@
 
 use naga::front::cuda::{parse_str, Options};
 
-use super::helpers::{execute, validate};
+use super::helpers::validate;
 
 fn rejected_at(source: &str, token: &str, occurrence: usize) {
     let error = parse_str(source, &Options::default()).unwrap_err();
@@ -17,57 +17,18 @@ fn rejected_at(source: &str, token: &str, occurrence: usize) {
 }
 
 #[test]
-fn cuda_local_declarators_finish_each_initializer_before_the_next() {
-    for (body, expected) in [
-        (
-            "int first = 1, second = first + 2, third = second + 3;
-            out[0] = first; out[1] = second; out[2] = third;",
-            [1, 3, 6],
-        ),
-        (
-            "int counter = 1; int first = counter++, second = counter++, third = counter;
-            out[0] = first; out[1] = second; out[2] = third;",
-            [1, 2, 3],
-        ),
-        (
-            "int value = 5; int first = value, second = (value = 9), third = first;
-            out[0] = first; out[1] = second; out[2] = third;",
-            [5, 9, 5],
-        ),
-    ] {
-        let source = format!("__global__ void kernel(int *out) {{ {body} }}");
-        assert_eq!(execute(&source, &[0; 3]), expected);
-    }
-}
-
-#[test]
-fn cuda_local_declarators_allow_mixed_omitted_and_initialized_values() {
-    for body in [
-        "int first, second = 3, third; first = second + 1; third = first + second;",
-        "int first = 4, second, third = first + 3; second = third - first;",
-        "int first, second, third; first = 4; second = 3; third = 7;",
-    ] {
-        let source = format!(
-            "__global__ void kernel(int *out) {{ {body} out[0] = first; out[1] = second; out[2] = third; }}"
-        );
-        assert_eq!(execute(&source, &[0; 3]), [4, 3, 7]);
-    }
-}
-
-#[test]
 fn cuda_local_declarators_share_each_supported_scalar_alias_type() {
-    for (ty, first, second, scalar, expected) in [
-        ("int", "-2", "7", naga::Scalar::I32, 5),
-        ("unsigned", "3u", "5u", naga::Scalar::U32, 8),
-        ("float", "2.5f", "3.5f", naga::Scalar::F32, 6),
-        ("bool", "true", "false", naga::Scalar::BOOL, 1),
+    for (ty, first, second, scalar) in [
+        ("int", "-2", "7", naga::Scalar::I32),
+        ("unsigned", "3u", "5u", naga::Scalar::U32),
+        ("float", "2.5f", "3.5f", naga::Scalar::F32),
+        ("bool", "true", "false", naga::Scalar::BOOL),
     ] {
         let source = format!(
             "using Value = {ty}; __global__ void kernel(int *out) {{
                 Value first = {first}, second; second = {second}; out[0] = int(first + second);
             }}"
         );
-        assert_eq!(execute(&source, &[0]), [expected]);
         let (module, _) = validate(&source);
         for (_, local) in module.entry_points[0].function.local_variables.iter() {
             if matches!(local.name.as_deref(), Some("first" | "second")) {
@@ -81,28 +42,7 @@ fn cuda_local_declarators_share_each_supported_scalar_alias_type() {
 }
 
 #[test]
-fn cuda_local_declarators_cache_the_type_before_a_global_alias_is_hidden() {
-    for body in [
-        "Value Value = 3, next = Value + 1;",
-        "Value Value, next; Value = 3; next = Value + 1;",
-    ] {
-        let source = format!(
-            "using Value = int; __global__ void kernel(int *out) {{ {body} out[0] = Value; out[1] = next; }}"
-        );
-        assert_eq!(execute(&source, &[0; 2]), [3, 4]);
-    }
-}
-
-#[test]
 fn cuda_local_declarators_apply_const_to_every_item() {
-    for prefix in ["const int", "int const", "Frozen"] {
-        let source = format!(
-            "using Frozen = const int; __global__ void kernel(int *out) {{
-                {prefix} first = 3, second = first + 1; out[0] = second;
-            }}"
-        );
-        assert_eq!(execute(&source, &[0]), [4]);
-    }
     rejected_at(
         "__global__ void kernel() { const int first, second = 2; }",
         ",",
@@ -122,21 +62,6 @@ fn cuda_local_declarators_apply_const_to_every_item() {
         "using Frozen = const int; __global__ void kernel() { Frozen first = 1, second = 2; second = 3; }",
         "second",
         1,
-    );
-}
-
-#[test]
-fn cuda_local_declarator_names_enter_scope_only_when_reached() {
-    assert_eq!(
-        execute(
-            "__global__ void kernel(int *out) {
-                int value = 9;
-                { int first = value, value = 3; out[0] = first; out[1] = value; }
-                out[2] = value;
-            }",
-            &[0; 3]
-        ),
-        [9, 3, 9]
     );
 }
 
@@ -166,21 +91,6 @@ fn cuda_local_declarator_initializers_bind_their_own_names_in_ir() {
         .collect();
     assert_eq!(locals.len(), 2);
     assert_eq!(loaded, locals);
-}
-
-#[test]
-fn cuda_local_declarators_load_conditional_references_before_later_side_effects() {
-    assert_eq!(
-        execute(
-            "__global__ void kernel(int *out) {
-                int first = 3, second = 9;
-                int selected = true ? first : second, changed = (first = 7);
-                out[0] = selected; out[1] = changed;
-            }",
-            &[0; 2]
-        ),
-        [3, 7]
-    );
 }
 
 #[test]
@@ -290,14 +200,6 @@ fn cuda_local_declarators_keep_other_declarator_forms_unsupported() {
 
 #[test]
 fn cuda_local_declarators_allow_comma_expressions_in_full_expression_contexts() {
-    for (statement, expected) in [
-        ("int first = (1, 2); out[0] = first;", [2, 0]),
-        ("int first = true ? 1, 2 : 3; out[0] = first;", [2, 0]),
-        ("out[0] = 1, out[1] = 2;", [1, 2]),
-    ] {
-        let source = format!("__global__ void kernel(int *out) {{ {statement} }}");
-        assert_eq!(execute(&source, &[0; 2]), expected);
-    }
     validate("__global__ void kernel() { for (int first = 0; first < 1; ++first, ++first) {} }");
 }
 
@@ -317,23 +219,6 @@ fn cuda_local_declarators_in_unreachable_source_are_still_checked() {
         "consume()",
         1,
     );
-}
-
-#[test]
-fn cuda_local_declarator_lists_do_not_add_expression_nesting() {
-    let declarators = (0..128)
-        .map(|index| {
-            if index == 0 {
-                String::from("value0 = 0")
-            } else {
-                format!("value{index} = value{} + 1", index - 1)
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-    let source =
-        format!("__global__ void kernel(int *out) {{ int {declarators}; out[0] = value127; }}");
-    assert_eq!(execute(&source, &[0]), [127]);
 }
 
 #[test]

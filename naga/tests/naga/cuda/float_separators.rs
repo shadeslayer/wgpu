@@ -2,7 +2,7 @@
 
 use naga::front::cuda::{parse_str, Options};
 
-use super::helpers::{execute, validate};
+use super::helpers::validate;
 
 fn returned_bits(module: &naga::Module, name: &str) -> u32 {
     let function = module
@@ -119,17 +119,6 @@ fn cuda_decimal_float_separators_do_not_make_leading_zeros_octal() {
     ] {
         assert_eq!(literal_bits(text), bits, "{text}");
     }
-}
-
-#[test]
-fn cuda_decimal_float_separators_preserve_exponent_signs_and_adjacent_operators() {
-    let source = "__global__ void kernel(int *out) {
-        out[0] = 1'2.5f * 2.0f;
-        out[1] = 1.0e+0'2f-2.0f;
-        out[2] = 1'0.0e-0'1f+2.0f;
-        out[3] = int(1'0.5F);
-    }";
-    assert_eq!(execute(source, &[0; 4]), [25, 98, 3, 10]);
 }
 
 #[test]

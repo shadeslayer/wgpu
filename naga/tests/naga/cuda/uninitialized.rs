@@ -2,7 +2,7 @@
 
 use naga::front::cuda::{parse_str, Options};
 
-use super::helpers::{execute, validate};
+use super::helpers::validate;
 
 fn rejected_at(source: &str, token: &str, occurrence: usize) {
     let error = parse_str(source, &Options::default()).unwrap_err();
@@ -14,21 +14,6 @@ fn rejected_at(source: &str, token: &str, occurrence: usize) {
         "{source}: {error}"
     );
     assert!(source.get(error.span.to_range().unwrap()).is_some());
-}
-
-#[test]
-fn cuda_mutable_scalar_locals_can_be_assigned_after_declaration() {
-    for (ty, value, expected) in [
-        ("int", "-7", -7),
-        ("unsigned", "0x123u", 291),
-        ("float", "3.75f", 3),
-        ("bool", "true", 1),
-    ] {
-        let source = format!(
-            "__global__ void kernel(int *out) {{ {ty} value; value = {value}; out[0] = value; }}"
-        );
-        assert_eq!(execute(&source, &[0]), [expected], "{ty}");
-    }
 }
 
 #[test]
@@ -50,14 +35,6 @@ fn cuda_bare_scalar_declaration_has_no_explicit_initializer_or_store() {
 
 #[test]
 fn cuda_mutable_alias_locals_allow_later_initialization() {
-    assert_eq!(
-        execute(
-            "using Sample = float; using Value = Sample;
-            __global__ void kernel(int *out) { Value value; value = 5.5f; out[0] = int(value); }",
-            &[0]
-        ),
-        [5]
-    );
     for source in [
         "__global__ void kernel() { const int value; }",
         "__global__ void kernel() { int const value; }",
@@ -73,43 +50,6 @@ fn cuda_mutable_alias_locals_allow_later_initialization() {
         };
         rejected_at(source, ";", occurrence);
     }
-}
-
-#[test]
-fn cuda_declared_locals_can_be_assigned_on_each_branch_before_use() {
-    for (condition, expected) in [("true", 7), ("false", 11)] {
-        let source = format!(
-            "__global__ void kernel(int *out) {{
-                int value;
-                if ({condition}) {{ value = 7; }} else {{ value = 11; }}
-                out[0] = value;
-            }}"
-        );
-        assert_eq!(execute(&source, &[0]), [expected]);
-    }
-}
-
-#[test]
-fn cuda_bare_local_shadowing_keeps_inner_and_outer_assignments_separate() {
-    assert_eq!(
-        execute(
-            "__global__ void kernel(int *out) {
-                int value = 7;
-                { int value; value = 3; out[0] = value; }
-                out[1] = value;
-            }",
-            &[0; 2]
-        ),
-        [3, 7]
-    );
-    assert_eq!(
-        execute(
-            "using Value = int;
-            __global__ void kernel(int *out) { Value Value; Value = 9; out[0] = Value; }",
-            &[0]
-        ),
-        [9]
-    );
 }
 
 #[test]
@@ -207,14 +147,6 @@ fn cuda_bare_declarations_keep_duplicate_reserved_and_hidden_name_errors() {
 
 #[test]
 fn cuda_scalar_declaration_lists_accept_initialized_and_omitted_initializers() {
-    for declaration in [
-        "int value, other; value = 1; other = 2;",
-        "int value = 1, other = 2;",
-    ] {
-        let source =
-            format!("__global__ void kernel(int *out) {{ {declaration} out[0] = value + other; }}");
-        assert_eq!(execute(&source, &[0]), [3]);
-    }
     validate("__global__ void kernel() { return; int value, other; }");
 }
 

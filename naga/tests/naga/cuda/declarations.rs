@@ -2,7 +2,7 @@
 
 use naga::front::cuda::{parse_str, Options};
 
-use super::helpers::{execute, validate};
+use super::helpers::validate;
 
 fn rejected(statement: &str) {
     let source = format!(
@@ -40,21 +40,6 @@ fn cuda_rejects_unsupported_parenthesized_declarators_with_initializers() {
     for statement in ["int(value) = 1;", "int((value)) = 1;", "int(out[3]) = 1;"] {
         rejected(statement);
     }
-}
-
-#[test]
-fn cuda_unambiguous_constructor_statements_keep_their_expression_meaning() {
-    let source = "__global__ void kernel(int *out) {
-        int value = 3;
-        int(value) + 1;
-        int((value)) + 1;
-        int(value = 1);
-        (int(value));
-        int(value + 1);
-        static_cast<int>(value);
-        out[0] = value;
-    }";
-    assert_eq!(execute(source, &[0]), [1]);
 }
 
 #[test]

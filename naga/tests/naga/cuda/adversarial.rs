@@ -13,51 +13,6 @@ fn validate(source: &str) -> naga::Module {
     module
 }
 
-fn integer_value(function: &naga::Function, handle: naga::Handle<naga::Expression>) -> i32 {
-    match function.expressions[handle] {
-        naga::Expression::Literal(naga::Literal::I32(value)) => value,
-        naga::Expression::Unary {
-            op: naga::UnaryOperator::Negate,
-            expr,
-        } => -integer_value(function, expr),
-        naga::Expression::Binary { op, left, right } => {
-            let left = integer_value(function, left);
-            let right = integer_value(function, right);
-            match op {
-                naga::BinaryOperator::Add => left + right,
-                naga::BinaryOperator::Subtract => left - right,
-                naga::BinaryOperator::Multiply => left * right,
-                naga::BinaryOperator::Divide => left / right,
-                _ => panic!("unexpected operator: {op:?}"),
-            }
-        }
-        ref expression => panic!("unexpected expression: {expression:?}"),
-    }
-}
-
-#[test]
-fn cuda_arithmetic_preserves_precedence_and_left_associativity() {
-    let module = validate(
-        "__global__ void arithmetic(int *out) {\n\
-         out[0] = 20 - 3 - 2;\n\
-         out[1] = 24 / 3 / 2;\n\
-         out[2] = 2 + 3 * 4;\n\
-         out[3] = -(2 + 3) * 4;\n\
-         out[4] = 20 - (3 - 2);\n\
-         }",
-    );
-    let function = &module.entry_points[0].function;
-    let values: Vec<_> = function
-        .body
-        .iter()
-        .filter_map(|statement| match *statement {
-            naga::Statement::Store { value, .. } => Some(integer_value(function, value)),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(values, [15, 4, 14, -20, 19]);
-}
-
 #[test]
 fn cuda_mutable_local_loads_follow_assignments() {
     let module = validate(

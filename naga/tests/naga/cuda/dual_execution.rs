@@ -2,7 +2,7 @@
 
 use naga::front::cuda::{parse_str, Options};
 
-use super::helpers::{execute, validate};
+use super::helpers::validate;
 
 fn function<'a>(
     module: &'a naga::Module,
@@ -271,7 +271,6 @@ fn cuda_dual_execution_helpers_preserve_kernel_bindings_and_workgroup_size() {
         .arguments
         .iter()
         .all(|argument| argument.binding.is_none()));
-    assert_eq!(execute("__host__ __device__ int unused(int value) { return value; } __global__ void kernel(int *out) { int value = 3; out[0] = ++value * 2; }", &[0]), [8]);
 }
 
 #[test]

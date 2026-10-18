@@ -2,7 +2,7 @@
 
 use naga::front::cuda::{parse_str, Options};
 
-use super::helpers::{execute, validate};
+use super::helpers::validate;
 
 fn rejected(source: &str) -> naga::front::cuda::ParseError {
     let error = parse_str(source, &Options::default()).unwrap_err();
@@ -54,21 +54,6 @@ fn cuda_inline_helper_specifiers_accept_each_header_order() {
             __global__ void kernel(int *out) {{ out[0] = helper(3); }}"
         ));
         assert_eq!(helper_result(&module, "helper"), Some(naga::Scalar::I32));
-    }
-}
-
-#[test]
-fn cuda_inline_kernel_specifiers_accept_each_header_order_and_keep_the_body() {
-    for header in [
-        "inline __global__ void",
-        "inline void __global__",
-        "__global__ inline void",
-        "__global__ void inline",
-        "void inline __global__",
-        "void __global__ inline",
-    ] {
-        let source = format!("{header} kernel(int *out) {{ out[0] = 7; }}");
-        assert_eq!(execute(&source, &[0]), [7], "{header}");
     }
 }
 
@@ -165,19 +150,6 @@ fn cuda_inline_void_helpers_drop_top_level_const_and_keep_void_return_rules() {
         ));
         assert_eq!(helper_result(&module, "consume"), None);
         assert_eq!(helper_result(&module, "forward"), None);
-    }
-}
-
-#[test]
-fn cuda_inline_cv_void_kernels_remain_void_compute_entry_points() {
-    for header in [
-        "inline __global__ const void",
-        "const inline void __global__",
-        "void const __global__ inline",
-        "__global__ void inline const",
-    ] {
-        let source = format!("{header} kernel(int *out) {{ out[0] = 9; }}");
-        assert_eq!(execute(&source, &[0]), [9], "{header}");
     }
 }
 
