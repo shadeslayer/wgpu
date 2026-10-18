@@ -2,14 +2,7 @@
 
 use naga::front::cuda::{parse_str, Options};
 
-const INDEXED: &str =
-    "__global__ void convert(const float *input, float *output, unsigned int n) {\n\
-    int i = blockIdx.x * blockDim.x + threadIdx.x;\n\
-    if (i < n) {\n\
-        float offset = static_cast<float>(i);\n\
-        output[i] = input[i] + offset;\n\
-    }\n\
-}";
+const INDEXED: &str = include_str!("../../in/cuda/numeric-conversions.cu");
 
 const TYPES: [(&str, &str, naga::Scalar); 4] = [
     ("bool", "true", naga::Scalar::BOOL),
@@ -18,16 +11,7 @@ const TYPES: [(&str, &str, naga::Scalar); 4] = [
     ("float", "1.5f", naga::Scalar::F32),
 ];
 
-fn validate(source: &str) -> (naga::Module, naga::valid::ModuleInfo) {
-    let module = parse_str(source, &Options::default()).unwrap();
-    let info = naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::empty(),
-    )
-    .validate(&module)
-    .unwrap();
-    (module, info)
-}
+use super::helpers::validate;
 
 fn expression_scalar(
     module: &naga::Module,
@@ -286,71 +270,5 @@ fn cuda_casts_contribute_to_the_expression_graph_depth_limit() {
 #[test]
 fn cuda_numeric_conversions_roundtrip_through_wgsl() {
     let (module, info) = validate(INDEXED);
-    let source =
-        naga::back::wgsl::write_string(&module, &info, naga::back::wgsl::WriterFlags::empty())
-            .unwrap();
-    let reparsed = naga::front::wgsl::parse_str(&source).unwrap();
-    naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::empty(),
-    )
-    .validate(&reparsed)
-    .unwrap();
-}
-
-#[cfg(feature = "spv-out")]
-#[test]
-fn cuda_numeric_conversions_emit_spirv() {
-    let (module, info) = validate(INDEXED);
-    let words = naga::back::spv::write_vec(&module, &info, &Default::default(), None).unwrap();
-    rspirv::dr::load_words(words).unwrap();
-}
-
-#[cfg(feature = "glsl-out")]
-#[test]
-fn cuda_numeric_conversions_emit_glsl() {
-    let (module, info) = validate(INDEXED);
-    let mut output = String::new();
-    naga::back::glsl::Writer::new(
-        &mut output,
-        &module,
-        &info,
-        &Default::default(),
-        &naga::back::glsl::PipelineOptions {
-            shader_stage: naga::ShaderStage::Compute,
-            entry_point: "convert".into(),
-            multiview: None,
-        },
-        Default::default(),
-    )
-    .unwrap()
-    .write()
-    .unwrap();
-}
-
-#[cfg(feature = "hlsl-out")]
-#[test]
-fn cuda_numeric_conversions_emit_hlsl() {
-    let (module, info) = validate(INDEXED);
-    let mut output = String::new();
-    let options = naga::back::hlsl::Options::default();
-    let pipeline = naga::back::hlsl::PipelineOptions::default();
-    let reflection = naga::back::hlsl::Writer::new(&mut output, &options, &pipeline)
-        .write(&module, &info, None)
-        .unwrap();
-    for entry in reflection.entry_point_names {
-        entry.unwrap();
-    }
-}
-
-#[cfg(feature = "msl-out")]
-#[test]
-fn cuda_numeric_conversions_emit_msl() {
-    let (module, info) = validate(INDEXED);
-    let (_, reflection) =
-        naga::back::msl::write_string(&module, &info, &Default::default(), &Default::default())
-            .unwrap();
-    for entry in reflection.entry_point_names {
-        entry.unwrap();
-    }
+    super::helpers::wgsl_roundtrip(&module, &info, naga::back::wgsl::WriterFlags::empty());
 }

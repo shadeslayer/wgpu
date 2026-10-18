@@ -1,0 +1,77 @@
+; SPIR-V
+; Version: 1.1
+; Generator: rspirv
+; Bound: 49
+OpCapability Shader
+OpExtension "SPV_KHR_storage_buffer_storage_class"
+%1 = OpExtInstImport "GLSL.std.450"
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %18 "updates" %15
+OpExecutionMode %18 LocalSize 1 1 1
+OpDecorate %4 ArrayStride 4
+OpMemberDecorate %5 0 Offset 0
+OpDecorate %8 DescriptorSet 0
+OpDecorate %8 Binding 0
+OpDecorate %9 Block
+OpMemberDecorate %9 0 Offset 0
+OpDecorate %11 DescriptorSet 0
+OpDecorate %11 Binding 1
+OpDecorate %12 Block
+OpMemberDecorate %12 0 Offset 0
+OpDecorate %15 BuiltIn LocalInvocationId
+%2 = OpTypeVoid
+%3 = OpTypeInt 32 1
+%4 = OpTypeRuntimeArray %3
+%5 = OpTypeStruct %3
+%7 = OpTypeInt 32 0
+%6 = OpTypeVector %7 3
+%9 = OpTypeStruct %4
+%10 = OpTypePointer StorageBuffer %9
+%8 = OpVariable  %10  StorageBuffer
+%12 = OpTypeStruct %5
+%13 = OpTypePointer Uniform %12
+%11 = OpVariable  %13  Uniform
+%16 = OpTypePointer Input %6
+%15 = OpVariable  %16  Input
+%19 = OpTypeFunction %2
+%20 = OpTypePointer StorageBuffer %4
+%21 = OpConstant  %7  0
+%23 = OpTypePointer Uniform %5
+%25 = OpConstant  %3  1
+%27 = OpTypePointer Function %3
+%28 = OpConstantNull  %3
+%30 = OpConstantNull  %3
+%32 = OpTypePointer Uniform %3
+%39 = OpTypePointer StorageBuffer %3
+%18 = OpFunction  %2  None %19
+%14 = OpLabel
+%26 = OpVariable  %27  Function %28
+%29 = OpVariable  %27  Function %30
+%17 = OpLoad  %6  %15
+%22 = OpAccessChain  %20  %8 %21
+%24 = OpAccessChain  %23  %11 %21
+OpBranch %31
+%31 = OpLabel
+%33 = OpAccessChain  %32  %24 %21
+%34 = OpLoad  %3  %33
+OpStore %26 %34
+%35 = OpLoad  %3  %26
+%36 = OpIAdd  %3  %35 %25
+OpStore %26 %36
+OpStore %29 %35
+%37 = OpLoad  %3  %29
+%38 = OpCompositeExtract  %7  %17 0
+%40 = OpAccessChain  %39  %22 %38
+%41 = OpLoad  %3  %40
+%42 = OpIAdd  %3  %41 %37
+%43 = OpAccessChain  %39  %22 %38
+OpStore %43 %42
+%44 = OpLoad  %3  %26
+%45 = OpIAdd  %3  %44 %25
+OpStore %26 %45
+%46 = OpLoad  %3  %26
+%47 = OpCompositeExtract  %7  %17 0
+%48 = OpAccessChain  %39  %22 %47
+OpStore %48 %46
+OpReturn
+OpFunctionEnd

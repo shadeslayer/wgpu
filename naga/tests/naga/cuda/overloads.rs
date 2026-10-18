@@ -2,16 +2,7 @@
 
 use naga::front::cuda::{parse_str, Options};
 
-fn validate(source: &str) -> (naga::Module, naga::valid::ModuleInfo) {
-    let module = parse_str(source, &Options::default()).unwrap();
-    let info = naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::empty(),
-    )
-    .validate(&module)
-    .unwrap();
-    (module, info)
-}
+use super::helpers::validate;
 
 const TYPES: [(&str, &str, naga::Scalar); 4] = [
     ("bool", "true", naga::Scalar::BOOL),
@@ -558,17 +549,9 @@ fn cuda_overloads_round_trip_distinct_helper_signatures_through_wgsl() {
         __device__ int nested(int value) { return choose(value); }
         __global__ void kernel(float *out) { choose(true); out[0] = nested(3) + choose(2.0f); }",
     );
-    let text = naga::back::wgsl::write_string(
+    super::helpers::wgsl_roundtrip(
         &module,
         &info,
         naga::back::wgsl::WriterFlags::EXPLICIT_TYPES,
-    )
-    .unwrap();
-    let reparsed = naga::front::wgsl::parse_str(&text).unwrap();
-    naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::empty(),
-    )
-    .validate(&reparsed)
-    .unwrap();
+    );
 }

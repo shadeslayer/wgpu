@@ -35,16 +35,7 @@ use naga::front::cuda::{parse_str, Options};
 
 const VECTOR_ADD: &str = include_str!("../../in/cuda/vector-add.cu");
 
-fn validate(source: &str, options: &Options) -> (naga::Module, naga::valid::ModuleInfo) {
-    let module = parse_str(source, options).unwrap();
-    let info = naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::empty(),
-    )
-    .validate(&module)
-    .unwrap();
-    (module, info)
-}
+use helpers::validate_with_options as validate;
 
 #[test]
 fn cuda_vector_add_has_compute_entry_and_storage_bindings() {
@@ -176,66 +167,7 @@ fn cuda_rejects_zero_workgroup_dimension() {
 #[test]
 fn cuda_emits_wgsl_that_roundtrips() {
     let (module, info) = validate(VECTOR_ADD, &Options::default());
-    let output =
-        naga::back::wgsl::write_string(&module, &info, naga::back::wgsl::WriterFlags::empty())
-            .unwrap();
-    let reparsed = naga::front::wgsl::parse_str(&output).unwrap();
-    naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::empty(),
-    )
-    .validate(&reparsed)
-    .unwrap();
-}
-
-#[cfg(feature = "spv-out")]
-#[test]
-fn cuda_emits_spirv() {
-    let (module, info) = validate(VECTOR_ADD, &Options::default());
-    let words = naga::back::spv::write_vec(&module, &info, &Default::default(), None).unwrap();
-    assert_eq!(words[0], 0x07230203);
-    rspirv::dr::load_words(words).unwrap();
-}
-
-#[cfg(feature = "glsl-out")]
-#[test]
-fn cuda_emits_glsl() {
-    let (module, info) = validate(VECTOR_ADD, &Options::default());
-    let mut output = String::new();
-    let options = naga::back::glsl::Options::default();
-    let pipeline = naga::back::glsl::PipelineOptions {
-        shader_stage: naga::ShaderStage::Compute,
-        entry_point: "add".into(),
-        multiview: None,
-    };
-    naga::back::glsl::Writer::new(
-        &mut output,
-        &module,
-        &info,
-        &options,
-        &pipeline,
-        Default::default(),
-    )
-    .unwrap()
-    .write()
-    .unwrap();
-    assert!(output.contains("void main()"));
-}
-
-#[cfg(feature = "hlsl-out")]
-#[test]
-fn cuda_emits_hlsl() {
-    let (module, info) = validate(VECTOR_ADD, &Options::default());
-    let mut output = String::new();
-    let options = naga::back::hlsl::Options::default();
-    let pipeline = naga::back::hlsl::PipelineOptions::default();
-    let reflection = naga::back::hlsl::Writer::new(&mut output, &options, &pipeline)
-        .write(&module, &info, None)
-        .unwrap();
-    for name in reflection.entry_point_names {
-        name.unwrap();
-    }
-    assert!(output.contains("numthreads"));
+    helpers::wgsl_roundtrip(&module, &info, naga::back::wgsl::WriterFlags::empty());
 }
 
 #[cfg(feature = "hlsl-out")]
@@ -313,17 +245,4 @@ fn hlsl_dispatch_constants_are_required_only_for_selected_entry_points() {
             .write(&module, &info, None);
         assert_eq!(result.is_ok(), entry_point == "empty");
     }
-}
-
-#[cfg(feature = "msl-out")]
-#[test]
-fn cuda_emits_msl() {
-    let (module, info) = validate(VECTOR_ADD, &Options::default());
-    let (output, reflection) =
-        naga::back::msl::write_string(&module, &info, &Default::default(), &Default::default())
-            .unwrap();
-    for name in reflection.entry_point_names {
-        name.unwrap();
-    }
-    assert!(output.contains("kernel void"));
 }

@@ -2,38 +2,9 @@
 
 use naga::front::cuda::{parse_str, Options};
 
-const LOOPS: &str = r#"
-__global__ void loops(int *out, int n) {
-    int sum = 0;
-    for (int i = 0; i < n; i = i + 1) {
-        if (i == 2) continue;
-        if (i == 7) break;
-        sum = sum + i;
-    }
-    int i = 0;
-    while (i < 3) {
-        i = i + 1;
-        if (i == 2) continue;
-        sum = sum + 10;
-    }
-    do {
-        sum = sum + 100;
-        if (sum > 200) break;
-    } while (sum < 150);
-    out[threadIdx.x] = sum;
-}
-"#;
+const LOOPS: &str = include_str!("../../in/cuda/loops.cu");
 
-fn validate(source: &str) -> (naga::Module, naga::valid::ModuleInfo) {
-    let module = parse_str(source, &Options::default()).unwrap();
-    let info = naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::empty(),
-    )
-    .validate(&module)
-    .unwrap();
-    (module, info)
-}
+use super::helpers::validate;
 
 fn loops<'a>(block: &'a naga::Block, result: &mut Vec<&'a naga::Statement>) {
     for statement in block {
@@ -176,71 +147,5 @@ fn cuda_rejects_malformed_and_excessively_nested_loops() {
 #[test]
 fn cuda_loops_roundtrip_through_wgsl() {
     let (module, info) = validate(LOOPS);
-    let output =
-        naga::back::wgsl::write_string(&module, &info, naga::back::wgsl::WriterFlags::empty())
-            .unwrap();
-    let reparsed = naga::front::wgsl::parse_str(&output).unwrap();
-    naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::empty(),
-    )
-    .validate(&reparsed)
-    .unwrap();
-}
-
-#[cfg(feature = "spv-out")]
-#[test]
-fn cuda_loops_emit_spirv() {
-    let (module, info) = validate(LOOPS);
-    let words = naga::back::spv::write_vec(&module, &info, &Default::default(), None).unwrap();
-    rspirv::dr::load_words(words).unwrap();
-}
-
-#[cfg(feature = "glsl-out")]
-#[test]
-fn cuda_loops_emit_glsl() {
-    let (module, info) = validate(LOOPS);
-    let mut output = String::new();
-    let pipeline = naga::back::glsl::PipelineOptions {
-        shader_stage: naga::ShaderStage::Compute,
-        entry_point: "loops".into(),
-        multiview: None,
-    };
-    naga::back::glsl::Writer::new(
-        &mut output,
-        &module,
-        &info,
-        &Default::default(),
-        &pipeline,
-        Default::default(),
-    )
-    .unwrap()
-    .write()
-    .unwrap();
-}
-
-#[cfg(feature = "hlsl-out")]
-#[test]
-fn cuda_loops_emit_hlsl() {
-    let (module, info) = validate(LOOPS);
-    let mut output = String::new();
-    let reflection =
-        naga::back::hlsl::Writer::new(&mut output, &Default::default(), &Default::default())
-            .write(&module, &info, None)
-            .unwrap();
-    for name in reflection.entry_point_names {
-        name.unwrap();
-    }
-}
-
-#[cfg(feature = "msl-out")]
-#[test]
-fn cuda_loops_emit_msl() {
-    let (module, info) = validate(LOOPS);
-    let (_, reflection) =
-        naga::back::msl::write_string(&module, &info, &Default::default(), &Default::default())
-            .unwrap();
-    for name in reflection.entry_point_names {
-        name.unwrap();
-    }
+    super::helpers::wgsl_roundtrip(&module, &info, naga::back::wgsl::WriterFlags::empty());
 }

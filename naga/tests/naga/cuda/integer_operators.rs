@@ -2,29 +2,9 @@
 
 use naga::front::cuda::{parse_str, Options};
 
-const INTEGER_KERNEL: &str =
-    "__global__ void integer_ops(unsigned int *out, int value, unsigned int amount) {
-    int remainder = value % -3;
-    unsigned int bits = unsigned(remainder) & 15u;
-    bits |= 8u;
-    bits ^= 1u;
-    bits <<= amount;
-    bits >>= 1u;
-    bits %= 97u;
-    bits &= 255u;
-    out[threadIdx.x] = ~bits;
-}";
+const INTEGER_KERNEL: &str = include_str!("../../in/cuda/integer-operators.cu");
 
-fn validate(source: &str) -> (naga::Module, naga::valid::ModuleInfo) {
-    let module = parse_str(source, &Options::default()).unwrap();
-    let info = naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::empty(),
-    )
-    .validate(&module)
-    .unwrap();
-    (module, info)
-}
+use super::helpers::validate;
 
 fn scalar(
     module: &naga::Module,
@@ -352,64 +332,8 @@ fn cuda_integer_expression_depth_remains_bounded() {
 fn cuda_integer_operators_roundtrip_through_wgsl() {
     for source in [INTEGER_KERNEL, "__global__ void constants(int *out) { out[0] = 1 << 31; out[1] = 4294967295u << 1; out[2] = -7 % 3; out[3] = 7 % -3; out[4] = -7 % -3; out[5] = -8 >> 1u; }"] {
         let (module, info) = validate(source);
-        let output = naga::back::wgsl::write_string(&module, &info, naga::back::wgsl::WriterFlags::empty()).unwrap();
-        let reparsed = naga::front::wgsl::parse_str(&output).unwrap_or_else(|error| panic!("{error:?}\n{output}"));
-        naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::empty()).validate(&reparsed).unwrap();
-    }
-}
+        super::helpers::wgsl_roundtrip(&module, &info, naga::back::wgsl::WriterFlags::empty());
 
-#[cfg(feature = "spv-out")]
-#[test]
-fn cuda_integer_operators_emit_spirv() {
-    let (module, info) = validate(INTEGER_KERNEL);
-    let words = naga::back::spv::write_vec(&module, &info, &Default::default(), None).unwrap();
-    rspirv::dr::load_words(words).unwrap();
-}
 
-#[cfg(feature = "glsl-out")]
-#[test]
-fn cuda_integer_operators_emit_glsl() {
-    let (module, info) = validate(INTEGER_KERNEL);
-    let mut output = String::new();
-    naga::back::glsl::Writer::new(
-        &mut output,
-        &module,
-        &info,
-        &Default::default(),
-        &naga::back::glsl::PipelineOptions {
-            shader_stage: naga::ShaderStage::Compute,
-            entry_point: "integer_ops".into(),
-            multiview: None,
-        },
-        Default::default(),
-    )
-    .unwrap()
-    .write()
-    .unwrap();
-}
-
-#[cfg(feature = "hlsl-out")]
-#[test]
-fn cuda_integer_operators_emit_hlsl() {
-    let (module, info) = validate(INTEGER_KERNEL);
-    let mut output = String::new();
-    let reflection =
-        naga::back::hlsl::Writer::new(&mut output, &Default::default(), &Default::default())
-            .write(&module, &info, None)
-            .unwrap();
-    for entry in reflection.entry_point_names {
-        entry.unwrap();
-    }
-}
-
-#[cfg(feature = "msl-out")]
-#[test]
-fn cuda_integer_operators_emit_msl() {
-    let (module, info) = validate(INTEGER_KERNEL);
-    let (_, reflection) =
-        naga::back::msl::write_string(&module, &info, &Default::default(), &Default::default())
-            .unwrap();
-    for entry in reflection.entry_point_names {
-        entry.unwrap();
     }
 }

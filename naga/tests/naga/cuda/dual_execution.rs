@@ -442,16 +442,9 @@ fn cuda_dual_execution_helpers_roundtrip_through_wgsl() {
             if (i < count) { consume(false); out[i] = scale(advance(i)); }
         }",
     );
-    let text =
-        naga::back::wgsl::write_string(&module, &info, naga::back::wgsl::WriterFlags::empty())
-            .unwrap();
-    let reparsed = naga::front::wgsl::parse_str(&text).unwrap();
-    naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::empty(),
-    )
-    .validate(&reparsed)
-    .unwrap();
+    let (_, reparsed) =
+        super::helpers::wgsl_roundtrip(&module, &info, naga::back::wgsl::WriterFlags::empty());
+
     assert_eq!(reparsed.functions.len(), 3);
     assert_eq!(reparsed.entry_points.len(), 1);
 }

@@ -2,16 +2,7 @@
 
 use naga::front::cuda::{parse_str, Options};
 
-fn validate(source: &str) -> naga::Module {
-    let module = parse_str(source, &Options::default()).unwrap();
-    naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::empty(),
-    )
-    .validate(&module)
-    .unwrap();
-    module
-}
+use super::helpers::parse_and_validate as validate;
 
 fn function<'a>(
     module: &'a naga::Module,
@@ -455,15 +446,7 @@ fn cuda_device_functions_preserve_nesting_limits() {
 #[test]
 #[cfg(all(feature = "wgsl-in", feature = "wgsl-out"))]
 fn cuda_device_function_signatures_and_calls_roundtrip_through_wgsl() {
-    let module = validate(include_str!("../../in/cuda/device-functions.cu"));
-    let mut validator = naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::empty(),
-    );
-    let info = validator.validate(&module).unwrap();
-    let wgsl =
-        naga::back::wgsl::write_string(&module, &info, naga::back::wgsl::WriterFlags::empty())
-            .unwrap();
-    let roundtrip = naga::front::wgsl::parse_str(&wgsl).unwrap();
-    validator.validate(&roundtrip).unwrap();
+    let (module, info) =
+        super::helpers::validate(include_str!("../../in/cuda/device-functions.cu"));
+    super::helpers::wgsl_roundtrip(&module, &info, naga::back::wgsl::WriterFlags::empty());
 }

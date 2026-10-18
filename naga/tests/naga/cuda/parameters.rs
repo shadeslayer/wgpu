@@ -2,21 +2,9 @@
 
 use naga::front::cuda::{parse_str, Options};
 
-const SCALE: &str = "__global__ void scale(float factor, const float *input, float *output) {\n\
-    factor = factor * 2.0f;\n\
-    output[threadIdx.x] = input[threadIdx.x] * factor;\n\
-}";
+const SCALE: &str = include_str!("../../in/cuda/scalar-parameters.cu");
 
-fn validate(source: &str) -> (naga::Module, naga::valid::ModuleInfo) {
-    let module = parse_str(source, &Options::default()).unwrap();
-    let info = naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::empty(),
-    )
-    .validate(&module)
-    .unwrap();
-    (module, info)
-}
+use super::helpers::validate;
 
 fn uniform_scalar(module: &naga::Module, global: &naga::GlobalVariable) -> naga::Scalar {
     assert_eq!(global.space, naga::AddressSpace::Uniform);
@@ -176,71 +164,5 @@ fn cuda_scalar_parameters_reject_unsupported_forms() {
 #[test]
 fn cuda_scalar_parameters_roundtrip_through_wgsl() {
     let (module, info) = validate(SCALE);
-    let source =
-        naga::back::wgsl::write_string(&module, &info, naga::back::wgsl::WriterFlags::empty())
-            .unwrap();
-    let reparsed = naga::front::wgsl::parse_str(&source).unwrap();
-    naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::empty(),
-    )
-    .validate(&reparsed)
-    .unwrap();
-}
-
-#[cfg(feature = "spv-out")]
-#[test]
-fn cuda_scalar_parameters_emit_spirv() {
-    let (module, info) = validate(SCALE);
-    let words = naga::back::spv::write_vec(&module, &info, &Default::default(), None).unwrap();
-    rspirv::dr::load_words(words).unwrap();
-}
-
-#[cfg(feature = "glsl-out")]
-#[test]
-fn cuda_scalar_parameters_emit_glsl() {
-    let (module, info) = validate(SCALE);
-    let mut output = String::new();
-    naga::back::glsl::Writer::new(
-        &mut output,
-        &module,
-        &info,
-        &Default::default(),
-        &naga::back::glsl::PipelineOptions {
-            shader_stage: naga::ShaderStage::Compute,
-            entry_point: "scale".into(),
-            multiview: None,
-        },
-        Default::default(),
-    )
-    .unwrap()
-    .write()
-    .unwrap();
-}
-
-#[cfg(feature = "hlsl-out")]
-#[test]
-fn cuda_scalar_parameters_emit_hlsl() {
-    let (module, info) = validate(SCALE);
-    let mut output = String::new();
-    let options = naga::back::hlsl::Options::default();
-    let pipeline = naga::back::hlsl::PipelineOptions::default();
-    let reflection = naga::back::hlsl::Writer::new(&mut output, &options, &pipeline)
-        .write(&module, &info, None)
-        .unwrap();
-    for entry in reflection.entry_point_names {
-        entry.unwrap();
-    }
-}
-
-#[cfg(feature = "msl-out")]
-#[test]
-fn cuda_scalar_parameters_emit_msl() {
-    let (module, info) = validate(SCALE);
-    let (_, reflection) =
-        naga::back::msl::write_string(&module, &info, &Default::default(), &Default::default())
-            .unwrap();
-    for entry in reflection.entry_point_names {
-        entry.unwrap();
-    }
+    super::helpers::wgsl_roundtrip(&module, &info, naga::back::wgsl::WriterFlags::empty());
 }

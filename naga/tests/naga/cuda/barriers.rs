@@ -3,20 +3,13 @@
 use naga::front::cuda::{parse_str, Options};
 
 fn validate(source: &str) -> naga::Module {
-    let module = parse_str(
+    super::helpers::validate_with_options(
         source,
         &Options {
             workgroup_size: [64, 1, 1],
         },
     )
-    .unwrap();
-    naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::empty(),
-    )
-    .validate(&module)
-    .unwrap();
-    module
+    .0
 }
 
 #[test]

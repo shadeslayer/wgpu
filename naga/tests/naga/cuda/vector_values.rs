@@ -447,17 +447,9 @@ fn cuda_vector_fixture_preserves_scalar_storage_and_roundtrips_through_wgsl() {
             binding: 0
         })
     );
-    let output = naga::back::wgsl::write_string(
+    super::helpers::wgsl_roundtrip(
         &module,
         &info,
         naga::back::wgsl::WriterFlags::EXPLICIT_TYPES,
-    )
-    .unwrap();
-    let reparsed = naga::front::wgsl::parse_str(&output).unwrap();
-    naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::empty(),
-    )
-    .validate(&reparsed)
-    .unwrap();
+    );
 }

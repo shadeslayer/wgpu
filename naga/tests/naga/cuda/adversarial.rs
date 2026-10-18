@@ -2,16 +2,7 @@
 
 use naga::front::cuda::{parse_str, Options};
 
-fn validate(source: &str) -> naga::Module {
-    let module = parse_str(source, &Options::default()).unwrap();
-    naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::empty(),
-    )
-    .validate(&module)
-    .unwrap();
-    module
-}
+use super::helpers::parse_and_validate as validate;
 
 #[test]
 fn cuda_mutable_local_loads_follow_assignments() {

@@ -397,14 +397,5 @@ fn cuda_aliases_in_dead_code_still_define_names_and_check_source() {
 #[test]
 fn cuda_type_aliases_roundtrip_through_wgsl() {
     let (module, info) = validate(ALIASES);
-    let source =
-        naga::back::wgsl::write_string(&module, &info, naga::back::wgsl::WriterFlags::empty())
-            .unwrap();
-    let module = naga::front::wgsl::parse_str(&source).unwrap();
-    naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::empty(),
-    )
-    .validate(&module)
-    .unwrap();
+    super::helpers::wgsl_roundtrip(&module, &info, naga::back::wgsl::WriterFlags::empty());
 }

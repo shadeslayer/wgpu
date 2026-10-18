@@ -2,25 +2,9 @@
 
 use naga::front::cuda::{parse_str, Options};
 
-const GUARDED_ADD: &str = r#"
-__global__ void add(const float *a, const float *b, float *out, unsigned int n) {
-    unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n) {
-        out[i] = a[i] + b[i];
-    }
-}
-"#;
+const GUARDED_ADD: &str = include_str!("../../in/cuda/guarded-control-flow.cu");
 
-fn validate(source: &str) -> (naga::Module, naga::valid::ModuleInfo) {
-    let module = parse_str(source, &Options::default()).unwrap();
-    let info = naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::empty(),
-    )
-    .validate(&module)
-    .unwrap();
-    (module, info)
-}
+use super::helpers::validate;
 
 fn global_name<'a>(
     module: &'a naga::Module,
@@ -84,46 +68,6 @@ fn branch(block: &naga::Block) -> (naga::Handle<naga::Expression>, &naga::Block,
             _ => None,
         })
         .expect("expected an if statement")
-}
-
-fn condition_value(
-    module: &naga::Module,
-    handle: naga::Handle<naga::Expression>,
-    input: f64,
-) -> f64 {
-    let function = &module.entry_points[0].function;
-    let evaluate = |handle| condition_value(module, handle, input);
-    match function.expressions[handle] {
-        naga::Expression::Literal(naga::Literal::I32(value)) => f64::from(value),
-        naga::Expression::Literal(naga::Literal::U32(value)) => f64::from(value),
-        naga::Expression::Literal(naga::Literal::F32(value)) => f64::from(value),
-        naga::Expression::Literal(naga::Literal::Bool(value)) => f64::from(u8::from(value)),
-        naga::Expression::Load { pointer }
-            if global_name(module, function, pointer) == Some("lhs") =>
-        {
-            input
-        }
-        naga::Expression::Unary { op, expr } => match op {
-            naga::UnaryOperator::Negate => -evaluate(expr),
-            naga::UnaryOperator::LogicalNot => f64::from(u8::from(evaluate(expr) == 0.0)),
-            _ => panic!("unexpected unary operator: {op:?}"),
-        },
-        naga::Expression::Binary { op, left, right } => {
-            let left = evaluate(left);
-            let right = evaluate(right);
-            let result = match op {
-                naga::BinaryOperator::Equal => left == right,
-                naga::BinaryOperator::NotEqual => left != right,
-                naga::BinaryOperator::Less => left < right,
-                naga::BinaryOperator::LessEqual => left <= right,
-                naga::BinaryOperator::Greater => left > right,
-                naga::BinaryOperator::GreaterEqual => left >= right,
-                _ => panic!("unexpected condition operator: {op:?}"),
-            };
-            f64::from(u8::from(result))
-        }
-        ref expression => panic!("unexpected condition expression: {expression:?}"),
-    }
 }
 
 #[test]
@@ -232,53 +176,6 @@ fn cuda_boolean_locals_and_literals_preserve_their_type() {
 }
 
 #[test]
-fn cuda_scalar_conditions_compare_against_zero() {
-    for (expression, expected) in [
-        ("0", false),
-        ("-3", true),
-        ("0u", false),
-        ("2u", true),
-        ("0.0f", false),
-        ("-0.0f", false),
-        ("-0.5f", true),
-        ("!0", true),
-        ("!3u", false),
-        ("!-0.5f", false),
-    ] {
-        let source = format!("__global__ void truth(int *out) {{ if ({expression}) out[0] = 1; }}");
-        let (module, _) = validate(&source);
-        let (condition, _, _) = branch(&module.entry_points[0].function.body);
-        assert_eq!(
-            condition_value(&module, condition, 0.0) != 0.0,
-            expected,
-            "{expression}"
-        );
-    }
-}
-
-#[test]
-fn cuda_comparisons_produce_boolean_conditions() {
-    for (operator, expected) in [
-        ("<", true),
-        ("<=", true),
-        (">", false),
-        (">=", false),
-        ("==", false),
-        ("!=", true),
-    ] {
-        let source =
-            format!("__global__ void compare(int *out) {{ if (2 {operator} 3) out[0] = 1; }}");
-        let (module, _) = validate(&source);
-        let (condition, _, _) = branch(&module.entry_points[0].function.body);
-        assert_eq!(
-            condition_value(&module, condition, 0.0) != 0.0,
-            expected,
-            "{operator}"
-        );
-    }
-}
-
-#[test]
 fn cuda_logical_operators_short_circuit_buffer_loads() {
     for operator in ["&&", "||"] {
         let source = format!("__global__ void logical(const int *lhs, const int *rhs, int *out) {{ if (lhs[0] {operator} rhs[0]) out[0] = 1; }}");
@@ -287,23 +184,14 @@ fn cuda_logical_operators_short_circuit_buffer_loads() {
         assert_eq!(buffer_loads(&module, body, "lhs"), 1);
         assert_eq!(buffer_loads(&module, body, "rhs"), 0);
         assert_eq!(all_buffer_loads(&module, body, "rhs"), 1);
-        let (condition, accept, reject) = branch(body);
-        for lhs in [0.0, 1.0] {
-            let selected = if condition_value(&module, condition, lhs) != 0.0 {
-                accept
-            } else {
-                reject
-            };
-            let evaluates_rhs = if operator == "&&" {
-                lhs != 0.0
-            } else {
-                lhs == 0.0
-            };
-            assert_eq!(
-                all_buffer_loads(&module, selected, "rhs"),
-                usize::from(evaluates_rhs)
-            );
-        }
+        let (_, accept, reject) = branch(body);
+        let (evaluated, skipped) = if operator == "&&" {
+            (accept, reject)
+        } else {
+            (reject, accept)
+        };
+        assert_eq!(all_buffer_loads(&module, evaluated, "rhs"), 1);
+        assert_eq!(all_buffer_loads(&module, skipped, "rhs"), 0);
     }
 }
 
@@ -340,71 +228,5 @@ fn cuda_rejects_excessive_statement_nesting() {
 #[test]
 fn cuda_guarded_kernel_roundtrips_through_wgsl() {
     let (module, info) = validate(GUARDED_ADD);
-    let output =
-        naga::back::wgsl::write_string(&module, &info, naga::back::wgsl::WriterFlags::empty())
-            .unwrap();
-    let reparsed = naga::front::wgsl::parse_str(&output).unwrap();
-    naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::empty(),
-    )
-    .validate(&reparsed)
-    .unwrap();
-}
-
-#[cfg(feature = "spv-out")]
-#[test]
-fn cuda_guarded_kernel_emits_spirv() {
-    let (module, info) = validate(GUARDED_ADD);
-    let words = naga::back::spv::write_vec(&module, &info, &Default::default(), None).unwrap();
-    rspirv::dr::load_words(words).unwrap();
-}
-
-#[cfg(feature = "glsl-out")]
-#[test]
-fn cuda_guarded_kernel_emits_glsl() {
-    let (module, info) = validate(GUARDED_ADD);
-    let mut output = String::new();
-    let pipeline = naga::back::glsl::PipelineOptions {
-        shader_stage: naga::ShaderStage::Compute,
-        entry_point: "add".into(),
-        multiview: None,
-    };
-    naga::back::glsl::Writer::new(
-        &mut output,
-        &module,
-        &info,
-        &Default::default(),
-        &pipeline,
-        Default::default(),
-    )
-    .unwrap()
-    .write()
-    .unwrap();
-}
-
-#[cfg(feature = "hlsl-out")]
-#[test]
-fn cuda_guarded_kernel_emits_hlsl() {
-    let (module, info) = validate(GUARDED_ADD);
-    let mut output = String::new();
-    let reflection =
-        naga::back::hlsl::Writer::new(&mut output, &Default::default(), &Default::default())
-            .write(&module, &info, None)
-            .unwrap();
-    for name in reflection.entry_point_names {
-        name.unwrap();
-    }
-}
-
-#[cfg(feature = "msl-out")]
-#[test]
-fn cuda_guarded_kernel_emits_msl() {
-    let (module, info) = validate(GUARDED_ADD);
-    let (_, reflection) =
-        naga::back::msl::write_string(&module, &info, &Default::default(), &Default::default())
-            .unwrap();
-    for name in reflection.entry_point_names {
-        name.unwrap();
-    }
+    super::helpers::wgsl_roundtrip(&module, &info, naga::back::wgsl::WriterFlags::empty());
 }

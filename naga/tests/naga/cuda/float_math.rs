@@ -302,20 +302,12 @@ fn cuda_float_minmax_wgsl_roundtrip_preserves_integer_bit_selection() {
             out[2] = fminf(first, second); out[3] = fmaxf(first, second);
         }",
     );
-    let output = naga::back::wgsl::write_string(
+    let (output, _) = super::helpers::wgsl_roundtrip(
         &module,
         &info,
         naga::back::wgsl::WriterFlags::EXPLICIT_TYPES,
-    )
-    .unwrap();
+    );
     assert!(output.contains("bitcast<u32>"));
     assert!(output.contains("bitcast<f32>"));
     assert!(!output.contains("isNan"));
-    let roundtrip = naga::front::wgsl::parse_str(&output).unwrap();
-    naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::empty(),
-    )
-    .validate(&roundtrip)
-    .unwrap();
 }

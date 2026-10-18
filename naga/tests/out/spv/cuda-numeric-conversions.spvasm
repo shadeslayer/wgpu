@@ -1,0 +1,103 @@
+; SPIR-V
+; Version: 1.1
+; Generator: rspirv
+; Bound: 68
+OpCapability Shader
+OpExtension "SPV_KHR_storage_buffer_storage_class"
+%1 = OpExtInstImport "GLSL.std.450"
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %24 "convert" %19 %22
+OpExecutionMode %24 LocalSize 1 1 1
+OpDecorate %4 ArrayStride 4
+OpMemberDecorate %6 0 Offset 0
+OpDecorate %9 NonWritable
+OpDecorate %9 DescriptorSet 0
+OpDecorate %9 Binding 0
+OpDecorate %10 Block
+OpMemberDecorate %10 0 Offset 0
+OpDecorate %12 DescriptorSet 0
+OpDecorate %12 Binding 1
+OpDecorate %13 Block
+OpMemberDecorate %13 0 Offset 0
+OpDecorate %15 DescriptorSet 0
+OpDecorate %15 Binding 2
+OpDecorate %16 Block
+OpMemberDecorate %16 0 Offset 0
+OpDecorate %19 BuiltIn WorkgroupId
+OpDecorate %22 BuiltIn LocalInvocationId
+%2 = OpTypeVoid
+%3 = OpTypeFloat 32
+%4 = OpTypeRuntimeArray %3
+%5 = OpTypeInt 32 0
+%6 = OpTypeStruct %5
+%7 = OpTypeInt 32 1
+%8 = OpTypeVector %5 3
+%10 = OpTypeStruct %4
+%11 = OpTypePointer StorageBuffer %10
+%9 = OpVariable  %11  StorageBuffer
+%13 = OpTypeStruct %4
+%14 = OpTypePointer StorageBuffer %13
+%12 = OpVariable  %14  StorageBuffer
+%16 = OpTypeStruct %6
+%17 = OpTypePointer Uniform %16
+%15 = OpVariable  %17  Uniform
+%20 = OpTypePointer Input %8
+%19 = OpVariable  %20  Input
+%22 = OpVariable  %20  Input
+%25 = OpTypeFunction %2
+%26 = OpTypePointer StorageBuffer %4
+%27 = OpConstant  %5  0
+%30 = OpTypePointer Uniform %6
+%32 = OpConstant  %5  1
+%34 = OpTypePointer Function %5
+%35 = OpConstantNull  %5
+%37 = OpTypePointer Function %7
+%38 = OpConstantNull  %7
+%40 = OpTypePointer Function %3
+%41 = OpConstantNull  %3
+%43 = OpTypePointer Uniform %5
+%54 = OpTypeBool
+%61 = OpTypePointer StorageBuffer %3
+%24 = OpFunction  %2  None %25
+%18 = OpLabel
+%33 = OpVariable  %34  Function %35
+%36 = OpVariable  %37  Function %38
+%39 = OpVariable  %40  Function %41
+%21 = OpLoad  %8  %19
+%23 = OpLoad  %8  %22
+%28 = OpAccessChain  %26  %9 %27
+%29 = OpAccessChain  %26  %12 %27
+%31 = OpAccessChain  %30  %15 %27
+OpBranch %42
+%42 = OpLabel
+%44 = OpAccessChain  %43  %31 %27
+%45 = OpLoad  %5  %44
+OpStore %33 %45
+%46 = OpCompositeExtract  %5  %21 0
+%47 = OpIMul  %5  %46 %32
+%48 = OpCompositeExtract  %5  %23 0
+%49 = OpIAdd  %5  %47 %48
+%50 = OpBitcast  %7  %49
+OpStore %36 %50
+%51 = OpLoad  %7  %36
+%52 = OpBitcast  %5  %51
+%53 = OpLoad  %5  %33
+%55 = OpULessThan  %54  %52 %53
+OpSelectionMerge %56 None
+OpBranchConditional %55 %57 %56
+%57 = OpLabel
+%58 = OpLoad  %7  %36
+%59 = OpConvertSToF  %3  %58
+OpStore %39 %59
+%60 = OpLoad  %7  %36
+%62 = OpAccessChain  %61  %28 %60
+%63 = OpLoad  %3  %62
+%64 = OpLoad  %3  %39
+%65 = OpFAdd  %3  %63 %64
+%66 = OpLoad  %7  %36
+%67 = OpAccessChain  %61  %29 %66
+OpStore %67 %65
+OpBranch %56
+%56 = OpLabel
+OpReturn
+OpFunctionEnd

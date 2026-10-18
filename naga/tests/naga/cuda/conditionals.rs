@@ -406,14 +406,5 @@ fn cuda_conditional_rejects_malformed_and_excessively_nested_source() {
 #[test]
 fn cuda_conditionals_roundtrip_through_wgsl() {
     let (module, info) = validate(include_str!("../../in/cuda/conditionals.cu"));
-    let source =
-        naga::back::wgsl::write_string(&module, &info, naga::back::wgsl::WriterFlags::empty())
-            .unwrap();
-    let module = naga::front::wgsl::parse_str(&source).unwrap();
-    naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::empty(),
-    )
-    .validate(&module)
-    .unwrap();
+    super::helpers::wgsl_roundtrip(&module, &info, naga::back::wgsl::WriterFlags::empty());
 }

@@ -1,0 +1,77 @@
+; SPIR-V
+; Version: 1.1
+; Generator: rspirv
+; Bound: 47
+OpCapability Shader
+OpExtension "SPV_KHR_storage_buffer_storage_class"
+%1 = OpExtInstImport "GLSL.std.450"
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %21 "scale" %18
+OpExecutionMode %21 LocalSize 1 1 1
+OpMemberDecorate %4 0 Offset 0
+OpDecorate %5 ArrayStride 4
+OpDecorate %8 DescriptorSet 0
+OpDecorate %8 Binding 0
+OpDecorate %9 Block
+OpMemberDecorate %9 0 Offset 0
+OpDecorate %11 NonWritable
+OpDecorate %11 DescriptorSet 0
+OpDecorate %11 Binding 1
+OpDecorate %12 Block
+OpMemberDecorate %12 0 Offset 0
+OpDecorate %14 DescriptorSet 0
+OpDecorate %14 Binding 2
+OpDecorate %15 Block
+OpMemberDecorate %15 0 Offset 0
+OpDecorate %18 BuiltIn LocalInvocationId
+%2 = OpTypeVoid
+%3 = OpTypeFloat 32
+%4 = OpTypeStruct %3
+%5 = OpTypeRuntimeArray %3
+%7 = OpTypeInt 32 0
+%6 = OpTypeVector %7 3
+%9 = OpTypeStruct %4
+%10 = OpTypePointer Uniform %9
+%8 = OpVariable  %10  Uniform
+%12 = OpTypeStruct %5
+%13 = OpTypePointer StorageBuffer %12
+%11 = OpVariable  %13  StorageBuffer
+%15 = OpTypeStruct %5
+%16 = OpTypePointer StorageBuffer %15
+%14 = OpVariable  %16  StorageBuffer
+%19 = OpTypePointer Input %6
+%18 = OpVariable  %19  Input
+%22 = OpTypeFunction %2
+%23 = OpTypePointer Uniform %4
+%24 = OpConstant  %7  0
+%26 = OpTypePointer StorageBuffer %5
+%29 = OpConstant  %3  2
+%31 = OpTypePointer Function %3
+%32 = OpConstantNull  %3
+%34 = OpTypePointer Uniform %3
+%40 = OpTypePointer StorageBuffer %3
+%21 = OpFunction  %2  None %22
+%17 = OpLabel
+%30 = OpVariable  %31  Function %32
+%20 = OpLoad  %6  %18
+%25 = OpAccessChain  %23  %8 %24
+%27 = OpAccessChain  %26  %11 %24
+%28 = OpAccessChain  %26  %14 %24
+OpBranch %33
+%33 = OpLabel
+%35 = OpAccessChain  %34  %25 %24
+%36 = OpLoad  %3  %35
+OpStore %30 %36
+%37 = OpLoad  %3  %30
+%38 = OpFMul  %3  %37 %29
+OpStore %30 %38
+%39 = OpCompositeExtract  %7  %20 0
+%41 = OpAccessChain  %40  %27 %39
+%42 = OpLoad  %3  %41
+%43 = OpLoad  %3  %30
+%44 = OpFMul  %3  %42 %43
+%45 = OpCompositeExtract  %7  %20 0
+%46 = OpAccessChain  %40  %28 %45
+OpStore %46 %44
+OpReturn
+OpFunctionEnd
