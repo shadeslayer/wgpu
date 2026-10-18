@@ -7,9 +7,24 @@ pub(super) fn parse(input: &str) -> Option<Literal> {
         return parse_integer(input);
     }
     if let Some(body) = input.strip_suffix(['f', 'F']) {
-        if !body.contains(['.', 'e', 'E']) || body.contains('\'') {
+        if !body.contains(['.', 'e', 'E']) {
             return None;
         }
+        let body = if body.contains('\'') {
+            let bytes = body.as_bytes();
+            if bytes.iter().enumerate().any(|(index, &byte)| {
+                byte == b'\''
+                    && (index == 0
+                        || index + 1 == bytes.len()
+                        || !bytes[index - 1].is_ascii_digit()
+                        || !bytes[index + 1].is_ascii_digit())
+            }) {
+                return None;
+            }
+            Cow::Owned(body.replace('\'', ""))
+        } else {
+            Cow::Borrowed(body)
+        };
         let value = body.parse::<f32>().ok()?;
         return value.is_finite().then_some(Literal::F32(value));
     }

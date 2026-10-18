@@ -19,6 +19,7 @@ pub fn all_tests(tests: &mut Vec<GpuTestInitializer>) {
         CUDA_SCALAR_ALIASES,
         CUDA_INTEGER_LITERALS,
         CUDA_INLINE_FUNCTIONS,
+        CUDA_FLOAT_SEPARATORS,
     ]);
 }
 
@@ -844,6 +845,62 @@ static CUDA_INLINE_FUNCTIONS: GpuTestConfiguration = GpuTestConfiguration::new()
                     0,
                     value + 6,
                     value + 2,
+                ]
+            } else {
+                [sentinel; 12]
+            };
+            assert_eq!(row, &expected, "thread {index}");
+        }
+    });
+
+#[apply(gpu_test!)]
+static CUDA_FLOAT_SEPARATORS: GpuTestConfiguration = GpuTestConfiguration::new()
+    .parameters(TestParameters::default().test_features_limits())
+    .run_async(|ctx| async move {
+        let length = 70u32;
+        let sentinel = 0xdead_beefu32;
+        let input: [f32; 128] = std::array::from_fn(|index| (index as i32 % 17 - 8) as f32 * 0.25);
+        let buffers = [
+            buffer(
+                &ctx,
+                bytemuck::cast_slice(&[sentinel; 128 * 12]),
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            ),
+            buffer(
+                &ctx,
+                bytemuck::cast_slice(&input),
+                wgpu::BufferUsages::STORAGE,
+            ),
+            buffer(
+                &ctx,
+                bytemuck::cast_slice(&[length, 0, 0, 0]),
+                wgpu::BufferUsages::UNIFORM,
+            ),
+        ];
+        let result = run_kernel(
+            &ctx,
+            include_str!("../../../naga/tests/in/cuda/float-separators.cu"),
+            &buffers,
+            0,
+            2,
+        )
+        .await;
+        let actual: &[u32] = bytemuck::cast_slice(&result);
+        for (index, row) in actual.as_chunks::<12>().0.iter().enumerate() {
+            let expected = if index < length as usize {
+                [
+                    0x4480_1000,
+                    0x3e00_0000,
+                    0x4140_0000,
+                    0x41c8_0000,
+                    0x3f00_0000,
+                    0x40c8_0000,
+                    0xc480_1000,
+                    0x3e00_0000,
+                    0x4049_0fdb,
+                    0x3f80_0000,
+                    0x3f80_0002,
+                    (input[index] * 0.25 + 10.0).to_bits(),
                 ]
             } else {
                 [sentinel; 12]

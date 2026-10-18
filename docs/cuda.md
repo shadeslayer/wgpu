@@ -162,8 +162,9 @@ Integer literals support decimal, leading-zero octal, `0x`/`0X` hexadecimal, and
 `0xffff'ffff`. Unsuffixed decimal literals must fit `int`; unsuffixed nondecimal
 literals use `int` when they fit and otherwise `unsigned int`. The `u`/`U` suffix
 selects `unsigned int`. Values requiring more than 32 bits and long or size
-suffixes remain unsupported. Floating literals require the `f`/`F` suffix, such
-as `2.0f`; hexadecimal floats and separators in floating literals are unsupported.
+suffixes remain unsupported. Decimal floating literals require the `f`/`F` suffix,
+such as `2.0f`. Apostrophes may separate decimal digits in the significand and
+exponent, as in `1'024.5f` or `1.25e+0'2f`. Hexadecimal floats remain unsupported.
 Arithmetic promotes booleans to `int`; a `float` operand makes the common
 type `float`, and mixed signed/unsigned integer operands use `unsigned int`.
 Assignments and initializers convert to the destination type. C-style casts,
