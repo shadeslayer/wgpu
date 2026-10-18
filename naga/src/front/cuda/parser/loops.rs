@@ -2,7 +2,7 @@ use super::*;
 
 impl Parser<'_> {
     fn loop_condition(&mut self) -> Result<(), ParseError> {
-        let value = self.expression(0)?;
+        let value = self.comma_expression()?;
         let condition = self.truthy(value)?;
         let mut reject = crate::Block::new();
         reject.push(Statement::Break, condition.span);
@@ -105,7 +105,7 @@ impl Parser<'_> {
         self.expect_ident("while")?;
         self.expect_symbol('(')?;
         let ((break_if, end), continuing) = self.capture_block(|parser| {
-            let value = parser.expression(0)?;
+            let value = parser.comma_expression()?;
             let condition = parser.truthy(value)?;
             let break_if = parser.append(
                 Expression::Unary {

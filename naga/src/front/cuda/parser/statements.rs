@@ -55,7 +55,7 @@ impl<'a> Parser<'a> {
         }
         if self.take_ident("if")? {
             self.expect_symbol('(')?;
-            let value = self.expression(0)?;
+            let value = self.comma_expression()?;
             let condition = self.truthy(value)?;
             self.expect_symbol(')')?;
             let (accept, accept_terminated) = self.scoped_statement()?;
@@ -79,11 +79,11 @@ impl<'a> Parser<'a> {
                 let TypeInner::Scalar(scalar) = self.module.types[result.ty].inner else {
                     unreachable!()
                 };
-                let value = self.expression(0)?;
+                let value = self.comma_expression()?;
                 Some(self.convert_value(value, scalar)?.handle)
             } else {
                 if self.lexer.peek()?.kind != TokenKind::Symbol(';') {
-                    if let ExpressionResult::Scalar(value) = self.expression_result(0)? {
+                    if let ExpressionResult::Scalar(value) = self.comma_expression_result()? {
                         return Err(ParseError {
                             message: String::from("cannot return a value from a void function"),
                             span: value.span(),

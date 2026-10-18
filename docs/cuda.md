@@ -159,7 +159,16 @@ declarators are unsupported; use `int value = ...;` for a local declaration or
 Loop conditions are scalar expressions; `for` initializers can declare scalar
 locals, declare scalar aliases, or evaluate an expression. Empty
 `for` clauses are supported.
-Comma expressions and comma-separated `for` updates remain unsupported.
+Comma expressions evaluate left to right and preserve the final operand's type
+and value category, including lvalues and void. Earlier operands are discarded.
+Discarded lvalues evaluate their addresses without loading their referenced
+storage. Comma sequences are supported in
+expression statements, `for` updates, conditions, returns, and the middle arm of
+`?:`. Commas separating declarators or helper arguments retain their list meaning.
+Use parentheses for a comma expression within one initializer, helper argument,
+scalar functional cast, or buffer index, as in `int((a, b))` or `out[(a, b)]`.
+`static_cast<int>(a, b)` accepts a full expression. `__syncthreads()` remains a
+standalone statement.
 `continue` executes a `for` loop's update before testing the condition again,
 and checks a `do`/`while` condition before the next iteration. A `for` initializer
 is scoped to the loop. Nested blocks support local shadowing. Statements after a

@@ -23,6 +23,7 @@ pub fn all_tests(tests: &mut Vec<GpuTestInitializer>) {
         CUDA_DUAL_EXECUTION,
         CUDA_UNINITIALIZED,
         CUDA_LOCAL_DECLARATORS,
+        CUDA_COMMA,
     ]);
 }
 
@@ -1075,6 +1076,72 @@ static CUDA_LOCAL_DECLARATORS: GpuTestConfiguration = GpuTestConfiguration::new(
                     value + 9,
                     value * 3 + 11,
                     value * 2 + 9,
+                ]
+            } else {
+                [sentinel; 12]
+            };
+            assert_eq!(row, &expected, "thread {index}");
+        }
+    });
+
+#[apply(gpu_test!)]
+static CUDA_COMMA: GpuTestConfiguration = GpuTestConfiguration::new()
+    .parameters(TestParameters::default().test_features_limits())
+    .run_async(|ctx| async move {
+        let length = 70u32;
+        let sentinel = -123456789i32;
+        let input: [i32; 128] = std::array::from_fn(|index| index as i32 % 11 - 5);
+        let buffers = [
+            buffer(
+                &ctx,
+                bytemuck::cast_slice(&[sentinel; 128 * 12]),
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            ),
+            buffer(
+                &ctx,
+                bytemuck::cast_slice(&input),
+                wgpu::BufferUsages::STORAGE,
+            ),
+            buffer(
+                &ctx,
+                bytemuck::cast_slice(&[length, 0, 0, 0]),
+                wgpu::BufferUsages::UNIFORM,
+            ),
+        ];
+        let result = run_kernel(
+            &ctx,
+            include_str!("../../../naga/tests/in/cuda/comma.cu"),
+            &buffers,
+            0,
+            2,
+        )
+        .await;
+        let actual: &[i32] = bytemuck::cast_slice(&result);
+        for (index, row) in actual.as_chunks::<12>().0.iter().enumerate() {
+            let expected = if index < length as usize {
+                let value = input[index];
+                let choose = index % 2 == 0;
+                [
+                    value * 3 + 5,
+                    value * 3 + 6,
+                    value + 4,
+                    value * 11 + 41,
+                    if choose {
+                        value * 11 + 52
+                    } else {
+                        value * 10 - 20
+                    },
+                    if choose {
+                        value * 101 + 310
+                    } else {
+                        value * 101 + 13
+                    },
+                    value + 2,
+                    value * 2 + 2,
+                    value + 4,
+                    value * 3 + 10,
+                    value * 10 + 74,
+                    value * 11 + 61,
                 ]
             } else {
                 [sentinel; 12]

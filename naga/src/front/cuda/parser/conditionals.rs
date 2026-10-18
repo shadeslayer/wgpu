@@ -7,7 +7,8 @@ impl Parser<'_> {
         start: usize,
     ) -> Result<ExpressionResult, ParseError> {
         let condition = self.truthy(condition.require_scalar()?)?;
-        let (accept, accept_body) = self.capture_block(|parser| parser.expression_result(0))?;
+        let (accept, accept_body) =
+            self.capture_block(|parser| parser.comma_expression_result())?;
         self.expect_symbol(':')?;
         let (reject, reject_body) = self.capture_block(|parser| parser.expression_result(0))?;
         let span = self.lexer.span_from(start);

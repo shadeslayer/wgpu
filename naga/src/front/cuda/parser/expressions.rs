@@ -3,6 +3,19 @@ use super::*;
 const UNARY_PRECEDENCE: u8 = 11;
 
 impl Parser<'_> {
+    pub(super) fn comma_expression(&mut self) -> Result<ScalarExpression, ParseError> {
+        self.comma_expression_result()?.require_scalar()
+    }
+
+    pub(super) fn comma_expression_result(&mut self) -> Result<ExpressionResult, ParseError> {
+        let mut result = self.expression_result(0)?;
+        while self.take_symbol(',')? {
+            self.discard_result(result)?;
+            result = self.expression_result(0)?;
+        }
+        Ok(result)
+    }
+
     pub(super) fn expression(
         &mut self,
         minimum_precedence: u8,
@@ -11,7 +24,7 @@ impl Parser<'_> {
     }
 
     pub(super) fn discard_expression(&mut self) -> Result<(), ParseError> {
-        let result = self.expression_result(0)?;
+        let result = self.comma_expression_result()?;
         self.discard_result(result)
     }
 
@@ -136,7 +149,7 @@ impl Parser<'_> {
                 }
                 self.lexer = checkpoint;
             }
-            let value = self.expression_result(0)?;
+            let value = self.comma_expression_result()?;
             self.expect_symbol(')')?;
             return Ok(value);
         }
@@ -218,7 +231,7 @@ impl Parser<'_> {
                     let target = self.cast_type()?;
                     self.expect_symbol('>')?;
                     self.expect_symbol('(')?;
-                    let value = self.expression(0)?;
+                    let value = self.comma_expression()?;
                     let end = self.expect_symbol(')')?;
                     let mut value = self.convert_value(value, target)?;
                     value.span = token.span.until(&end);

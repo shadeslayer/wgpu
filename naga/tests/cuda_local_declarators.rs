@@ -290,16 +290,16 @@ fn cuda_local_declarators_keep_other_declarator_forms_unsupported() {
 }
 
 #[test]
-fn cuda_local_declarators_do_not_enable_comma_operator_expressions() {
-    for statement in [
-        "int first = (1, 2);",
-        "int first = true ? 1, 2 : 3;",
-        "out[0] = 1, out[1] = 2;",
-        "for (int first = 0; first < 1; ++first, ++first) {}",
+fn cuda_local_declarators_allow_comma_expressions_in_full_expression_contexts() {
+    for (statement, expected) in [
+        ("int first = (1, 2); out[0] = first;", [2, 0]),
+        ("int first = true ? 1, 2 : 3; out[0] = first;", [2, 0]),
+        ("out[0] = 1, out[1] = 2;", [1, 2]),
     ] {
         let source = format!("__global__ void kernel(int *out) {{ {statement} }}");
-        rejected_at(&source, ",", 0);
+        assert_eq!(execute(&source, &[0; 2]), expected);
     }
+    validate("__global__ void kernel() { for (int first = 0; first < 1; ++first, ++first) {} }");
 }
 
 #[test]

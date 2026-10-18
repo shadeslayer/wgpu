@@ -139,7 +139,7 @@ fn cuda_rejects_invalid_names_and_mutation() {
         "__global__ void bad(int *out) { int value = 1; out[0] = ++(value + 1); }",
         "__global__ void bad(int *out) { int value = 1; out[0] = --(value + 1); }",
         "__global__ void bad(int *out) { out[0] = 2--1; }",
-        "__global__ void bad(int *out) { out[0] = 1, 2; }",
+        "__global__ void bad(int *out) { out[0] = 1, ; }",
         "__global__ void bad(int *out) { out[0] = 1; }\0",
     ] {
         assert!(
