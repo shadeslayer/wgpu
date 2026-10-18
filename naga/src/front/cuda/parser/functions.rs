@@ -44,12 +44,14 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    fn function_header(&mut self) -> Result<FunctionHeader<'a>, ParseError> {
+    fn function_header(&mut self, extern_c: bool) -> Result<FunctionHeader<'a>, ParseError> {
         let mut kind = None;
         let mut host_span = None;
         let mut result = None;
         let mut result_span = None;
         let mut inline = false;
+        let mut seen_static = false;
+        let mut cuda_inline_span = None;
         let mut explicit_const = false;
         let mut seen_int = false;
         let mut seen_unsigned = false;
@@ -60,7 +62,25 @@ impl<'a> Parser<'a> {
                     if inline {
                         return self.fail("duplicate inline specifier");
                     }
+                    if cuda_inline_span.is_some() {
+                        return self.fail("incompatible inlining specifiers");
+                    }
                     inline = true;
+                }
+                TokenKind::Ident("static") => {
+                    if extern_c {
+                        return self.fail("static conflicts with an extern C declaration");
+                    }
+                    if seen_static {
+                        return self.fail("duplicate static specifier");
+                    }
+                    seen_static = true;
+                }
+                TokenKind::Ident("__forceinline__" | "__noinline__") => {
+                    if inline || cuda_inline_span.is_some() {
+                        return self.fail("duplicate or incompatible inlining specifiers");
+                    }
+                    cuda_inline_span = Some(token.span);
                 }
                 TokenKind::Ident("__host__") => {
                     if host_span.is_some() || kind == Some(FunctionKind::Kernel) {
@@ -143,6 +163,12 @@ impl<'a> Parser<'a> {
         let Some(kind) = kind else {
             return self.fail("expected a CUDA execution space specifier");
         };
+        if let (FunctionKind::Kernel, Some(span)) = (kind, cuda_inline_span) {
+            return Err(ParseError {
+                message: String::from("CUDA inlining specifiers are unsupported for kernels"),
+                span,
+            });
+        }
         let (name, name_span) = self.identifier()?;
         self.check_function_name(name, name_span)?;
         Ok(FunctionHeader {
@@ -162,7 +188,7 @@ impl<'a> Parser<'a> {
             }
             self.lexer.next()?;
         }
-        let header = self.function_header()?;
+        let header = self.function_header(extern_c)?;
         self.function = FunctionContext::new(header.kind);
         match header.kind {
             FunctionKind::Device => {

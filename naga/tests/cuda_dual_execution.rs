@@ -387,12 +387,22 @@ fn cuda_host_specifier_remains_invalid_outside_function_headers() {
 }
 
 #[test]
-fn cuda_dual_execution_keeps_existing_helper_body_and_signature_restrictions() {
+fn cuda_dual_execution_accepts_static_and_cuda_inlining_specifiers() {
     for source in [
-        "extern \"C\" __host__ __device__ int helper() { return 1; } __global__ void kernel() {}",
         "static __host__ __device__ int helper() { return 1; } __global__ void kernel() {}",
         "__host__ __device__ __forceinline__ int helper() { return 1; } __global__ void kernel() {}",
         "__device__ __host__ __noinline__ int helper() { return 1; } __global__ void kernel() {}",
+    ] {
+        let (module, _) = validate(source);
+        assert_eq!(module.functions.len(), 1);
+        assert_eq!(result_scalar(&module, "helper"), Some(naga::Scalar::I32));
+    }
+}
+
+#[test]
+fn cuda_dual_execution_keeps_existing_helper_body_and_signature_restrictions() {
+    for source in [
+        "extern \"C\" __host__ __device__ int helper() { return 1; } __global__ void kernel() {}",
         "__host__ __device__ int helper(int value); __global__ void kernel() {}",
         "__host__ __device__ int first() { return later(); } __host__ __device__ int later() { return 1; } __global__ void kernel() {}",
         "__host__ __device__ int helper(int value) { return helper(value); } __global__ void kernel() {}",

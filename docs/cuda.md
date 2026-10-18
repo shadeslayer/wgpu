@@ -110,9 +110,18 @@ Helpers have no resource bindings. Prototypes, overloads, recursion, forward
 calls, pointers, references, shared storage, barriers, and
 compute builtins in helpers remain unsupported.
 
-Both helpers and kernels accept standard `inline` in the function header.
-Execution-space, `inline`, return-type, and `const` specifiers may appear in any
+Both helpers and kernels accept `static` and standard `inline` in the function
+header. `static` cannot be combined with the direct `extern "C"` prefix.
+Device helpers, including dual-qualified helpers, also accept `__forceinline__`
+or `__noinline__`. These CUDA specifiers cannot be combined with each other or
+with standard `inline`, and cannot be applied to kernels. Their optimization
+behavior depends on the target backend and compiler; forced inlining or preserved
+calls are not guaranteed. Functions and calls use the existing Naga lowering.
+These constraints follow NVIDIA's [inlining rules](https://docs.nvidia.com/cuda/archive/13.0.0/cuda-c-programming-guide/index.html#noinline-and-forceinline)
+and C++ [linkage rules](https://eel.is/c++draft/dcl.link#8).
+Execution-space, function, return-type, and `const` specifiers may appear in any
 valid order; `unsigned` and `int` may be interleaved with those specifiers.
+Static variables and the `__inline_hint__` specifier remain unsupported.
 Top-level return `const`, including `const void`, does not change the result type.
 The frontend preserves ordinary function calls; `inline` does not force substitution.
 

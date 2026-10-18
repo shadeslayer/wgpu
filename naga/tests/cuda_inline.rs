@@ -389,13 +389,23 @@ fn cuda_inline_dual_execution_helpers_are_ordinary_functions() {
 }
 
 #[test]
-fn cuda_inline_does_not_enable_other_function_directives_or_signatures() {
+fn cuda_inline_accepts_static_and_cuda_inlining_specifiers() {
     for source in [
         "static inline __device__ int helper() { return 1; } __global__ void kernel() {}",
         "__device__ inline static int helper() { return 1; } __global__ void kernel() {}",
         "__device__ __forceinline__ int helper() { return 1; } __global__ void kernel() {}",
-        "__device__ inline __forceinline__ int helper() { return 1; } __global__ void kernel() {}",
         "__device__ __noinline__ int helper() { return 1; } __global__ void kernel() {}",
+    ] {
+        let (module, _) = validate(source);
+        assert_eq!(module.functions.len(), 1);
+        assert_eq!(helper_result(&module, "helper"), Some(naga::Scalar::I32));
+    }
+}
+
+#[test]
+fn cuda_inline_does_not_enable_other_function_directives_or_signatures() {
+    for source in [
+        "__device__ inline __forceinline__ int helper() { return 1; } __global__ void kernel() {}",
         "__device__ __inline__ int helper() { return 1; } __global__ void kernel() {}",
         "__device__ inline int helper(int value); __global__ void kernel() {}",
         "__device__ inline int first() { return later(); } __device__ inline int later() { return 1; } __global__ void kernel() {}",

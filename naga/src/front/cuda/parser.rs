@@ -487,6 +487,8 @@ impl<'a> Parser<'a> {
                 | "extern"
                 | "__global__"
                 | "__device__"
+                | "__forceinline__"
+                | "__noinline__"
                 | "__syncthreads"
         ) || [
             "alignas",
