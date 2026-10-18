@@ -5,6 +5,7 @@ mod barriers;
 mod bitcasts;
 mod comma;
 mod conditionals;
+mod constant_expressions;
 mod control_flow;
 mod conversions;
 mod declarations;

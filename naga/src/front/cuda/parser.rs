@@ -2,6 +2,8 @@ use alloc::{format, string::String, vec::Vec};
 
 mod barriers;
 mod conditionals;
+mod constant_evaluation;
+mod constants;
 mod context;
 mod conversions;
 mod declarations;
@@ -43,6 +45,41 @@ enum Symbol {
         ty: TypeResolution,
         writable: bool,
     },
+    Constant {
+        handle: Option<Handle<crate::Constant>>,
+        scalar: Scalar,
+        literal: Option<Literal>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct ConstantValue {
+    literal: Option<Literal>,
+    // Discarded glvalues can qualify without a constant rvalue.
+    is_discardable: bool,
+}
+
+impl From<Literal> for ConstantValue {
+    fn from(literal: Literal) -> Self {
+        Self {
+            literal: Some(literal),
+            is_discardable: true,
+        }
+    }
+}
+
+impl ConstantValue {
+    fn evaluated(literal: Option<Literal>) -> Self {
+        literal.map(Self::from).unwrap_or_default()
+    }
+
+    fn after(self, earlier: Self) -> Self {
+        if earlier.is_discardable {
+            self
+        } else {
+            Self::default()
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -51,12 +88,14 @@ struct ReferenceValue {
     writable: bool,
     ty: TypeResolution,
     span: Span,
+    constant: ConstantValue,
 }
 
 #[derive(Debug)]
 enum Reference {
     Pointer(Handle<Expression>),
     Conditional(Handle<Option<ConditionalReference>>),
+    Constant(Option<Handle<crate::Constant>>),
 }
 
 #[derive(Debug)]
@@ -79,6 +118,7 @@ struct Value {
     handle: Handle<Expression>,
     ty: TypeResolution,
     span: Span,
+    constant: ConstantValue,
 }
 
 #[derive(Debug)]
@@ -88,6 +128,20 @@ enum ExpressionValue {
 }
 
 impl ExpressionValue {
+    const fn constant(&self) -> ConstantValue {
+        match *self {
+            Self::Plain(ref value) => value.constant,
+            Self::Reference(ref reference) => reference.constant,
+        }
+    }
+
+    const fn set_constant(&mut self, constant: ConstantValue) {
+        match *self {
+            Self::Plain(ref mut value) => value.constant = constant,
+            Self::Reference(ref mut reference) => reference.constant = constant,
+        }
+    }
+
     const fn ty(&self) -> &TypeResolution {
         match *self {
             Self::Plain(ref value) => &value.ty,
@@ -158,12 +212,20 @@ impl<'a> Parser<'a> {
         loop {
             if self.starts_alias()? {
                 self.alias_declaration(true)?;
+            } else if self.starts_constexpr_declaration()? {
+                self.global_constant_declaration()?;
             } else if self.function_definition()? == FunctionKind::Kernel {
                 break;
             }
         }
-        while self.starts_alias()? {
-            self.alias_declaration(true)?;
+        loop {
+            if self.starts_alias()? {
+                self.alias_declaration(true)?;
+            } else if self.starts_constexpr_declaration()? {
+                self.global_constant_declaration()?;
+            } else {
+                break;
+            }
         }
         if self.lexer.peek()?.kind != TokenKind::End {
             return self.fail("only one CUDA kernel is supported");
@@ -320,7 +382,7 @@ impl<'a> Parser<'a> {
         &mut self,
         base: Handle<Expression>,
         span: Span,
-    ) -> Result<Handle<Expression>, ParseError> {
+    ) -> Result<(Handle<Expression>, bool), ParseError> {
         self.expect_symbol('[')?;
         let index = self.expression(0)?;
         let index = self.rvalue(index)?;
@@ -332,13 +394,15 @@ impl<'a> Parser<'a> {
             });
         }
         let end = self.expect_symbol(']')?;
-        self.append(
+        let is_discardable = self.constant_array_address(base, index.constant.literal);
+        let pointer = self.append(
             Expression::Access {
                 base,
                 index: index.handle,
             },
             span.until(&end),
-        )
+        )?;
+        Ok((pointer, is_discardable))
     }
 
     fn builtin(&mut self, name: &str, start: Span) -> Result<Value, ParseError> {
@@ -399,6 +463,7 @@ impl<'a> Parser<'a> {
             self.append(Expression::AccessIndex { base, index }, span)?
         };
         Ok(Value {
+            constant: ConstantValue::default(),
             handle,
             ty: scalar_resolution(Scalar::U32),
             span,
@@ -413,6 +478,7 @@ impl<'a> Parser<'a> {
         let literal = number::parse(text).ok_or_else(invalid)?;
         let handle = self.append(Expression::Literal(literal), span)?;
         Ok(Value {
+            constant: literal.into(),
             handle,
             ty: scalar_resolution(literal.scalar()),
             span,
@@ -642,7 +708,22 @@ impl<'a> Parser<'a> {
     }
 
     fn lookup_symbol(&self, name: &str) -> Option<Symbol> {
-        self.function.symbol_table.lookup(name).cloned()
+        self.function
+            .symbol_table
+            .lookup(name)
+            .cloned()
+            .or_else(|| match self.global_declarations.get(name) {
+                Some(&GlobalDeclaration::Constant {
+                    handle,
+                    scalar,
+                    literal,
+                }) => Some(Symbol::Constant {
+                    handle,
+                    scalar,
+                    literal,
+                }),
+                _ => None,
+            })
     }
 
     fn take_symbol(&mut self, symbol: char) -> Result<bool, ParseError> {

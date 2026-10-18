@@ -29,6 +29,11 @@ pub(super) enum GlobalDeclaration {
     Type(QualifiedType),
     Functions(Vec<Handle<Function>>),
     Kernel,
+    Constant {
+        handle: Option<Handle<crate::Constant>>,
+        scalar: Scalar,
+        literal: Option<Literal>,
+    },
 }
 
 fn type_name(
@@ -63,36 +68,79 @@ fn parse_type(
     symbols: &SymbolTable<&str, Symbol>,
     globals: &FastHashMap<&str, GlobalDeclaration>,
 ) -> Result<QualifiedType, ParseError> {
-    let prefix = lexer.next_if(TokenKind::Ident("const"))?;
-    let token = lexer.next()?;
-    let mut ty = match token.kind {
-        TokenKind::Ident(name) => {
-            let ty = type_name(name, symbols, globals).ok_or_else(|| ParseError {
-                message: format!("unknown or unsupported scalar type `{name}`"),
-                span: token.span,
-            })?;
-            if name == "unsigned" {
-                lexer.next_if(TokenKind::Ident("int"))?;
+    declaration_type(lexer, symbols, globals, false).map(|(ty, _)| ty)
+}
+
+fn declaration_type(
+    lexer: &mut Lexer<'_>,
+    symbols: &SymbolTable<&str, Symbol>,
+    globals: &FastHashMap<&str, GlobalDeclaration>,
+    allow_constexpr: bool,
+) -> Result<(QualifiedType, bool), ParseError> {
+    let mut ty: Option<QualifiedType> = None;
+    let mut explicit_const = false;
+    let mut is_constexpr = false;
+    let mut seen_int = false;
+    let mut seen_unsigned = false;
+    loop {
+        let token = lexer.peek()?;
+        let invalid = |message: &str| ParseError {
+            message: String::from(message),
+            span: token.span,
+        };
+        match token.kind {
+            TokenKind::Ident("const") => {
+                if explicit_const {
+                    return Err(invalid("duplicate const qualifier"));
+                }
+                explicit_const = true;
             }
-            ty
+            TokenKind::Ident("constexpr") => {
+                if !allow_constexpr {
+                    return Err(invalid("constexpr is unsupported in this type"));
+                }
+                if is_constexpr {
+                    return Err(invalid("duplicate constexpr specifier"));
+                }
+                is_constexpr = true;
+            }
+            TokenKind::Ident("int" | "unsigned") => {
+                let unsigned = token.kind == TokenKind::Ident("unsigned");
+                if (unsigned && seen_unsigned)
+                    || (!unsigned && seen_int)
+                    || (ty.is_some() && !seen_int && !seen_unsigned)
+                {
+                    return Err(invalid("incompatible or repeated type specifier"));
+                }
+                seen_int |= !unsigned;
+                seen_unsigned |= unsigned;
+                ty = Some(QualifiedType {
+                    ty: TypeSpecifier::Scalar(if seen_unsigned {
+                        Scalar::U32
+                    } else {
+                        Scalar::I32
+                    }),
+                    is_const: false,
+                });
+            }
+            TokenKind::Ident(name) if ty.is_none() => {
+                ty = Some(type_name(name, symbols, globals).ok_or_else(|| ParseError {
+                    message: format!("unknown or unsupported scalar type `{name}`"),
+                    span: token.span,
+                })?);
+            }
+            _ => break,
         }
-        _ => {
-            return Err(ParseError {
-                message: String::from("expected a scalar type"),
-                span: token.span,
-            });
-        }
-    };
-    let suffix_span = lexer.peek()?.span;
-    let suffix = lexer.next_if(TokenKind::Ident("const"))?;
-    if prefix && suffix {
-        return Err(ParseError {
-            message: String::from("duplicate const qualifier"),
-            span: suffix_span,
-        });
+        lexer.next()?;
     }
-    ty.is_const |= prefix || suffix;
-    Ok(ty)
+    let Some(mut ty) = ty else {
+        return Err(ParseError {
+            message: String::from("expected a scalar type"),
+            span: lexer.peek()?.span,
+        });
+    };
+    ty.is_const |= explicit_const || is_constexpr;
+    Ok((ty, is_constexpr))
 }
 
 impl<'a> Parser<'a> {
@@ -203,9 +251,18 @@ impl<'a> Parser<'a> {
         )
     }
 
+    pub(super) fn declaration_type(&mut self) -> Result<(QualifiedType, bool), ParseError> {
+        declaration_type(
+            &mut self.lexer,
+            &self.function.symbol_table,
+            &self.global_declarations,
+            true,
+        )
+    }
+
     pub(super) fn starts_type(&mut self) -> Result<bool, ParseError> {
         Ok(match self.lexer.peek()?.kind {
-            TokenKind::Ident("const") => true,
+            TokenKind::Ident("const" | "constexpr") => true,
             TokenKind::Ident(name) => self.type_name(name).is_some(),
             _ => false,
         })

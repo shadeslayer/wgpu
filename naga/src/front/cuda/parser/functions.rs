@@ -543,6 +543,15 @@ impl<'a> Parser<'a> {
         }
         let end = self.expect_symbol(')')?;
         let candidate = self.resolve_overload(name, &arguments, span)?;
+        self.lower_call(candidate, arguments, span.until(&end))
+    }
+
+    fn lower_call(
+        &mut self,
+        candidate: FunctionCandidate,
+        arguments: Vec<Value>,
+        span: Span,
+    ) -> Result<ExpressionResult, ParseError> {
         if let FunctionCandidate::Constructor { size, scalar } = candidate {
             let components = arguments
                 .into_iter()
@@ -551,7 +560,6 @@ impl<'a> Parser<'a> {
                         .map(|value| value.handle)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            let span = span.until(&end);
             let ty = self.lower_type(TypeSpecifier::Vector { size, scalar }, span);
             let handle_ty = self.type_handle(&ty, span);
             let handle = self.append(
@@ -561,12 +569,17 @@ impl<'a> Parser<'a> {
                 },
                 span,
             )?;
-            return Ok(Value { handle, ty, span }.into());
+            return Ok(Value {
+                constant: ConstantValue::default(),
+                handle,
+                ty,
+                span,
+            }
+            .into());
         }
         if let FunctionCandidate::Bitcast { source, result } = candidate {
             let argument =
                 self.convert_scalar(arguments.into_iter().next().unwrap().into(), source)?;
-            let span = span.until(&end);
             let mut expr = argument.handle;
             if result == Scalar::F32 {
                 // Keep non-finite results out of WGSL constant evaluation.
@@ -589,6 +602,7 @@ impl<'a> Parser<'a> {
                 span,
             )?;
             return Ok(Value {
+                constant: ConstantValue::default(),
                 handle,
                 ty: scalar_resolution(result),
                 span,
@@ -603,7 +617,6 @@ impl<'a> Parser<'a> {
         {
             let argument =
                 self.convert_scalar(arguments.into_iter().next().unwrap().into(), source)?;
-            let span = span.until(&end);
             let handle = self.append(
                 Expression::Math {
                     fun: function,
@@ -615,6 +628,7 @@ impl<'a> Parser<'a> {
                 span,
             )?;
             let mut value = Value {
+                constant: ConstantValue::default(),
                 handle,
                 ty: scalar_resolution(source),
                 span,
@@ -637,7 +651,6 @@ impl<'a> Parser<'a> {
             let mut arguments = arguments.into_iter();
             let left = self.convert_scalar(arguments.next().unwrap().into(), builtin.result)?;
             let right = self.convert_scalar(arguments.next().unwrap().into(), builtin.result)?;
-            let span = span.until(&end);
             let handle = if builtin.result == Scalar::F32 {
                 self.float_minmax(builtin.function, left.handle, right.handle, span)?
             } else {
@@ -653,6 +666,7 @@ impl<'a> Parser<'a> {
                 )?
             };
             return Ok(Value {
+                constant: ConstantValue::default(),
                 handle,
                 ty: scalar_resolution(builtin.result),
                 span,
@@ -668,14 +682,18 @@ impl<'a> Parser<'a> {
             let ty = TypeResolution::Handle(parameter.ty);
             converted.push(self.convert_value(value.into(), &ty)?.handle);
         }
-        let span = span.until(&end);
         let ty = self.module.functions[function]
             .result
             .as_ref()
             .map(|result| TypeResolution::Handle(result.ty));
         let value = if let Some(ty) = ty {
             let handle = self.append_call_result(function, span)?;
-            Some(Value { handle, ty, span })
+            Some(Value {
+                constant: ConstantValue::default(),
+                handle,
+                ty,
+                span,
+            })
         } else {
             None
         };

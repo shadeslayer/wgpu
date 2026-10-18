@@ -39,6 +39,11 @@ impl Parser<'_> {
                 }
                 let ty = accept.ty.clone();
                 let writable = accept.writable && reject.writable;
+                let constant = match condition.constant.literal {
+                    Some(Literal::Bool(true)) => accept.constant,
+                    Some(Literal::Bool(false)) => reject.constant,
+                    _ => ConstantValue::default(),
+                };
                 let handle = self.function.conditional_references.append(
                     Some(ConditionalReference {
                         condition: condition.handle,
@@ -60,6 +65,7 @@ impl Parser<'_> {
                         writable,
                         ty,
                         span,
+                        constant,
                     },
                 )))
             }
@@ -73,9 +79,10 @@ impl Parser<'_> {
                     ))
                 };
                 let pointer = self.temporary_pointer(&ty, span)?;
-                let ((), accept) = self.capture_block(|parser| {
+                let (accept_constant, accept) = self.capture_block(|parser| {
                     parser.append_block(accept_body);
                     let value = parser.convert_value(accept, &ty)?;
+                    let constant = value.constant;
                     parser.push_statement(
                         Statement::Store {
                             pointer,
@@ -83,11 +90,12 @@ impl Parser<'_> {
                         },
                         span,
                     );
-                    Ok(())
+                    Ok(constant)
                 })?;
-                let ((), reject) = self.capture_block(|parser| {
+                let (reject_constant, reject) = self.capture_block(|parser| {
                     parser.append_block(reject_body);
                     let value = parser.convert_value(reject, &ty)?;
+                    let constant = value.constant;
                     parser.push_statement(
                         Statement::Store {
                             pointer,
@@ -95,7 +103,7 @@ impl Parser<'_> {
                         },
                         span,
                     );
-                    Ok(())
+                    Ok(constant)
                 })?;
                 self.push_statement(
                     Statement::If {
@@ -106,7 +114,18 @@ impl Parser<'_> {
                     span,
                 );
                 let handle = self.append(Expression::Load { pointer }, span)?;
-                Ok(Value { handle, ty, span }.into())
+                let constant = match condition.constant.literal {
+                    Some(Literal::Bool(true)) => accept_constant,
+                    Some(Literal::Bool(false)) => reject_constant,
+                    _ => ConstantValue::default(),
+                };
+                Ok(Value {
+                    constant,
+                    handle,
+                    ty,
+                    span,
+                }
+                .into())
             }
             _ => Err(ParseError {
                 message: String::from("conditional arms must both be scalar or both be void"),

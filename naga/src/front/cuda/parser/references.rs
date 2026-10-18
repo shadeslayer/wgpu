@@ -39,7 +39,13 @@ impl Parser<'_> {
                     },
                     span,
                 )?;
-                Ok(Value { handle, ty, span }.into())
+                Ok(Value {
+                    handle,
+                    ty,
+                    span,
+                    constant: ConstantValue::default(),
+                }
+                .into())
             }
             ExpressionValue::Reference(reference) => self
                 .project_reference(reference, index, &ty, span)
@@ -82,9 +88,16 @@ impl Parser<'_> {
                     depth,
                 });
             }
+            Reference::Constant(_) => {
+                return Err(ParseError {
+                    message: String::from("constant has no supported fields"),
+                    span,
+                });
+            }
         }
         reference.ty = ty.clone();
         reference.span = span;
+        reference.constant.literal = None;
         Ok(reference)
     }
 
@@ -107,7 +120,7 @@ impl Parser<'_> {
 
     pub(super) fn reference_depth(&self, reference: &ReferenceValue) -> u32 {
         match reference.reference {
-            Reference::Pointer(_) => 0,
+            Reference::Pointer(_) | Reference::Constant(_) => 0,
             Reference::Conditional(handle) => {
                 self.function.conditional_references[handle]
                     .as_ref()
@@ -124,12 +137,14 @@ impl Parser<'_> {
         };
         let ty = reference.ty.clone();
         let span = reference.span;
-        if let Reference::Pointer(pointer) = reference.reference {
-            return self.load_pointer(pointer, &ty, span);
+        let constant = reference.constant;
+        if !matches!(reference.reference, Reference::Conditional(_)) {
+            return self.read_reference(reference);
         }
         let pointer = self.temporary_pointer(&ty, span)?;
-        self.consume_reference(reference, &mut |parser, source, ty, span| {
-            let value = parser.load_pointer(source, ty, span)?;
+        self.consume_reference(reference, &mut |parser, source| {
+            let span = source.span;
+            let value = parser.read_reference(source)?;
             parser.push_statement(
                 Statement::Store {
                     pointer,
@@ -140,7 +155,32 @@ impl Parser<'_> {
             Ok(())
         })?;
         let handle = self.append(Expression::Load { pointer }, span)?;
-        Ok(Value { handle, ty, span })
+        Ok(Value {
+            handle,
+            ty,
+            span,
+            constant: ConstantValue::evaluated(constant.literal),
+        })
+    }
+
+    fn read_reference(&mut self, reference: ReferenceValue) -> Result<Value, ParseError> {
+        let span = reference.span;
+        let handle = match reference.reference {
+            Reference::Pointer(pointer) => self.append(Expression::Load { pointer }, span)?,
+            Reference::Constant(Some(handle)) => self.append(Expression::Constant(handle), span)?,
+            Reference::Constant(None) => {
+                // Unselected branches can reference the variable being initialized.
+                let ty = self.type_handle(&reference.ty, span);
+                self.append(Expression::ZeroValue(ty), span)?
+            }
+            Reference::Conditional(_) => return self.rvalue(ExpressionValue::Reference(reference)),
+        };
+        Ok(Value {
+            handle,
+            ty: reference.ty,
+            span,
+            constant: ConstantValue::evaluated(reference.constant.literal),
+        })
     }
 
     pub(super) fn load_pointer(
@@ -154,12 +194,13 @@ impl Parser<'_> {
             handle,
             ty: ty.clone(),
             span,
+            constant: ConstantValue::default(),
         })
     }
 
     pub(super) fn discard_result(&mut self, result: ExpressionResult) -> Result<(), ParseError> {
         if let ExpressionResult::Value(ExpressionValue::Reference(reference)) = result {
-            self.consume_reference(reference, &mut |_, _, _, _| Ok(()))?;
+            self.consume_reference(reference, &mut |_, _| Ok(()))?;
         }
         Ok(())
     }
@@ -179,6 +220,12 @@ impl Parser<'_> {
                 return action(self, pointer, &reference.ty, reference.span);
             }
             Reference::Conditional(handle) => handle,
+            Reference::Constant(_) => {
+                return Err(ParseError {
+                    message: String::from("cannot modify a const value"),
+                    span: reference.span,
+                })
+            }
         };
         let mut conditional = self.function.conditional_references[handle].take().unwrap();
         for branch in [&mut conditional.accept, &mut conditional.reject] {
@@ -195,16 +242,11 @@ impl Parser<'_> {
     pub(super) fn consume_reference(
         &mut self,
         reference: ReferenceValue,
-        action: &mut impl FnMut(
-            &mut Self,
-            Handle<Expression>,
-            &TypeResolution,
-            Span,
-        ) -> Result<(), ParseError>,
+        action: &mut impl FnMut(&mut Self, ReferenceValue) -> Result<(), ParseError>,
     ) -> Result<(), ParseError> {
         let handle = match reference.reference {
-            Reference::Pointer(pointer) => {
-                return action(self, pointer, &reference.ty, reference.span);
+            Reference::Pointer(_) | Reference::Constant(_) => {
+                return action(self, reference);
             }
             Reference::Conditional(handle) => handle,
         };

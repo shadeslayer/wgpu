@@ -177,16 +177,25 @@ impl<'a> Parser<'a> {
         if self.take_ident("__shared__")? {
             return self.shared_declaration();
         }
-        let QualifiedType {
-            ty: specifier,
-            is_const,
-        } = self.parse_type()?;
+        let (
+            QualifiedType {
+                ty: specifier,
+                is_const,
+            },
+            is_constexpr,
+        ) = self.declaration_type()?;
+        if is_constexpr && !matches!(specifier, TypeSpecifier::Scalar(_)) {
+            return self.fail("constexpr requires a scalar variable");
+        }
         loop {
             let (name, span) = self.identifier()?;
             self.check_name(name, span)?;
             let declared_ty = self.lower_type(specifier, span);
             let base = self.type_handle(&declared_ty, span);
             let is_array = self.take_symbol('[')?;
+            if is_constexpr && is_array {
+                return self.fail("constexpr arrays are unsupported");
+            }
             let ty = if is_array {
                 let (size, extent_span) = self.array_size()?;
                 self.expect_symbol(']')?;
@@ -220,9 +229,11 @@ impl<'a> Parser<'a> {
                 }
             };
             self.insert_symbol(name, symbol, span)?;
-            let value = if is_array
-                && matches!(self.lexer.peek()?.kind, TokenKind::Symbol('{' | '='))
-            {
+            let value = if is_constexpr {
+                let literal = self.constant_initializer(&declared_ty)?;
+                self.function.constant_locals.insert(local, literal);
+                Some(self.append(Expression::Literal(literal), span)?)
+            } else if is_array && matches!(self.lexer.peek()?.kind, TokenKind::Symbol('{' | '=')) {
                 self.take_symbol('=')?;
                 self.expect_symbol('{')?;
                 let end = self.expect_symbol('}')?;
@@ -238,6 +249,23 @@ impl<'a> Parser<'a> {
                 if matches!(specifier, TypeSpecifier::Vector { .. }) && self.take_symbol('{')? {
                     let end = self.expect_symbol('}')?;
                     Some(self.append(Expression::ZeroValue(ty), span.until(&end))?)
+                } else if is_const
+                    && matches!(
+                        specifier,
+                        TypeSpecifier::Scalar(Scalar::BOOL | Scalar::I32 | Scalar::U32)
+                    )
+                {
+                    let (value, body) = self.capture_block(|parser| {
+                        let value = parser.expression(0)?;
+                        parser.convert_value(value, &declared_ty)
+                    })?;
+                    if let Some(literal) = value.constant.literal {
+                        self.function.constant_locals.insert(local, literal);
+                        Some(self.append(Expression::Literal(literal), value.span)?)
+                    } else {
+                        self.append_block(body);
+                        Some(value.handle)
+                    }
                 } else {
                     let value = self.expression(0)?;
                     Some(self.convert_value(value, &declared_ty)?.handle)
@@ -322,18 +350,21 @@ impl<'a> Parser<'a> {
     }
 
     fn array_size(&mut self) -> Result<(NonZeroU32, Span), ParseError> {
-        let token = self.lexer.next()?;
+        let (value, _) = self.capture_block(|parser| {
+            let value = parser.expression(0)?;
+            parser.rvalue(value)
+        })?;
         let invalid = || ParseError {
-            message: String::from("array extent must be a positive integer literal"),
-            span: token.span,
+            message: String::from("array extent must be a positive integral constant expression"),
+            span: value.span,
         };
-        let TokenKind::Number(text) = token.kind else {
-            return Err(invalid());
+        let size = match value.constant.literal {
+            Some(Literal::Bool(value)) => u32::from(value),
+            Some(Literal::I32(value)) => u32::try_from(value).map_err(|_| invalid())?,
+            Some(Literal::U32(value)) => value,
+            _ => return Err(invalid()),
         };
-        let size = number::parse_integer(text)
-            .and_then(|literal| u32::try_from(literal).ok())
-            .and_then(NonZeroU32::new)
-            .ok_or_else(invalid)?;
-        Ok((size, token.span))
+        let size = NonZeroU32::new(size).ok_or_else(invalid)?;
+        Ok((size, value.span))
     }
 }

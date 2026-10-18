@@ -43,6 +43,12 @@ impl Parser<'_> {
             handle,
             ty: scalar_resolution(target),
             span: value.span,
+            constant: ConstantValue::evaluated(
+                value
+                    .constant
+                    .literal
+                    .and_then(|literal| constant_evaluation::convert(literal, target)),
+            ),
         })
     }
 
@@ -98,44 +104,60 @@ impl Parser<'_> {
         right: ExpressionValue,
     ) -> Result<Value, ParseError> {
         let span = left.span().until(&right.span());
-        let (left, right) = match operator {
-            BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight => {
-                let left = self.integral_operand(left)?;
-                let right = self.integral_operand(right)?;
-                let mut right = self.convert_scalar(right.into(), Scalar::U32)?;
-                if operator == BinaryOperator::ShiftLeft {
-                    // Keep wrapping shifts out of WGSL constant evaluation.
-                    let ty = self.scalar_handle(Scalar::U32, right.span);
-                    let local = self.function.ir.local_variables.append(
-                        LocalVariable {
-                            name: None,
-                            ty,
-                            init: None,
-                        },
-                        right.span,
+        let shift = matches!(
+            operator,
+            BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight
+        );
+        let mut constant = None;
+        let (left, right) =
+            match operator {
+                BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight => {
+                    let left = self.integral_operand(left)?;
+                    let right = self.integral_operand(right)?;
+                    constant = left.constant.literal.zip(right.constant.literal).and_then(
+                        |(left, right)| constant_evaluation::binary(operator, left, right),
                     );
-                    let pointer = self.append(Expression::LocalVariable(local), right.span)?;
-                    self.push_statement(
-                        Statement::Store {
-                            pointer,
-                            value: right.handle,
-                        },
-                        right.span,
-                    );
-                    right.handle = self.append(Expression::Load { pointer }, right.span)?;
+                    let mut right = self.convert_scalar(right.into(), Scalar::U32)?;
+                    if operator == BinaryOperator::ShiftLeft {
+                        // Keep wrapping shifts out of WGSL constant evaluation.
+                        let ty = self.scalar_handle(Scalar::U32, right.span);
+                        let local = self.function.ir.local_variables.append(
+                            LocalVariable {
+                                name: None,
+                                ty,
+                                init: None,
+                            },
+                            right.span,
+                        );
+                        let pointer = self.append(Expression::LocalVariable(local), right.span)?;
+                        self.push_statement(
+                            Statement::Store {
+                                pointer,
+                                value: right.handle,
+                            },
+                            right.span,
+                        );
+                        right.handle = self.append(Expression::Load { pointer }, right.span)?;
+                    }
+                    (left, right)
                 }
-                (left, right)
-            }
-            BinaryOperator::Modulo
-            | BinaryOperator::And
-            | BinaryOperator::InclusiveOr
-            | BinaryOperator::ExclusiveOr => {
-                let left = self.integral_operand(left)?;
-                let right = self.integral_operand(right)?;
-                self.usual_arithmetic(left.into(), right.into())?
-            }
-            _ => self.usual_arithmetic(left, right)?,
-        };
+                BinaryOperator::Modulo
+                | BinaryOperator::And
+                | BinaryOperator::InclusiveOr
+                | BinaryOperator::ExclusiveOr => {
+                    let left = self.integral_operand(left)?;
+                    let right = self.integral_operand(right)?;
+                    self.usual_arithmetic(left.into(), right.into())?
+                }
+                _ => self.usual_arithmetic(left, right)?,
+            };
+        if !shift {
+            constant = left
+                .constant
+                .literal
+                .zip(right.constant.literal)
+                .and_then(|(left, right)| constant_evaluation::binary(operator, left, right));
+        }
         let scalar = match operator {
             BinaryOperator::Equal
             | BinaryOperator::NotEqual
@@ -157,6 +179,7 @@ impl Parser<'_> {
             handle,
             ty: scalar_resolution(scalar),
             span,
+            constant: ConstantValue::evaluated(constant),
         })
     }
 

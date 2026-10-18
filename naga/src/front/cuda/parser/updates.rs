@@ -45,7 +45,11 @@ impl Parser<'_> {
             );
             Ok(())
         })?;
-        Ok(ExpressionValue::Reference(ReferenceValue { span, ..left }))
+        Ok(ExpressionValue::Reference(ReferenceValue {
+            span,
+            constant: ConstantValue::default(),
+            ..left
+        }))
     }
 
     pub(super) fn update(
@@ -67,7 +71,11 @@ impl Parser<'_> {
                 parser.update_pointer(pointer, ty, increment, reference_span, span)?;
                 Ok(())
             })?;
-            return Ok(ExpressionValue::Reference(ReferenceValue { span, ..value }));
+            return Ok(ExpressionValue::Reference(ReferenceValue {
+                span,
+                constant: ConstantValue::default(),
+                ..value
+            }));
         }
         if let Reference::Pointer(pointer) = value.reference {
             let previous_value =
@@ -80,9 +88,15 @@ impl Parser<'_> {
         }
         let ty = value.ty.clone();
         let pointer = self.temporary_pointer(&ty, span)?;
-        self.consume_reference(value, &mut |parser, source, ty, reference_span| {
+        self.consume_reference(value, &mut |parser, source| {
+            let Reference::Pointer(source_pointer) = source.reference else {
+                return Err(ParseError {
+                    message: String::from("cannot modify a const value"),
+                    span: source.span,
+                });
+            };
             let previous_value =
-                parser.update_pointer(source, ty, increment, reference_span, span)?;
+                parser.update_pointer(source_pointer, &source.ty, increment, source.span, span)?;
             parser.push_statement(
                 Statement::Store {
                     pointer,
@@ -93,7 +107,13 @@ impl Parser<'_> {
             Ok(())
         })?;
         let handle = self.append(Expression::Load { pointer }, span)?;
-        Ok(Value { handle, ty, span }.into())
+        Ok(Value {
+            handle,
+            ty,
+            span,
+            constant: ConstantValue::default(),
+        }
+        .into())
     }
 
     fn update_pointer(
@@ -110,6 +130,7 @@ impl Parser<'_> {
             handle: one,
             ty: scalar_resolution(Scalar::I32),
             span,
+            constant: Literal::I32(1).into(),
         };
         let (left, right) = self.usual_arithmetic(previous_value.clone().into(), one.into())?;
         let handle = self.append(
@@ -129,6 +150,7 @@ impl Parser<'_> {
                 handle,
                 ty: left.ty,
                 span,
+                constant: ConstantValue::default(),
             }
             .into(),
             ty,

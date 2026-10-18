@@ -17,6 +17,7 @@ pub(super) struct FunctionContext<'a> {
     pub(super) expression_depth: u32,
     pub(super) expression_graph_depths: Vec<u32>,
     pub(super) conditional_references: Arena<Option<ConditionalReference>>,
+    pub(super) constant_locals: FastHashMap<Handle<LocalVariable>, Literal>,
 }
 
 impl FunctionContext<'_> {
@@ -35,6 +36,7 @@ impl FunctionContext<'_> {
             expression_depth: 0,
             expression_graph_depths: Vec::new(),
             conditional_references: Arena::new(),
+            constant_locals: FastHashMap::default(),
         }
     }
 }

@@ -236,6 +236,42 @@ and predefined-signature restrictions as the bit reinterpretation functions
 above. The 64-bit `ll` variants and other integer intrinsics remain unsupported.
 Metal output for `__brev` requires MSL version 1.2 or newer.
 
+## Constant expressions
+
+Scalar `constexpr` variables support `bool`, `int`, `unsigned int`, `float`,
+and their aliases with an `= expression` initializer. They are read-only and
+can appear in blocks, `for` initializers, and at file scope before, between,
+or after functions. File-scope variables require `constexpr`; they become Naga
+constants without consuming buffer bindings.
+
+For example, `constexpr int Width = 4 + 4;` can provide the extent in both
+`int local[Width]{};` and `__shared__ float3 shared[Width];`.
+Ordinary `const` integral locals also supply constant values when initialized
+by constant expressions. An ordinary `const float` local does not; use
+`constexpr float` when its value is needed during compilation.
+
+Constant evaluation supports the existing scalar operators and casts with
+C++20 [constant-expression rules](https://timsong-cpp.github.io/cppwp/n4861/expr.const).
+Unsigned arithmetic and left shifts wrap; signed
+arithmetic overflow, invalid shift counts, division by zero, and out-of-range
+float-to-integer conversions cannot provide required constant values.
+Floating-point constant evaluation currently requires finite results;
+overflow to infinity produces an unsupported-constant diagnostic.
+
+Only evaluated operands contribute to constant-expression eligibility, so
+`true ? 3 : runtime_value` and `false && helper()` can be constant expressions.
+Every operand is still parsed and type-checked. Discarding a nonvolatile local
+reference, as in `(runtime_value, 3)`, does not load its value. Address
+computations must still be valid; discarded array elements require an index
+within the array, following the
+[indirection clarification](https://cplusplus.github.io/CWG/issues/2823.html).
+Reading parameters or buffers, modifying variables, and
+calling the supported functions cannot supply constant values. Compute
+builtins, including `blockDim`, are not C++ constant expressions.
+
+`constexpr` arrays, vectors, functions, and braced initializers remain
+unsupported.
+
 ## Source subset
 
 Aliases support `typedef` and `using` for `bool`, `int`, `unsigned int`,
@@ -286,7 +322,7 @@ declarator, and all names share the declared type and qualification.
 
 Fixed one-dimensional local arrays support the scalar and vector types above
 and their aliases, in both kernels and device helpers. Extents
-must be positive integer literals. Each invocation owns its array storage;
+must be positive integral constant expressions. Each invocation owns its array storage;
 elements use the same indexing, assignments, and updates as buffer elements.
 Arrays and other locals can share a declaration, as in `int values[3], next = 1;`.
 
@@ -296,7 +332,7 @@ Const arrays require an empty initializer and their elements cannot be modified.
 Bare mutable arrays must be assigned before reading. These rules follow C++
 [array declarations](https://eel.is/c++draft/dcl.array) and
 [aggregate initialization](https://eel.is/c++draft/dcl.init.aggr).
-Nonempty initializer lists, inferred bounds, constant-expression extents,
+Nonempty initializer lists and inferred bounds,
 multidimensional local arrays, and array-to-pointer conversions remain unsupported.
 
 Supported expressions include indexed buffer reads, scalar locals,
@@ -380,13 +416,13 @@ shared types remain unsupported. Vector elements use the sizes, alignments, and
 array strides listed in the kernel interface, including packed three-component
 structures. Whole-value copies and scalar component updates use the same rules
 as local vectors. Array extents must
-be positive integer literals using the same bases, separators, and suffix rules.
+be positive integral constant expressions using the scalar rules above.
 Shared variables become workgroup storage without resource bindings; names obey
 the surrounding block scope, and each workgroup has its own storage. Declarations
 cannot contain initializers, following NVIDIA's
 [shared memory constraints](https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/cpp-language-extensions.html).
-Dynamic `extern __shared__` storage and constant-expression extents remain
-unsupported. Accesses to shared values from different invocations require
+Dynamic `extern __shared__` storage remains unsupported.
+Accesses to shared values from different invocations require
 synchronization when any invocation writes them.
 
 `__syncthreads();` synchronizes a thread block and makes earlier shared and

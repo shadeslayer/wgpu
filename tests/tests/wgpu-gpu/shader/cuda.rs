@@ -11,6 +11,7 @@ mod arithmetic;
 mod bitcasts;
 mod comma;
 mod conditionals;
+mod constant_expressions;
 mod control_flow;
 mod declarations;
 mod dual_execution;
@@ -39,6 +40,7 @@ pub fn all_tests(tests: &mut Vec<GpuTestInitializer>) {
         CUDA_BITCASTS,
         CUDA_COMMA,
         CUDA_CONDITIONALS,
+        CUDA_CONSTANT_EXPRESSIONS,
         CUDA_CONTROL_FLOW,
         CUDA_DECLARATIONS,
         CUDA_DUAL_EXECUTION,
@@ -198,6 +200,8 @@ static CUDA_BITCASTS: GpuTestConfiguration = configuration(bitcasts::cases);
 static CUDA_COMMA: GpuTestConfiguration = configuration(comma::cases);
 #[apply(gpu_test!)]
 static CUDA_CONDITIONALS: GpuTestConfiguration = configuration(conditionals::cases);
+#[apply(gpu_test!)]
+static CUDA_CONSTANT_EXPRESSIONS: GpuTestConfiguration = configuration(constant_expressions::cases);
 #[apply(gpu_test!)]
 static CUDA_CONTROL_FLOW: GpuTestConfiguration = configuration(control_flow::cases);
 #[apply(gpu_test!)]

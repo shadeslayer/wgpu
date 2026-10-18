@@ -10,8 +10,15 @@ impl Parser<'_> {
     pub(super) fn comma_expression_result(&mut self) -> Result<ExpressionResult, ParseError> {
         let mut result = self.expression_result(0)?;
         while self.take_symbol(',')? {
+            let earlier = match result {
+                ExpressionResult::Value(ref value) => value.constant(),
+                ExpressionResult::Void(_) => ConstantValue::default(),
+            };
             self.discard_result(result)?;
             result = self.expression_result(0)?;
+            if let ExpressionResult::Value(ref mut value) = result {
+                value.set_constant(value.constant().after(earlier));
+            }
         }
         Ok(result)
     }
@@ -178,6 +185,9 @@ impl Parser<'_> {
                     span,
                 )?;
                 return Ok(Value {
+                    constant: ConstantValue::evaluated(value.constant.literal.and_then(
+                        |literal| constant_evaluation::unary(UnaryOperator::LogicalNot, literal),
+                    )),
                     handle,
                     ty: scalar_resolution(Scalar::BOOL),
                     span,
@@ -195,6 +205,9 @@ impl Parser<'_> {
                     span,
                 )?;
                 return Ok(Value {
+                    constant: ConstantValue::evaluated(value.constant.literal.and_then(
+                        |literal| constant_evaluation::unary(UnaryOperator::BitwiseNot, literal),
+                    )),
                     handle,
                     ty: value.ty,
                     span,
@@ -221,6 +234,9 @@ impl Parser<'_> {
             };
             let handle = self.append(expression, span)?;
             return Ok(Value {
+                constant: ConstantValue::evaluated(value.constant.literal.and_then(|literal| {
+                    constant_evaluation::unary(UnaryOperator::Negate, literal)
+                })),
                 handle,
                 ty: value.ty,
                 span,
@@ -266,6 +282,7 @@ impl Parser<'_> {
                         token.span,
                     )?;
                     return Ok(Value {
+                        constant: Literal::Bool(name == "true").into(),
                         handle,
                         ty: scalar_resolution(Scalar::BOOL),
                         span: token.span,
@@ -282,7 +299,7 @@ impl Parser<'_> {
                     message: format!("unknown variable `{name}`"),
                     span: token.span,
                 })?;
-                let (pointer, ty, writable, span) = match symbol {
+                let (pointer, ty, writable, span, constant) = match symbol {
                     Symbol::Type(_) => {
                         return Err(ParseError {
                             message: format!("type `{name}` cannot be used as a value"),
@@ -294,19 +311,47 @@ impl Parser<'_> {
                         ty,
                         writable,
                     } => {
-                        let pointer = self.array_element(pointer, token.span)?;
+                        let (pointer, is_discardable) = self.array_element(pointer, token.span)?;
                         (
                             pointer,
                             ty,
                             writable,
                             self.function.ir.expressions.get_span(pointer),
+                            ConstantValue {
+                                literal: None,
+                                is_discardable,
+                            },
                         )
                     }
                     Symbol::Variable {
                         pointer,
                         ty,
                         writable,
-                    } => (pointer, ty, writable, token.span),
+                    } => (
+                        pointer,
+                        ty,
+                        writable,
+                        token.span,
+                        self.pointer_constant(pointer),
+                    ),
+                    Symbol::Constant {
+                        handle,
+                        scalar,
+                        literal,
+                    } => {
+                        return Ok(ExpressionResult::Value(ExpressionValue::Reference(
+                            ReferenceValue {
+                                reference: Reference::Constant(handle),
+                                writable: false,
+                                ty: scalar_resolution(scalar),
+                                span: token.span,
+                                constant: ConstantValue {
+                                    literal,
+                                    is_discardable: true,
+                                },
+                            },
+                        )));
+                    }
                 };
                 Ok(ExpressionResult::Value(ExpressionValue::Reference(
                     ReferenceValue {
@@ -314,6 +359,7 @@ impl Parser<'_> {
                         writable,
                         ty,
                         span,
+                        constant,
                     },
                 )))
             }
@@ -343,6 +389,9 @@ impl Parser<'_> {
             value.span,
         )?;
         Ok(Value {
+            constant: ConstantValue::evaluated(value.constant.literal.and_then(|value| {
+                constant_evaluation::binary(BinaryOperator::NotEqual, value, literal)
+            })),
             handle,
             ty: scalar_resolution(Scalar::BOOL),
             span: value.span,
@@ -400,7 +449,15 @@ impl Parser<'_> {
             span,
         );
         let handle = self.append(Expression::Load { pointer }, span)?;
+        let constant = match left.constant.literal {
+            Some(Literal::Bool(value)) if value == (operator == BinaryOperator::LogicalOr) => {
+                Some(Literal::Bool(value))
+            }
+            Some(Literal::Bool(_)) => right.constant.literal,
+            _ => None,
+        };
         Ok(Value {
+            constant: ConstantValue::evaluated(constant),
             handle,
             ty: scalar_resolution(Scalar::BOOL),
             span,
