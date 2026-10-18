@@ -388,10 +388,10 @@ fn cuda_lists_validate_malformed_and_unreachable_source_with_utf8_spans() {
 }
 
 #[test]
-fn cuda_lists_keep_inferred_arrays_resources_and_other_initialization_contexts_unsupported() {
+fn cuda_lists_reject_empty_inferred_arrays_and_unsupported_initialization_contexts() {
     for body in [
-        "int values[]{1, 2};",
-        "int values[] = {1, 2};",
+        "int values[]{};",
+        "int values[] = {};",
         "int values[2][2]{{1}};",
         "int *pointer{0};",
         "__shared__ int values[2]{1};",

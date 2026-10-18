@@ -14,6 +14,7 @@ mod dual_execution;
 mod float_math;
 mod float_separators;
 mod helpers;
+mod inferred_arrays;
 mod inline;
 mod integer_intrinsics;
 mod integer_math;

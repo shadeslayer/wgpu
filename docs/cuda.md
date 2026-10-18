@@ -319,7 +319,7 @@ Local declarations can list comma-separated names, as in
 declarator, and all names share the declared type and qualification.
 
 Fixed one-dimensional local arrays support the scalar and vector types above
-and their aliases, in both kernels and device helpers. Extents
+and their aliases, in both kernels and device helpers. Written extents
 must be positive integral constant expressions. Each invocation owns its array storage;
 elements use the same indexing, assignments, and updates as buffer elements.
 Arrays and other locals can share a declaration, as in `int values[3], next = 1;`.
@@ -330,8 +330,22 @@ Const arrays require an initializer and their elements cannot be modified.
 Bare mutable arrays must be assigned before reading. These rules follow C++
 [array declarations](https://eel.is/c++draft/dcl.array) and
 [aggregate initialization](https://eel.is/c++draft/dcl.init.aggr).
-Inferred bounds, multidimensional local arrays, and array-to-pointer conversions
-remain unsupported.
+Local array bounds may be omitted when a nonempty initializer list determines
+the element count, following C++ [array declarations](https://timsong-cpp.github.io/cppwp/n4861/dcl.array#7).
+For example, `int values[]{1, 2, 3};` declares three elements.
+Vector arrays count complete vector elements after brace elision and copies:
+`int3 values[]{1, 2, 3, 4};` declares two elements, `(1, 2, 3)` and `(4, 0, 0)`.
+Empty lists cannot determine a bound; `int values[]{};` is rejected, while
+`int values[]{{}};` declares one zero element.
+
+The array's bound remains unknown inside its initializer for constant-expression
+checks. A discarded self-reference at index zero can qualify, as in
+`float values[]{1.0f, (values[0], 2)};`. Nonzero self-indices cannot provide a
+constant value there, even when the eventual bound contains them, following the
+[unknown-bound clarification](https://cplusplus.github.io/CWG/issues/3004.html).
+Ordinary expressions can still read earlier initialized elements at nonzero
+indices. After the declaration, constant-address checks use the completed bound.
+Multidimensional local arrays and array-to-pointer conversions remain unsupported.
 
 Local scalars, vectors, and fixed arrays accept direct-list and copy-list
 initialization, including partial lists and a trailing comma:

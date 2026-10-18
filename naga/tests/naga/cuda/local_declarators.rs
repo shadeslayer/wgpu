@@ -180,7 +180,7 @@ fn cuda_local_declarators_keep_other_declarator_forms_unsupported() {
         ("int first = 1,, second = 2;", ",", 1),
         ("int first = 1, second = ;", ";", 0),
         ("int first = 1, *second;", "*", 0),
-        ("int first = 1, second[];", "]", 0),
+        ("int first = 1, second[];", ";", 0),
         ("int first = 1, (second);", "(", 0),
         ("int first = 1, second(2);", "(", 0),
         ("int first = 1, second{,};", ",", 1),

@@ -112,7 +112,12 @@ impl<'a> Parser<'a> {
             _ => return false,
         };
         let ty = match self.function.ir.expressions[base] {
-            Expression::LocalVariable(local) => self.function.ir.local_variables[local].ty,
+            Expression::LocalVariable(local) => {
+                if self.function.pending_array == Some(local) {
+                    return index == 0;
+                }
+                self.function.ir.local_variables[local].ty
+            }
             Expression::GlobalVariable(global) => self.module.global_variables[global].ty,
             _ => return false,
         };

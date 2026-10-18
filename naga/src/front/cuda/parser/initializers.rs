@@ -48,9 +48,56 @@ impl Parser<'_> {
             TypeInner::Array { base, .. } => base,
             _ => return self.fail("expected an array initializer"),
         };
+        let initialized_count = self.array_initializer_clauses(
+            pointer,
+            specifier,
+            element_ty,
+            Some(array_count),
+            span,
+        )?;
+        let end = self.expect_symbol('}')?;
+        if initialized_count < array_count.get() {
+            self.zero_array_tail(
+                pointer,
+                element_ty,
+                initialized_count,
+                array_count,
+                span.until(&end),
+            )?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn inferred_array_initializer(
+        &mut self,
+        pointer: Handle<Expression>,
+        specifier: TypeSpecifier,
+        element_ty: Handle<Type>,
+    ) -> Result<NonZeroU32, ParseError> {
+        self.take_symbol('=')?;
+        let span = self.expect_symbol('{')?;
+        if self.lexer.peek()?.kind == TokenKind::Symbol('}') {
+            return self.fail("cannot infer an array bound from an empty initializer list");
+        }
+        let count = self.array_initializer_clauses(pointer, specifier, element_ty, None, span)?;
+        let end = self.expect_symbol('}')?;
+        NonZeroU32::new(count).ok_or_else(|| ParseError {
+            message: String::from("array initializer requires at least one element"),
+            span: span.until(&end),
+        })
+    }
+
+    fn array_initializer_clauses(
+        &mut self,
+        pointer: Handle<Expression>,
+        specifier: TypeSpecifier,
+        element_ty: Handle<Type>,
+        known_count: Option<NonZeroU32>,
+        span: Span,
+    ) -> Result<u32, ParseError> {
         let mut initialized_count = 0;
         loop {
-            if initialized_count == array_count.get() {
+            if known_count.is_some_and(|count| initialized_count == count.get()) {
                 return self.fail("too many array initializer clauses");
             }
             let element = self.append(
@@ -79,22 +126,15 @@ impl Parser<'_> {
                     )?;
                 }
             }
-            initialized_count += 1;
+            initialized_count = initialized_count.checked_add(1).ok_or_else(|| ParseError {
+                message: String::from("too many array initializer clauses"),
+                span,
+            })?;
             if !self.take_symbol(',')? || self.lexer.peek()?.kind == TokenKind::Symbol('}') {
                 break;
             }
         }
-        let end = self.expect_symbol('}')?;
-        if initialized_count < array_count.get() {
-            self.zero_array_tail(
-                pointer,
-                element_ty,
-                initialized_count,
-                array_count,
-                span.until(&end),
-            )?;
-        }
-        Ok(())
+        Ok(initialized_count)
     }
 
     fn scalar_initializer_clause(&mut self, scalar: Scalar) -> Result<Value, ParseError> {

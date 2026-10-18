@@ -197,15 +197,23 @@ impl<'a> Parser<'a> {
                 return self.fail("constexpr arrays are unsupported");
             }
             let (ty, array_count) = if is_array {
-                let (size, extent_span) = self.array_size()?;
-                self.expect_symbol(']')?;
+                let explicit_extent = if self.take_symbol(']')? {
+                    None
+                } else {
+                    let extent = self.array_size()?;
+                    self.expect_symbol(']')?;
+                    Some(extent)
+                };
                 if self.lexer.peek()?.kind == TokenKind::Symbol('[') {
                     return self.fail("multidimensional local arrays are unsupported");
                 }
-                (
-                    self.array_type(base, ArraySize::Constant(size), extent_span, span)?,
-                    Some(size),
-                )
+                match explicit_extent {
+                    Some((size, extent_span)) => (
+                        self.array_type(base, ArraySize::Constant(size), extent_span, span)?,
+                        Some(size),
+                    ),
+                    None => (base, None),
+                }
             } else {
                 (base, None)
             };
@@ -232,7 +240,14 @@ impl<'a> Parser<'a> {
                 }
             };
             self.insert_symbol(name, symbol, span)?;
-            let initializer = if is_constexpr {
+            let initializer = if is_array && array_count.is_none() {
+                self.function.pending_array = Some(local);
+                let count = self.inferred_array_initializer(pointer, specifier, base)?;
+                let ty = self.array_type(base, ArraySize::Constant(count), span, span)?;
+                self.function.ir.local_variables[local].ty = ty;
+                self.function.pending_array = None;
+                None
+            } else if is_constexpr {
                 let literal = self.constant_initializer(&declared_ty)?;
                 self.function.constant_locals.insert(local, literal);
                 Some(self.append(Expression::Literal(literal), span)?)
