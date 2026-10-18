@@ -106,7 +106,17 @@ Void helpers support bare `return;`, implicit fallthrough, and
 expressions, including parenthesized calls and `for` initializer/update clauses.
 Using a void call where a scalar value is required produces a parse error.
 
-Helpers have no resource bindings. Prototypes, overloads, recursion, forward
+Helpers can share a name when their scalar parameter types or counts differ.
+Calls prefer exact argument types, then promotion from `bool` to `int`, then
+other scalar conversions. The selected overload must be no worse for every
+argument and better for at least one; otherwise the call is ambiguous.
+Return types, aliases, and top-level parameter `const` do not distinguish
+signatures. Calls use the overloads visible at their definition point, and a
+call selecting the current helper is rejected as recursion. These rules follow
+C++ [conversion ranking](https://eel.is/c++draft/over.ics.rank) and
+[overload selection](https://eel.is/c++draft/over.match.best.general).
+
+Helpers have no resource bindings. Prototypes, recursion, forward
 calls, pointers, references, shared storage, barriers, and
 compute builtins in helpers remain unsupported.
 

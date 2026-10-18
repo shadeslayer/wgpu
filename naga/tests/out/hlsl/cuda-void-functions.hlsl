@@ -103,9 +103,9 @@ void void_functions(uint3 blockIdx : SV_GroupID, uint3 threadIdx : SV_GroupThrea
         out_.Store((_e52 + 2u)*4, asuint(_e55));
         iterations = int(0);
         {
-            int _e61 = value;
-            value = asint(asuint(_e61) + asuint(int(1)));
-            consume((int(0) != int(0)), _e61, uint(int(0)), float(1u));
+            int _e59 = value;
+            value = asint(asuint(_e59) + asuint(int(1)));
+            consume((int(0) != int(0)), _e59, uint(int(0)), float(1u));
             uint2 loop_bound = uint2(4294967295u, 4294967295u);
             bool loop_init = true;
             while(true) {

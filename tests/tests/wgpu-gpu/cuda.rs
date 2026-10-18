@@ -25,6 +25,7 @@ pub fn all_tests(tests: &mut Vec<GpuTestInitializer>) {
         CUDA_LOCAL_DECLARATORS,
         CUDA_COMMA,
         CUDA_FUNCTION_SPECIFIERS,
+        CUDA_SCALAR_OVERLOADS,
     ]);
 }
 
@@ -1203,6 +1204,65 @@ static CUDA_FUNCTION_SPECIFIERS: GpuTestConfiguration = GpuTestConfiguration::ne
                 ]
             } else {
                 [sentinel; 12]
+            };
+            assert_eq!(row, &expected, "thread {index}");
+        }
+    });
+
+#[apply(gpu_test!)]
+static CUDA_SCALAR_OVERLOADS: GpuTestConfiguration = GpuTestConfiguration::new()
+    .parameters(TestParameters::default().test_features_limits())
+    .run_async(|ctx| async move {
+        let length = 70u32;
+        let sentinel = -123456789i32;
+        let input: [i32; 128] = std::array::from_fn(|index| index as i32 % 11 - 5);
+        let buffers = [
+            buffer(
+                &ctx,
+                bytemuck::cast_slice(&[sentinel; 128 * 13]),
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            ),
+            buffer(
+                &ctx,
+                bytemuck::cast_slice(&input),
+                wgpu::BufferUsages::STORAGE,
+            ),
+            buffer(
+                &ctx,
+                bytemuck::cast_slice(&[length, 0, 0, 0]),
+                wgpu::BufferUsages::UNIFORM,
+            ),
+        ];
+        let result = run_kernel(
+            &ctx,
+            include_str!("../../../naga/tests/in/cuda/scalar-overloads.cu"),
+            &buffers,
+            0,
+            2,
+        )
+        .await;
+        let actual: &[i32] = bytemuck::cast_slice(&result);
+        for (index, row) in actual.as_chunks::<13>().0.iter().enumerate() {
+            let expected = if index < length as usize {
+                let value = input[index];
+                let choose = i32::from(index % 2 == 0);
+                [
+                    1 - choose,
+                    value + 10,
+                    value + 36,
+                    (value as f32 * 1.5 + 0.5) as i32,
+                    choose * 10 + (value as f32 + 0.5) as i32,
+                    100 + (value as f32 + 0.5) as i32 * 10 + choose,
+                    value * 2 + 216,
+                    value + 1,
+                    value + 14,
+                    (value as f32 + 0.75) as i32 + 2,
+                    (value as f32 + 0.75) as i32 + 100,
+                    value * 11 + 242,
+                    value * 1101 + 8809,
+                ]
+            } else {
+                [sentinel; 13]
             };
             assert_eq!(row, &expected, "thread {index}");
         }

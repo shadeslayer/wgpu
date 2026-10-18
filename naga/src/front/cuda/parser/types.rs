@@ -6,10 +6,10 @@ pub(super) struct QualifiedScalar {
     pub is_const: bool,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(super) enum GlobalDeclaration {
     Type(QualifiedScalar),
-    Function(Handle<Function>),
+    Functions(Vec<Handle<Function>>),
     Kernel,
 }
 

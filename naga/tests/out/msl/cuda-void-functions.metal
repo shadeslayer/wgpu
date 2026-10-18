@@ -118,9 +118,9 @@ kernel void void_functions(
         out[_e52 + 2u] = _e55;
         iterations = 0;
         {
-            int _e61 = value;
-            value = as_type<int>(as_type<uint>(_e61) + as_type<uint>(1));
-            consume(0 != 0, _e61, static_cast<uint>(0), static_cast<float>(1u));
+            int _e59 = value;
+            value = as_type<int>(as_type<uint>(_e59) + as_type<uint>(1));
+            consume(0 != 0, _e59, static_cast<uint>(0), static_cast<float>(1u));
             uint2 loop_bound = uint2(4294967295u);
             bool loop_init = true;
             while(true) {

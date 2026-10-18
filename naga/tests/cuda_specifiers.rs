@@ -383,7 +383,7 @@ fn cuda_function_specifiers_preserve_unsupported_signatures_and_bodies() {
         "static __device__ int helper(int *value) { return value[0]; } __global__ void kernel() {}",
         "static __device__ int *helper(int value) { return value; } __global__ void kernel() {}",
         "__device__ __forceinline__ int helper(int value) { return helper(value); } __global__ void kernel() {}",
-        "static __device__ int helper(int value) { return value; } static __device__ float helper(float value) { return value; } __global__ void kernel() {}",
+        "static __device__ int helper(int value) { return value; } static __device__ int helper(int other) { return other; } __global__ void kernel() {}",
         "static __device__ void helper() { __shared__ int value; } __global__ void kernel() {}",
         "static __device__ void helper() { __syncthreads(); } __global__ void kernel() {}",
         "static __device__ int helper() { return threadIdx.x; } __global__ void kernel() {}",

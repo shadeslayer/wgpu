@@ -282,7 +282,7 @@ fn cuda_void_helpers_preserve_function_lookup_and_arity_checks() {
         "__device__ void consume(int value) {} __device__ void forward(int consume) { consume(1); } __global__ void kernel() {}",
         "__device__ void consume(int value) { consume(value); } __global__ void kernel() {}",
         "__device__ void forward(int value) { consume(value); } __device__ void consume(int value) {} __global__ void kernel() {}",
-        "__device__ void consume(int value) {} __device__ void consume(float value) {} __global__ void kernel() {}",
+        "__device__ void consume(int value) {} __device__ void consume(int other) {} __global__ void kernel() {}",
     ] {
         assert_rejected(source);
     }

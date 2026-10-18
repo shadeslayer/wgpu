@@ -14,6 +14,22 @@ struct FunctionHeader<'a> {
     name_span: Span,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum FunctionCandidate {
+    Defined(Handle<Function>),
+    Current,
+}
+
+fn conversion_rank(source: Scalar, target: Scalar) -> u8 {
+    if source == target {
+        0
+    } else if source == Scalar::BOOL && target == Scalar::I32 {
+        1
+    } else {
+        2
+    }
+}
+
 impl<'a> Parser<'a> {
     pub(super) fn parameters(&mut self) -> Result<(), ParseError> {
         self.expect_symbol('(')?;
@@ -33,11 +49,21 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    pub(super) fn check_function_name(&self, name: &str, span: Span) -> Result<(), ParseError> {
+    fn check_function_name(
+        &self,
+        name: &str,
+        span: Span,
+        kind: FunctionKind,
+    ) -> Result<(), ParseError> {
         self.check_name(name, span)?;
-        if self.global_declarations.contains_key(name) {
+        let compatible = match self.global_declarations.get(name) {
+            None => true,
+            Some(&GlobalDeclaration::Functions(_)) => kind == FunctionKind::Device,
+            Some(_) => false,
+        };
+        if !compatible {
             return Err(ParseError {
-                message: format!("duplicate function or unsupported overload `{name}`"),
+                message: format!("incompatible function declaration `{name}`"),
                 span,
             });
         }
@@ -170,7 +196,7 @@ impl<'a> Parser<'a> {
             });
         }
         let (name, name_span) = self.identifier()?;
-        self.check_function_name(name, name_span)?;
+        self.check_function_name(name, name_span, kind)?;
         Ok(FunctionHeader {
             kind,
             result,
@@ -252,6 +278,23 @@ impl<'a> Parser<'a> {
             });
         }
         self.parameters()?;
+        if let Some(&GlobalDeclaration::Functions(ref functions)) =
+            self.global_declarations.get(header.name)
+        {
+            let parameters = &self.function.ir.arguments;
+            if functions.iter().any(|&function| {
+                self.module.functions[function]
+                    .arguments
+                    .iter()
+                    .map(|argument| argument.ty)
+                    .eq(parameters.iter().map(|argument| argument.ty))
+            }) {
+                return Err(ParseError {
+                    message: format!("duplicate device helper definition `{}`", header.name),
+                    span: header.name_span,
+                });
+            }
+        }
         self.expect_symbol('{')?;
         let terminated = self.block_contents()?;
         if self.function.ir.result.is_some() && !terminated {
@@ -269,8 +312,14 @@ impl<'a> Parser<'a> {
             FunctionContext::new(FunctionKind::Kernel),
         );
         let handle = self.module.functions.append(function.ir, header.name_span);
-        self.global_declarations
-            .insert(header.name, GlobalDeclaration::Function(handle));
+        match *self
+            .global_declarations
+            .entry(header.name)
+            .or_insert_with(|| GlobalDeclaration::Functions(Vec::new()))
+        {
+            GlobalDeclaration::Functions(ref mut functions) => functions.push(handle),
+            _ => unreachable!(),
+        }
         Ok(())
     }
 
@@ -299,33 +348,18 @@ impl<'a> Parser<'a> {
                 span,
             });
         }
-        let function = match self.global_declarations.get(name) {
-            Some(&GlobalDeclaration::Function(function)) => function,
-            _ => {
-                return Err(ParseError {
-                    message: format!("unknown or not previously defined device helper `{name}`"),
-                    span,
-                })
-            }
-        };
+        if self.function_candidates(name).next().is_none() {
+            return Err(ParseError {
+                message: format!("unknown or not previously defined device helper `{name}`"),
+                span,
+            });
+        }
         self.expect_symbol('(')?;
         let mut arguments = Vec::new();
         if self.lexer.peek()?.kind != TokenKind::Symbol(')') {
             loop {
-                let Some(parameter) = self.module.functions[function]
-                    .arguments
-                    .get(arguments.len())
-                else {
-                    return Err(ParseError {
-                        message: format!("too many arguments for device helper `{name}`"),
-                        span,
-                    });
-                };
-                let TypeInner::Scalar(scalar) = self.module.types[parameter.ty].inner else {
-                    unreachable!()
-                };
                 let value = self.expression(0)?;
-                arguments.push(self.convert_value(value, scalar)?.handle);
+                arguments.push(self.rvalue(value)?);
                 if self.lexer.peek()?.kind == TokenKind::Symbol(')') {
                     break;
                 }
@@ -333,11 +367,14 @@ impl<'a> Parser<'a> {
             }
         }
         let end = self.expect_symbol(')')?;
-        if arguments.len() != self.module.functions[function].arguments.len() {
-            return Err(ParseError {
-                message: format!("too few arguments for device helper `{name}`"),
-                span,
-            });
+        let function = self.resolve_overload(name, &arguments, span)?;
+        let mut converted = Vec::with_capacity(arguments.len());
+        for (index, value) in arguments.into_iter().enumerate() {
+            let parameter = &self.module.functions[function].arguments[index];
+            let TypeInner::Scalar(scalar) = self.module.types[parameter.ty].inner else {
+                unreachable!()
+            };
+            converted.push(self.convert_value(value.into(), scalar)?.handle);
         }
         let span = span.until(&end);
         let scalar = self.module.functions[function]
@@ -362,7 +399,7 @@ impl<'a> Parser<'a> {
         self.push_statement(
             Statement::Call {
                 function,
-                arguments,
+                arguments: converted,
                 result: value.map(|value| value.handle),
             },
             span,
@@ -371,5 +408,98 @@ impl<'a> Parser<'a> {
             Some(value) => value.into(),
             None => ExpressionResult::Void(span),
         })
+    }
+
+    fn function_candidates<'b>(
+        &'b self,
+        name: &str,
+    ) -> impl Iterator<Item = FunctionCandidate> + Clone + 'b {
+        let functions = match self.global_declarations.get(name) {
+            Some(&GlobalDeclaration::Functions(ref functions)) => functions.as_slice(),
+            _ => &[],
+        };
+        let current = (self.function.kind == FunctionKind::Device
+            && self.function.ir.name.as_deref() == Some(name))
+        .then_some(FunctionCandidate::Current);
+        functions
+            .iter()
+            .copied()
+            .map(FunctionCandidate::Defined)
+            .chain(current)
+    }
+
+    fn candidate_function(&self, candidate: FunctionCandidate) -> &Function {
+        match candidate {
+            FunctionCandidate::Defined(handle) => &self.module.functions[handle],
+            FunctionCandidate::Current => &self.function.ir,
+        }
+    }
+
+    fn better_candidate(
+        &self,
+        left_candidate: FunctionCandidate,
+        right_candidate: FunctionCandidate,
+        arguments: &[Value],
+    ) -> bool {
+        let left_parameters = &self.candidate_function(left_candidate).arguments;
+        let right_parameters = &self.candidate_function(right_candidate).arguments;
+        let mut has_better_conversion = false;
+        for ((left_parameter, right_parameter), argument) in
+            left_parameters.iter().zip(right_parameters).zip(arguments)
+        {
+            let TypeInner::Scalar(left_scalar) = self.module.types[left_parameter.ty].inner else {
+                unreachable!()
+            };
+            let TypeInner::Scalar(right_scalar) = self.module.types[right_parameter.ty].inner
+            else {
+                unreachable!()
+            };
+            let left_rank = conversion_rank(argument.scalar, left_scalar);
+            let right_rank = conversion_rank(argument.scalar, right_scalar);
+            if left_rank > right_rank {
+                return false;
+            }
+            has_better_conversion |= left_rank < right_rank;
+        }
+        has_better_conversion
+    }
+
+    fn resolve_overload(
+        &self,
+        name: &str,
+        arguments: &[Value],
+        span: Span,
+    ) -> Result<Handle<Function>, ParseError> {
+        let mut viable_candidates = self.function_candidates(name).filter(|&candidate| {
+            self.candidate_function(candidate).arguments.len() == arguments.len()
+        });
+        let mut remaining_candidates = viable_candidates.clone();
+        let Some(mut best_candidate) = remaining_candidates.next() else {
+            return Err(ParseError {
+                message: format!("no matching device helper overload `{name}`"),
+                span,
+            });
+        };
+        for candidate in remaining_candidates {
+            if self.better_candidate(candidate, best_candidate, arguments) {
+                best_candidate = candidate;
+            }
+        }
+        if viable_candidates.any(|candidate| {
+            candidate != best_candidate
+                && !self.better_candidate(best_candidate, candidate, arguments)
+        }) {
+            return Err(ParseError {
+                message: format!("ambiguous device helper overload `{name}`"),
+                span,
+            });
+        }
+        match best_candidate {
+            FunctionCandidate::Defined(handle) => Ok(handle),
+            FunctionCandidate::Current => Err(ParseError {
+                message: String::from("recursive device helper calls are unsupported"),
+                span,
+            }),
+        }
     }
 }

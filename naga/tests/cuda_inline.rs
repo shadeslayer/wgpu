@@ -410,7 +410,7 @@ fn cuda_inline_does_not_enable_other_function_directives_or_signatures() {
         "__device__ inline int helper(int value); __global__ void kernel() {}",
         "__device__ inline int first() { return later(); } __device__ inline int later() { return 1; } __global__ void kernel() {}",
         "__device__ inline int helper(int value) { return helper(value); } __global__ void kernel() {}",
-        "__device__ inline int helper(int value) { return value; } __device__ inline float helper(float value) { return value; } __global__ void kernel() {}",
+        "__device__ inline int helper(int value) { return value; } __device__ inline int helper(int other) { return other; } __global__ void kernel() {}",
         "__device__ inline int helper(int *value) { return value[0]; } __global__ void kernel() {}",
         "__device__ inline int *helper(int value) { return value; } __global__ void kernel() {}",
         "__device__ inline int helper() { return threadIdx.x; } __global__ void kernel() {}",
