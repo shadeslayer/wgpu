@@ -1,17 +1,14 @@
 use super::*;
 
 impl Parser<'_> {
-    fn mutable_reference(
-        &self,
-        expression: ScalarExpression,
-    ) -> Result<ReferenceValue, ParseError> {
+    fn mutable_reference(&self, expression: ExpressionValue) -> Result<ReferenceValue, ParseError> {
         match expression {
-            ScalarExpression::Reference(reference) if reference.writable => Ok(reference),
-            ScalarExpression::Reference(reference) => Err(ParseError {
+            ExpressionValue::Reference(reference) if reference.writable => Ok(reference),
+            ExpressionValue::Reference(reference) => Err(ParseError {
                 message: String::from("cannot modify a const value"),
                 span: reference.span,
             }),
-            ScalarExpression::Value(value) => Err(ParseError {
+            ExpressionValue::Plain(value) => Err(ParseError {
                 message: String::from("update requires a modifiable lvalue"),
                 span: value.span,
             }),
@@ -20,9 +17,9 @@ impl Parser<'_> {
 
     pub(super) fn assignment(
         &mut self,
-        left: ScalarExpression,
+        left: ExpressionValue,
         operator: Option<BinaryOperator>,
-    ) -> Result<ScalarExpression, ParseError> {
+    ) -> Result<ExpressionValue, ParseError> {
         let mut left = self.mutable_reference(left)?;
         self.lexer.next()?;
         let (right, right_body) = self.capture_block(|parser| {
@@ -31,14 +28,14 @@ impl Parser<'_> {
         })?;
         let span = left.span.until(&right.span);
         self.prepend_block(right_body);
-        self.decorate_reference(&mut left, &mut |parser, pointer, scalar, reference_span| {
+        self.decorate_reference(&mut left, &mut |parser, pointer, ty, reference_span| {
             let value = if let Some(op) = operator {
-                let previous_value = parser.load_pointer(pointer, scalar, reference_span)?;
-                parser.binary_value(op, previous_value.into(), right.into())?
+                let previous_value = parser.load_pointer(pointer, ty, reference_span)?;
+                parser.binary_value(op, previous_value.into(), right.clone().into())?
             } else {
-                right
+                right.clone()
             };
-            let value = parser.convert_value(value.into(), scalar)?;
+            let value = parser.convert_value(value.into(), ty)?;
             parser.push_statement(
                 Statement::Store {
                     pointer,
@@ -48,50 +45,44 @@ impl Parser<'_> {
             );
             Ok(())
         })?;
-        Ok(ScalarExpression::Reference(ReferenceValue { span, ..left }))
+        Ok(ExpressionValue::Reference(ReferenceValue { span, ..left }))
     }
 
     pub(super) fn update(
         &mut self,
-        value: ScalarExpression,
+        value: ExpressionValue,
         increment: bool,
         postfix: bool,
         span: Span,
-    ) -> Result<ScalarExpression, ParseError> {
+    ) -> Result<ExpressionValue, ParseError> {
         let mut value = self.mutable_reference(value)?;
-        if value.scalar == Scalar::BOOL {
+        if self.require_scalar_type(&value.ty, value.span)? == Scalar::BOOL {
             return Err(ParseError {
                 message: String::from("boolean increment and decrement are invalid"),
                 span,
             });
         }
         if !postfix {
-            self.decorate_reference(
-                &mut value,
-                &mut |parser, pointer, scalar, reference_span| {
-                    parser.update_pointer(pointer, scalar, increment, reference_span, span)?;
-                    Ok(())
-                },
-            )?;
-            return Ok(ScalarExpression::Reference(ReferenceValue {
-                span,
-                ..value
-            }));
+            self.decorate_reference(&mut value, &mut |parser, pointer, ty, reference_span| {
+                parser.update_pointer(pointer, ty, increment, reference_span, span)?;
+                Ok(())
+            })?;
+            return Ok(ExpressionValue::Reference(ReferenceValue { span, ..value }));
         }
         if let Reference::Pointer(pointer) = value.reference {
             let previous_value =
-                self.update_pointer(pointer, value.scalar, increment, value.span, span)?;
+                self.update_pointer(pointer, &value.ty, increment, value.span, span)?;
             return Ok(Value {
                 span,
                 ..previous_value
             }
             .into());
         }
-        let scalar = value.scalar;
-        let pointer = self.temporary_pointer(scalar, span)?;
-        self.consume_reference(value, &mut |parser, source, scalar, reference_span| {
+        let ty = value.ty.clone();
+        let pointer = self.temporary_pointer(&ty, span)?;
+        self.consume_reference(value, &mut |parser, source, ty, reference_span| {
             let previous_value =
-                parser.update_pointer(source, scalar, increment, reference_span, span)?;
+                parser.update_pointer(source, ty, increment, reference_span, span)?;
             parser.push_statement(
                 Statement::Store {
                     pointer,
@@ -102,30 +93,25 @@ impl Parser<'_> {
             Ok(())
         })?;
         let handle = self.append(Expression::Load { pointer }, span)?;
-        Ok(Value {
-            handle,
-            scalar,
-            span,
-        }
-        .into())
+        Ok(Value { handle, ty, span }.into())
     }
 
     fn update_pointer(
         &mut self,
         pointer: Handle<Expression>,
-        scalar: Scalar,
+        ty: &TypeResolution,
         increment: bool,
         reference_span: Span,
         span: Span,
     ) -> Result<Value, ParseError> {
-        let previous_value = self.load_pointer(pointer, scalar, reference_span)?;
+        let previous_value = self.load_pointer(pointer, ty, reference_span)?;
         let one = self.append(Expression::Literal(Literal::I32(1)), span)?;
         let one = Value {
             handle: one,
-            scalar: Scalar::I32,
+            ty: scalar_resolution(Scalar::I32),
             span,
         };
-        let (left, right) = self.usual_arithmetic(previous_value.into(), one.into())?;
+        let (left, right) = self.usual_arithmetic(previous_value.clone().into(), one.into())?;
         let handle = self.append(
             Expression::Binary {
                 op: if increment {
@@ -141,11 +127,11 @@ impl Parser<'_> {
         let updated_value = self.convert_value(
             Value {
                 handle,
-                scalar: left.scalar,
+                ty: left.ty,
                 span,
             }
             .into(),
-            scalar,
+            ty,
         )?;
         self.push_statement(
             Statement::Store {

@@ -52,10 +52,10 @@ pub(super) fn builtin_declarations<'a>() -> FastHashMap<&'a str, GlobalDeclarati
         .collect()
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum ReturnType {
     Void,
-    Scalar(Scalar),
+    Value(TypeResolution),
 }
 
 struct FunctionHeader<'a> {
@@ -73,13 +73,26 @@ enum FunctionCandidate {
     Builtin(MathBuiltin),
 }
 
-fn conversion_rank(source: Scalar, target: Scalar) -> u8 {
-    if source == target {
-        0
-    } else if source == Scalar::BOOL && target == Scalar::I32 {
-        1
-    } else {
-        2
+fn conversion_rank(
+    source: &TypeResolution,
+    target: &TypeResolution,
+    module: &Module,
+) -> Option<u8> {
+    if module.compare_types(source, target) {
+        return Some(0);
+    }
+    match (
+        source.inner_with(&module.types),
+        target.inner_with(&module.types),
+    ) {
+        (&TypeInner::Scalar(source), &TypeInner::Scalar(target)) => {
+            Some(if source == Scalar::BOOL && target == Scalar::I32 {
+                1
+            } else {
+                2
+            })
+        }
+        _ => None,
     }
 }
 
@@ -193,11 +206,11 @@ impl<'a> Parser<'a> {
                         return self.fail("incompatible or repeated return type specifier");
                     }
                     seen_int = true;
-                    result = Some(ReturnType::Scalar(if seen_unsigned {
+                    result = Some(ReturnType::Value(scalar_resolution(if seen_unsigned {
                         Scalar::U32
                     } else {
                         Scalar::I32
-                    }));
+                    })));
                     result_span.get_or_insert(token.span);
                 }
                 TokenKind::Ident("unsigned") => {
@@ -205,7 +218,7 @@ impl<'a> Parser<'a> {
                         return self.fail("incompatible or repeated return type specifier");
                     }
                     seen_unsigned = true;
-                    result = Some(ReturnType::Scalar(Scalar::U32));
+                    result = Some(ReturnType::Value(scalar_resolution(Scalar::U32)));
                     result_span.get_or_insert(token.span);
                 }
                 TokenKind::Ident("void" | "float" | "bool") => {
@@ -214,8 +227,10 @@ impl<'a> Parser<'a> {
                     }
                     result = Some(match token.kind {
                         TokenKind::Ident("void") => ReturnType::Void,
-                        TokenKind::Ident("float") => ReturnType::Scalar(Scalar::F32),
-                        _ => ReturnType::Scalar(Scalar::BOOL),
+                        TokenKind::Ident("float") => {
+                            ReturnType::Value(scalar_resolution(Scalar::F32))
+                        }
+                        _ => ReturnType::Value(scalar_resolution(Scalar::BOOL)),
                     });
                     result_span.get_or_insert(token.span);
                 }
@@ -223,7 +238,7 @@ impl<'a> Parser<'a> {
                     let Some(ty) = self.type_name(name) else {
                         break;
                     };
-                    result = Some(ReturnType::Scalar(ty.scalar));
+                    result = Some(ReturnType::Value(ty.ty));
                     result_span.get_or_insert(token.span);
                 }
                 _ => break,
@@ -324,9 +339,9 @@ impl<'a> Parser<'a> {
 
     fn device_function(&mut self, header: FunctionHeader<'a>) -> Result<(), ParseError> {
         self.function.ir.name = Some(String::from(header.name));
-        if let ReturnType::Scalar(scalar) = header.result {
+        if let ReturnType::Value(ty) = header.result {
             self.function.ir.result = Some(crate::FunctionResult {
-                ty: self.scalar_handle(scalar, header.result_span),
+                ty: self.type_handle(&ty, header.result_span),
                 binding: None,
             });
         }
@@ -338,7 +353,10 @@ impl<'a> Parser<'a> {
                     .into_iter()
                     .enumerate()
                     .all(|(index, scalar)| {
-                        self.candidate_scalar(FunctionCandidate::Current, index) == scalar
+                        self.module.compare_types(
+                            &self.candidate_type(FunctionCandidate::Current, index),
+                            &scalar_resolution(scalar),
+                        )
                     })
         }) {
             return Err(ParseError {
@@ -395,10 +413,10 @@ impl<'a> Parser<'a> {
         &mut self,
         name: &'a str,
         span: Span,
-        scalar: Scalar,
+        parameter_ty: &TypeResolution,
         is_const: bool,
     ) -> Result<(), ParseError> {
-        let ty = self.scalar_handle(scalar, span);
+        let ty = self.type_handle(parameter_ty, span);
         let index = self.function.ir.arguments.len() as u32;
         self.function.ir.arguments.push(FunctionArgument {
             name: Some(String::from(name)),
@@ -406,7 +424,7 @@ impl<'a> Parser<'a> {
             binding: None,
         });
         let value = self.append(Expression::FunctionArgument(index), span)?;
-        self.initialize_parameter(name, span, scalar, is_const, value)
+        self.initialize_parameter(name, span, parameter_ty, is_const, value)
     }
 
     pub(super) fn call(&mut self, name: &str, span: Span) -> Result<ExpressionResult, ParseError> {
@@ -438,8 +456,8 @@ impl<'a> Parser<'a> {
         let candidate = self.resolve_overload(name, &arguments, span)?;
         if let FunctionCandidate::Builtin(builtin) = candidate {
             let mut arguments = arguments.into_iter();
-            let left = self.convert_value(arguments.next().unwrap().into(), builtin.result)?;
-            let right = self.convert_value(arguments.next().unwrap().into(), builtin.result)?;
+            let left = self.convert_scalar(arguments.next().unwrap().into(), builtin.result)?;
+            let right = self.convert_scalar(arguments.next().unwrap().into(), builtin.result)?;
             let span = span.until(&end);
             let handle = if builtin.result == Scalar::F32 {
                 self.float_minmax(builtin.function, left.handle, right.handle, span)?
@@ -457,7 +475,7 @@ impl<'a> Parser<'a> {
             };
             return Ok(Value {
                 handle,
-                scalar: builtin.result,
+                ty: scalar_resolution(builtin.result),
                 span,
             }
             .into());
@@ -468,28 +486,17 @@ impl<'a> Parser<'a> {
         let mut converted = Vec::with_capacity(arguments.len());
         for (index, value) in arguments.into_iter().enumerate() {
             let parameter = &self.module.functions[function].arguments[index];
-            let TypeInner::Scalar(scalar) = self.module.types[parameter.ty].inner else {
-                unreachable!()
-            };
-            converted.push(self.convert_value(value.into(), scalar)?.handle);
+            let ty = TypeResolution::Handle(parameter.ty);
+            converted.push(self.convert_value(value.into(), &ty)?.handle);
         }
         let span = span.until(&end);
-        let scalar = self.module.functions[function]
+        let ty = self.module.functions[function]
             .result
             .as_ref()
-            .map(|result| {
-                let TypeInner::Scalar(scalar) = self.module.types[result.ty].inner else {
-                    unreachable!()
-                };
-                scalar
-            });
-        let value = if let Some(scalar) = scalar {
+            .map(|result| TypeResolution::Handle(result.ty));
+        let value = if let Some(ty) = ty {
             let handle = self.append_call_result(function, span)?;
-            Some(Value {
-                handle,
-                scalar,
-                span,
-            })
+            Some(Value { handle, ty, span })
         } else {
             None
         };
@@ -497,7 +504,7 @@ impl<'a> Parser<'a> {
             Statement::Call {
                 function,
                 arguments: converted,
-                result: value.map(|value| value.handle),
+                result: value.as_ref().map(|value| value.handle),
             },
             span,
         );
@@ -677,16 +684,15 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn candidate_scalar(&self, candidate: FunctionCandidate, index: usize) -> Scalar {
+    fn candidate_type(&self, candidate: FunctionCandidate, index: usize) -> TypeResolution {
         let argument = match candidate {
             FunctionCandidate::Defined(handle) => &self.module.functions[handle].arguments[index],
             FunctionCandidate::Current => &self.function.ir.arguments[index],
-            FunctionCandidate::Builtin(builtin) => return builtin.parameters[index],
+            FunctionCandidate::Builtin(builtin) => {
+                return scalar_resolution(builtin.parameters[index])
+            }
         };
-        let TypeInner::Scalar(scalar) = self.module.types[argument.ty].inner else {
-            unreachable!()
-        };
-        scalar
+        TypeResolution::Handle(argument.ty)
     }
 
     fn better_candidate(
@@ -698,13 +704,18 @@ impl<'a> Parser<'a> {
         let mut has_better_conversion = false;
         for (index, argument) in arguments.iter().enumerate() {
             let left_rank = conversion_rank(
-                argument.scalar,
-                self.candidate_scalar(left_candidate, index),
+                &argument.ty,
+                &self.candidate_type(left_candidate, index),
+                &self.module,
             );
             let right_rank = conversion_rank(
-                argument.scalar,
-                self.candidate_scalar(right_candidate, index),
+                &argument.ty,
+                &self.candidate_type(right_candidate, index),
+                &self.module,
             );
+            let (Some(left_rank), Some(right_rank)) = (left_rank, right_rank) else {
+                return false;
+            };
             if left_rank > right_rank {
                 return false;
             }
@@ -719,9 +730,17 @@ impl<'a> Parser<'a> {
         arguments: &[Value],
         span: Span,
     ) -> Result<FunctionCandidate, ParseError> {
-        let mut viable_candidates = self
-            .function_candidates(name)
-            .filter(|&candidate| self.candidate_arity(candidate) == arguments.len());
+        let mut viable_candidates = self.function_candidates(name).filter(|&candidate| {
+            self.candidate_arity(candidate) == arguments.len()
+                && arguments.iter().enumerate().all(|(index, argument)| {
+                    conversion_rank(
+                        &argument.ty,
+                        &self.candidate_type(candidate, index),
+                        &self.module,
+                    )
+                    .is_some()
+                })
+        });
         let mut remaining_candidates = viable_candidates.clone();
         let Some(mut best_candidate) = remaining_candidates.next() else {
             return Err(ParseError {

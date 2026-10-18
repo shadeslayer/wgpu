@@ -76,14 +76,12 @@ impl<'a> Parser<'a> {
         }
         if self.take_ident("return")? {
             let value = if let Some(ref result) = self.function.ir.result {
-                let TypeInner::Scalar(scalar) = self.module.types[result.ty].inner else {
-                    unreachable!()
-                };
+                let ty = TypeResolution::Handle(result.ty);
                 let value = self.comma_expression()?;
-                Some(self.convert_value(value, scalar)?.handle)
+                Some(self.convert_value(value, &ty)?.handle)
             } else {
                 if self.lexer.peek()?.kind != TokenKind::Symbol(';') {
-                    if let ExpressionResult::Scalar(value) = self.comma_expression_result()? {
+                    if let ExpressionResult::Value(value) = self.comma_expression_result()? {
                         return Err(ParseError {
                             message: String::from("cannot return a value from a void function"),
                             span: value.span(),
@@ -179,11 +177,14 @@ impl<'a> Parser<'a> {
         if self.take_ident("__shared__")? {
             return self.shared_declaration();
         }
-        let QualifiedScalar { scalar, is_const } = self.scalar_type()?;
+        let QualifiedType {
+            ty: declared_ty,
+            is_const,
+        } = self.parse_type()?;
         loop {
             let (name, span) = self.identifier()?;
             self.check_name(name, span)?;
-            let base = self.scalar_handle(scalar, span);
+            let base = self.type_handle(&declared_ty, span);
             let is_array = self.take_symbol('[')?;
             let ty = if is_array {
                 let (size, extent_span) = self.array_size()?;
@@ -207,13 +208,13 @@ impl<'a> Parser<'a> {
             let symbol = if is_array {
                 Symbol::Array {
                     pointer,
-                    scalar,
+                    ty: declared_ty.clone(),
                     writable: !is_const,
                 }
             } else {
-                Symbol::Scalar {
+                Symbol::Variable {
                     pointer,
-                    scalar,
+                    ty: declared_ty.clone(),
                     writable: !is_const,
                 }
             };
@@ -230,7 +231,7 @@ impl<'a> Parser<'a> {
             } else {
                 self.expect_symbol('=')?;
                 let value = self.expression(0)?;
-                Some(self.convert_value(value, scalar)?.handle)
+                Some(self.convert_value(value, &declared_ty)?.handle)
             };
             let end = self.lexer.peek()?.span;
             let has_next = self.take_symbol(',')?;
@@ -251,8 +252,15 @@ impl<'a> Parser<'a> {
             return self.fail("shared storage is unsupported in device helpers");
         }
         let type_span = self.lexer.peek()?.span;
-        let QualifiedScalar { scalar, is_const } = self.scalar_type()?;
-        if scalar == Scalar::BOOL || is_const {
+        let QualifiedType {
+            ty: declared_ty,
+            is_const,
+        } = self.parse_type()?;
+        if self
+            .module
+            .compare_types(&declared_ty, &scalar_resolution(Scalar::BOOL))
+            || is_const
+        {
             return Err(ParseError {
                 message: String::from("shared storage requires a non-const 32-bit numeric type"),
                 span: type_span,
@@ -260,7 +268,7 @@ impl<'a> Parser<'a> {
         }
         let (name, span) = self.identifier()?;
         self.check_name(name, span)?;
-        let base = self.scalar_handle(scalar, span);
+        let base = self.type_handle(&declared_ty, span);
         let is_array = self.take_symbol('[')?;
         let ty = if is_array {
             let (size, extent_span) = self.array_size()?;
@@ -291,13 +299,13 @@ impl<'a> Parser<'a> {
         let symbol = if is_array {
             Symbol::Array {
                 pointer,
-                scalar,
+                ty: declared_ty,
                 writable: true,
             }
         } else {
-            Symbol::Scalar {
+            Symbol::Variable {
                 pointer,
-                scalar,
+                ty: declared_ty,
                 writable: true,
             }
         };

@@ -3,11 +3,23 @@ use super::*;
 impl Parser<'_> {
     pub(super) fn convert_value(
         &mut self,
-        value: ScalarExpression,
+        value: ExpressionValue,
+        target: &TypeResolution,
+    ) -> Result<Value, ParseError> {
+        if self.module.compare_types(value.ty(), target) {
+            return self.rvalue(value);
+        }
+        let scalar = self.require_scalar_type(target, value.span())?;
+        self.convert_scalar(value, scalar)
+    }
+
+    pub(super) fn convert_scalar(
+        &mut self,
+        value: ExpressionValue,
         target: Scalar,
     ) -> Result<Value, ParseError> {
         let value = self.rvalue(value)?;
-        if value.scalar == target {
+        if self.require_scalar_type(&value.ty, value.span)? == target {
             return Ok(value);
         }
         if target == Scalar::BOOL {
@@ -29,20 +41,23 @@ impl Parser<'_> {
         )?;
         Ok(Value {
             handle,
-            scalar: target,
+            ty: scalar_resolution(target),
             span: value.span,
         })
     }
 
     pub(super) fn usual_arithmetic(
         &mut self,
-        left: ScalarExpression,
-        right: ScalarExpression,
+        left: ExpressionValue,
+        right: ExpressionValue,
     ) -> Result<(Value, Value), ParseError> {
-        let common = Self::arithmetic_scalar(left.scalar(), right.scalar());
+        let common = Self::arithmetic_scalar(
+            self.require_scalar_type(left.ty(), left.span())?,
+            self.require_scalar_type(right.ty(), right.span())?,
+        );
         Ok((
-            self.convert_value(left, common)?,
-            self.convert_value(right, common)?,
+            self.convert_scalar(left, common)?,
+            self.convert_scalar(right, common)?,
         ))
     }
 
@@ -57,23 +72,17 @@ impl Parser<'_> {
         }
     }
 
-    pub(super) fn promote_integral(
-        &mut self,
-        value: ScalarExpression,
-    ) -> Result<Value, ParseError> {
+    pub(super) fn promote_integral(&mut self, value: ExpressionValue) -> Result<Value, ParseError> {
         let value = self.rvalue(value)?;
-        if value.scalar == Scalar::BOOL {
-            self.convert_value(value.into(), Scalar::I32)
+        if self.require_scalar_type(&value.ty, value.span)? == Scalar::BOOL {
+            self.convert_scalar(value.into(), Scalar::I32)
         } else {
             Ok(value)
         }
     }
 
-    pub(super) fn integral_operand(
-        &mut self,
-        value: ScalarExpression,
-    ) -> Result<Value, ParseError> {
-        if value.scalar().kind == ScalarKind::Float {
+    pub(super) fn integral_operand(&mut self, value: ExpressionValue) -> Result<Value, ParseError> {
+        if self.require_scalar_type(value.ty(), value.span())?.kind == ScalarKind::Float {
             return Err(ParseError {
                 message: String::from("operator requires integral operands"),
                 span: value.span(),
@@ -85,15 +94,15 @@ impl Parser<'_> {
     pub(super) fn binary_value(
         &mut self,
         operator: BinaryOperator,
-        left: ScalarExpression,
-        right: ScalarExpression,
+        left: ExpressionValue,
+        right: ExpressionValue,
     ) -> Result<Value, ParseError> {
         let span = left.span().until(&right.span());
         let (left, right) = match operator {
             BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight => {
                 let left = self.integral_operand(left)?;
                 let right = self.integral_operand(right)?;
-                let mut right = self.convert_value(right.into(), Scalar::U32)?;
+                let mut right = self.convert_scalar(right.into(), Scalar::U32)?;
                 if operator == BinaryOperator::ShiftLeft {
                     // Keep wrapping shifts out of WGSL constant evaluation.
                     let ty = self.scalar_handle(Scalar::U32, right.span);
@@ -134,7 +143,7 @@ impl Parser<'_> {
             | BinaryOperator::LessEqual
             | BinaryOperator::Greater
             | BinaryOperator::GreaterEqual => Scalar::BOOL,
-            _ => left.scalar,
+            _ => self.require_scalar_type(&left.ty, left.span)?,
         };
         let handle = self.append(
             Expression::Binary {
@@ -146,12 +155,12 @@ impl Parser<'_> {
         )?;
         Ok(Value {
             handle,
-            scalar,
+            ty: scalar_resolution(scalar),
             span,
         })
     }
 
-    pub(super) fn cast_type(&mut self) -> Result<Scalar, ParseError> {
-        Ok(self.scalar_type()?.scalar)
+    pub(super) fn cast_type(&mut self) -> Result<TypeResolution, ParseError> {
+        Ok(self.parse_type()?.ty)
     }
 }

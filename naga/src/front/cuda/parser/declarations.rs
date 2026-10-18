@@ -70,7 +70,7 @@ fn parameters(parser: &Parser<'_>, lexer: &mut Lexer<'_>, depth: u32) -> Result<
                 TokenKind::Ident(name) if parser.type_name(name).is_some() => {}
                 _ => return Ok(false),
             }
-            parser.scalar_type_from(lexer)?;
+            parser.parse_type_from(lexer)?;
         }
         if !matches!(lexer.peek()?.kind, TokenKind::Symbol(',' | ')' | '='))
             && !declarator(parser, lexer, depth + 1)?

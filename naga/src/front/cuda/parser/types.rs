@@ -1,14 +1,14 @@
 use super::*;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct QualifiedScalar {
-    pub scalar: Scalar,
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct QualifiedType {
+    pub ty: TypeResolution,
     pub is_const: bool,
 }
 
 #[derive(Clone, Debug)]
 pub(super) enum GlobalDeclaration {
-    Type(QualifiedScalar),
+    Type(QualifiedType),
     Functions(Vec<Handle<Function>>),
     Kernel,
 }
@@ -17,7 +17,7 @@ fn type_name(
     name: &str,
     symbols: &SymbolTable<&str, Symbol>,
     globals: &FastHashMap<&str, GlobalDeclaration>,
-) -> Option<QualifiedScalar> {
+) -> Option<QualifiedType> {
     let scalar = match name {
         "bool" => Scalar::BOOL,
         "float" => Scalar::F32,
@@ -25,26 +25,26 @@ fn type_name(
         "unsigned" => Scalar::U32,
         _ => {
             return match symbols.lookup(name) {
-                Some(&Symbol::Type(ty)) => Some(ty),
+                Some(&Symbol::Type(ref ty)) => Some(ty.clone()),
                 Some(_) => None,
                 None => match globals.get(name) {
-                    Some(&GlobalDeclaration::Type(ty)) => Some(ty),
+                    Some(&GlobalDeclaration::Type(ref ty)) => Some(ty.clone()),
                     _ => None,
                 },
             };
         }
     };
-    Some(QualifiedScalar {
-        scalar,
+    Some(QualifiedType {
+        ty: scalar_resolution(scalar),
         is_const: false,
     })
 }
 
-fn scalar_type(
+fn parse_type(
     lexer: &mut Lexer<'_>,
     symbols: &SymbolTable<&str, Symbol>,
     globals: &FastHashMap<&str, GlobalDeclaration>,
-) -> Result<QualifiedScalar, ParseError> {
+) -> Result<QualifiedType, ParseError> {
     let prefix = lexer.next_if(TokenKind::Ident("const"))?;
     let token = lexer.next()?;
     let mut ty = match token.kind {
@@ -78,23 +78,46 @@ fn scalar_type(
 }
 
 impl<'a> Parser<'a> {
-    pub(super) fn type_name(&self, name: &str) -> Option<QualifiedScalar> {
+    pub(super) fn type_handle(&mut self, ty: &TypeResolution, span: Span) -> Handle<Type> {
+        match ty.clone() {
+            TypeResolution::Handle(handle) => handle,
+            TypeResolution::Value(inner) => {
+                self.module.types.insert(Type { name: None, inner }, span)
+            }
+        }
+    }
+
+    pub(super) fn require_scalar_type(
+        &self,
+        ty: &TypeResolution,
+        span: Span,
+    ) -> Result<Scalar, ParseError> {
+        match *ty.inner_with(&self.module.types) {
+            TypeInner::Scalar(scalar) => Ok(scalar),
+            _ => Err(ParseError {
+                message: String::from("expected a supported scalar expression"),
+                span,
+            }),
+        }
+    }
+
+    pub(super) fn type_name(&self, name: &str) -> Option<QualifiedType> {
         type_name(name, &self.function.symbol_table, &self.global_declarations)
     }
 
-    pub(super) fn scalar_type(&mut self) -> Result<QualifiedScalar, ParseError> {
-        scalar_type(
+    pub(super) fn parse_type(&mut self) -> Result<QualifiedType, ParseError> {
+        parse_type(
             &mut self.lexer,
             &self.function.symbol_table,
             &self.global_declarations,
         )
     }
 
-    pub(super) fn scalar_type_from(
+    pub(super) fn parse_type_from(
         &self,
         lexer: &mut Lexer<'_>,
-    ) -> Result<QualifiedScalar, ParseError> {
-        scalar_type(
+    ) -> Result<QualifiedType, ParseError> {
+        parse_type(
             lexer,
             &self.function.symbol_table,
             &self.global_declarations,
@@ -118,10 +141,10 @@ impl<'a> Parser<'a> {
 
     pub(super) fn alias_declaration(&mut self, global: bool) -> Result<(), ParseError> {
         if self.take_ident("typedef")? {
-            let ty = self.scalar_type()?;
+            let ty = self.parse_type()?;
             loop {
                 let (name, span) = self.identifier()?;
-                self.insert_type(name, ty, span, global)?;
+                self.insert_type(name, ty.clone(), span, global)?;
                 if self.take_symbol(';')? {
                     return Ok(());
                 }
@@ -132,7 +155,7 @@ impl<'a> Parser<'a> {
         let (name, span) = self.identifier()?;
         self.check_name(name, span)?;
         self.expect_symbol('=')?;
-        let ty = self.scalar_type()?;
+        let ty = self.parse_type()?;
         self.expect_symbol(';')?;
         self.insert_type(name, ty, span, global)
     }
@@ -140,7 +163,7 @@ impl<'a> Parser<'a> {
     fn insert_type(
         &mut self,
         name: &'a str,
-        ty: QualifiedScalar,
+        ty: QualifiedType,
         span: Span,
         global: bool,
     ) -> Result<(), ParseError> {
@@ -148,16 +171,26 @@ impl<'a> Parser<'a> {
         let compatible = if global {
             match self
                 .global_declarations
-                .insert(name, GlobalDeclaration::Type(ty))
+                .insert(name, GlobalDeclaration::Type(ty.clone()))
             {
                 None => true,
-                Some(GlobalDeclaration::Type(previous)) => ty == previous,
+                Some(GlobalDeclaration::Type(previous)) => {
+                    ty.is_const == previous.is_const
+                        && self.module.compare_types(&ty.ty, &previous.ty)
+                }
                 Some(_) => false,
             }
         } else {
-            match self.function.symbol_table.add(name, Symbol::Type(ty)) {
+            match self
+                .function
+                .symbol_table
+                .add(name, Symbol::Type(ty.clone()))
+            {
                 None => true,
-                Some(Symbol::Type(previous)) => ty == previous,
+                Some(Symbol::Type(previous)) => {
+                    ty.is_const == previous.is_const
+                        && self.module.compare_types(&ty.ty, &previous.ty)
+                }
                 Some(_) => false,
             }
         };
@@ -170,4 +203,8 @@ impl<'a> Parser<'a> {
             })
         }
     }
+}
+
+pub(super) const fn scalar_resolution(scalar: Scalar) -> TypeResolution {
+    TypeResolution::Value(TypeInner::Scalar(scalar))
 }

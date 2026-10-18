@@ -6,7 +6,7 @@ impl Parser<'_> {
         condition: ExpressionResult,
         start: usize,
     ) -> Result<ExpressionResult, ParseError> {
-        let condition = self.truthy(condition.require_scalar()?)?;
+        let condition = self.truthy(condition.require_value()?)?;
         let (accept, accept_body) =
             self.capture_block(|parser| parser.comma_expression_result())?;
         self.expect_symbol(':')?;
@@ -25,9 +25,9 @@ impl Parser<'_> {
                 Ok(ExpressionResult::Void(span))
             }
             (
-                ExpressionResult::Scalar(ScalarExpression::Reference(accept)),
-                ExpressionResult::Scalar(ScalarExpression::Reference(reject)),
-            ) if accept.scalar == reject.scalar => {
+                ExpressionResult::Value(ExpressionValue::Reference(accept)),
+                ExpressionResult::Value(ExpressionValue::Reference(reject)),
+            ) if self.module.compare_types(&accept.ty, &reject.ty) => {
                 let depth = 1 + self
                     .reference_depth(&accept)
                     .max(self.reference_depth(&reject));
@@ -37,7 +37,7 @@ impl Parser<'_> {
                         span,
                     });
                 }
-                let scalar = accept.scalar;
+                let ty = accept.ty.clone();
                 let writable = accept.writable && reject.writable;
                 let handle = self.function.conditional_references.append(
                     Some(ConditionalReference {
@@ -54,25 +54,28 @@ impl Parser<'_> {
                     }),
                     span,
                 );
-                Ok(ExpressionResult::Scalar(ScalarExpression::Reference(
+                Ok(ExpressionResult::Value(ExpressionValue::Reference(
                     ReferenceValue {
                         reference: Reference::Conditional(handle),
                         writable,
-                        scalar,
+                        ty,
                         span,
                     },
                 )))
             }
-            (ExpressionResult::Scalar(accept), ExpressionResult::Scalar(reject)) => {
-                let scalar = if accept.scalar() == reject.scalar() {
-                    accept.scalar()
+            (ExpressionResult::Value(accept), ExpressionResult::Value(reject)) => {
+                let ty = if self.module.compare_types(accept.ty(), reject.ty()) {
+                    accept.ty().clone()
                 } else {
-                    Self::arithmetic_scalar(accept.scalar(), reject.scalar())
+                    scalar_resolution(Self::arithmetic_scalar(
+                        self.require_scalar_type(accept.ty(), accept.span())?,
+                        self.require_scalar_type(reject.ty(), reject.span())?,
+                    ))
                 };
-                let pointer = self.temporary_pointer(scalar, span)?;
+                let pointer = self.temporary_pointer(&ty, span)?;
                 let ((), accept) = self.capture_block(|parser| {
                     parser.append_block(accept_body);
-                    let value = parser.convert_value(accept, scalar)?;
+                    let value = parser.convert_value(accept, &ty)?;
                     parser.push_statement(
                         Statement::Store {
                             pointer,
@@ -84,7 +87,7 @@ impl Parser<'_> {
                 })?;
                 let ((), reject) = self.capture_block(|parser| {
                     parser.append_block(reject_body);
-                    let value = parser.convert_value(reject, scalar)?;
+                    let value = parser.convert_value(reject, &ty)?;
                     parser.push_statement(
                         Statement::Store {
                             pointer,
@@ -103,12 +106,7 @@ impl Parser<'_> {
                     span,
                 );
                 let handle = self.append(Expression::Load { pointer }, span)?;
-                Ok(Value {
-                    handle,
-                    scalar,
-                    span,
-                }
-                .into())
+                Ok(Value { handle, ty, span }.into())
             }
             _ => Err(ParseError {
                 message: String::from("conditional arms must both be scalar or both be void"),

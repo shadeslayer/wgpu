@@ -13,8 +13,10 @@ mod statements;
 mod types;
 mod updates;
 
+use crate::proc::TypeResolution;
 use context::{FunctionContext, FunctionKind};
-use types::{GlobalDeclaration, QualifiedScalar};
+use types::scalar_resolution;
+use types::{GlobalDeclaration, QualifiedType};
 
 use crate::{
     front::SymbolTable, AddressSpace, Arena, ArraySize, BinaryOperator, Binding, BuiltIn,
@@ -28,17 +30,17 @@ use super::{
     number, Options, ParseError,
 };
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 enum Symbol {
-    Type(QualifiedScalar),
+    Type(QualifiedType),
     Array {
         pointer: Handle<Expression>,
-        scalar: Scalar,
+        ty: TypeResolution,
         writable: bool,
     },
-    Scalar {
+    Variable {
         pointer: Handle<Expression>,
-        scalar: Scalar,
+        ty: TypeResolution,
         writable: bool,
     },
 }
@@ -47,7 +49,7 @@ enum Symbol {
 struct ReferenceValue {
     reference: Reference,
     writable: bool,
-    scalar: Scalar,
+    ty: TypeResolution,
     span: Span,
 }
 
@@ -72,57 +74,57 @@ struct ConditionalReference {
     depth: u32,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct Value {
     handle: Handle<Expression>,
-    scalar: Scalar,
+    ty: TypeResolution,
     span: Span,
 }
 
 #[derive(Debug)]
-enum ScalarExpression {
-    Value(Value),
+enum ExpressionValue {
+    Plain(Value),
     Reference(ReferenceValue),
 }
 
-impl ScalarExpression {
-    const fn scalar(&self) -> Scalar {
+impl ExpressionValue {
+    const fn ty(&self) -> &TypeResolution {
         match *self {
-            Self::Value(value) => value.scalar,
-            Self::Reference(ref reference) => reference.scalar,
+            Self::Plain(ref value) => &value.ty,
+            Self::Reference(ref reference) => &reference.ty,
         }
     }
 
     const fn span(&self) -> Span {
         match *self {
-            Self::Value(value) => value.span,
+            Self::Plain(ref value) => value.span,
             Self::Reference(ref reference) => reference.span,
         }
     }
 }
 
-impl From<Value> for ScalarExpression {
+impl From<Value> for ExpressionValue {
     fn from(value: Value) -> Self {
-        Self::Value(value)
+        Self::Plain(value)
     }
 }
 
 #[derive(Debug)]
 enum ExpressionResult {
-    Scalar(ScalarExpression),
+    Value(ExpressionValue),
     Void(Span),
 }
 
 impl From<Value> for ExpressionResult {
     fn from(value: Value) -> Self {
-        Self::Scalar(value.into())
+        Self::Value(value.into())
     }
 }
 
 impl ExpressionResult {
-    fn require_scalar(self) -> Result<ScalarExpression, ParseError> {
+    fn require_value(self) -> Result<ExpressionValue, ParseError> {
         match self {
-            Self::Scalar(value) => Ok(value),
+            Self::Value(value) => Ok(value),
             Self::Void(span) => Err(ParseError {
                 message: String::from("void expression cannot be used as a value"),
                 span,
@@ -172,8 +174,12 @@ impl<'a> Parser<'a> {
     }
 
     fn parameter(&mut self) -> Result<(), ParseError> {
-        let QualifiedScalar { scalar, is_const } = self.scalar_type()?;
-        if self.function.kind == FunctionKind::Kernel && scalar == Scalar::BOOL {
+        let QualifiedType { ty, is_const } = self.parse_type()?;
+        if self.function.kind == FunctionKind::Kernel
+            && self
+                .module
+                .compare_types(&ty, &scalar_resolution(Scalar::BOOL))
+        {
             return self.fail("boolean kernel parameters are unsupported");
         }
         let pointer_span = self.lexer.peek()?.span;
@@ -187,13 +193,13 @@ impl<'a> Parser<'a> {
         let (name, span) = self.identifier()?;
         self.check_name(name, span)?;
         if self.function.kind == FunctionKind::Device {
-            return self.device_parameter(name, span, scalar, is_const);
+            return self.device_parameter(name, span, &ty, is_const);
         }
         if !is_pointer {
-            return self.scalar_parameter(name, span, scalar, is_const);
+            return self.value_parameter(name, span, &ty, is_const);
         }
-        let base = self.scalar_handle(scalar, span);
-        let ty = self.module.types.insert(
+        let base = self.type_handle(&ty, span);
+        let array_ty = self.module.types.insert(
             Type {
                 name: None,
                 inner: TypeInner::Array {
@@ -215,7 +221,7 @@ impl<'a> Parser<'a> {
                 name: Some(String::from(name)),
                 space: AddressSpace::Storage { access },
                 binding: Some(ResourceBinding { group: 0, binding }),
-                ty,
+                ty: array_ty,
                 init: None,
                 memory_decorations: Default::default(),
             },
@@ -226,7 +232,7 @@ impl<'a> Parser<'a> {
             name,
             Symbol::Array {
                 pointer,
-                scalar,
+                ty,
                 writable: !is_const,
             },
             span,
@@ -234,21 +240,21 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    fn scalar_parameter(
+    fn value_parameter(
         &mut self,
         name: &'a str,
         span: Span,
-        scalar: Scalar,
+        parameter_ty: &TypeResolution,
         is_const: bool,
     ) -> Result<(), ParseError> {
-        let scalar_ty = self.scalar_handle(scalar, span);
+        let value_ty = self.type_handle(parameter_ty, span);
         let ty = self.module.types.insert(
             Type {
                 name: None,
                 inner: TypeInner::Struct {
                     members: alloc::vec![StructMember {
                         name: Some(String::from("value")),
-                        ty: scalar_ty,
+                        ty: value_ty,
                         binding: None,
                         offset: 0,
                     }],
@@ -272,22 +278,22 @@ impl<'a> Parser<'a> {
         let base = self.append(Expression::GlobalVariable(global), span)?;
         let field = self.append(Expression::AccessIndex { base, index: 0 }, span)?;
         let value = self.append(Expression::Load { pointer: field }, span)?;
-        self.initialize_parameter(name, span, scalar, is_const, value)
+        self.initialize_parameter(name, span, parameter_ty, is_const, value)
     }
 
     fn initialize_parameter(
         &mut self,
         name: &'a str,
         span: Span,
-        scalar: Scalar,
+        ty: &TypeResolution,
         is_const: bool,
         value: Handle<Expression>,
     ) -> Result<(), ParseError> {
-        let scalar_ty = self.scalar_handle(scalar, span);
+        let value_ty = self.type_handle(ty, span);
         let local = self.function.ir.local_variables.append(
             LocalVariable {
                 name: Some(String::from(name)),
-                ty: scalar_ty,
+                ty: value_ty,
                 init: None,
             },
             span,
@@ -296,9 +302,9 @@ impl<'a> Parser<'a> {
         self.push_statement(Statement::Store { pointer, value }, span);
         self.insert_symbol(
             name,
-            Symbol::Scalar {
+            Symbol::Variable {
                 pointer,
-                scalar,
+                ty: ty.clone(),
                 writable: !is_const,
             },
             span,
@@ -314,7 +320,8 @@ impl<'a> Parser<'a> {
         self.expect_symbol('[')?;
         let index = self.expression(0)?;
         let index = self.rvalue(index)?;
-        if !matches!(index.scalar.kind, ScalarKind::Sint | ScalarKind::Uint) {
+        let scalar = self.require_scalar_type(&index.ty, index.span)?;
+        if !matches!(scalar.kind, ScalarKind::Sint | ScalarKind::Uint) {
             return Err(ParseError {
                 message: String::from("array index must be an integer"),
                 span: index.span,
@@ -389,7 +396,7 @@ impl<'a> Parser<'a> {
         };
         Ok(Value {
             handle,
-            scalar: Scalar::U32,
+            ty: scalar_resolution(Scalar::U32),
             span,
         })
     }
@@ -403,19 +410,13 @@ impl<'a> Parser<'a> {
         let handle = self.append(Expression::Literal(literal), span)?;
         Ok(Value {
             handle,
-            scalar: literal.scalar(),
+            ty: scalar_resolution(literal.scalar()),
             span,
         })
     }
 
     fn scalar_handle(&mut self, scalar: Scalar, span: Span) -> Handle<Type> {
-        self.module.types.insert(
-            Type {
-                name: None,
-                inner: TypeInner::Scalar(scalar),
-            },
-            span,
-        )
+        self.type_handle(&scalar_resolution(scalar), span)
     }
 
     fn append(
@@ -629,7 +630,7 @@ impl<'a> Parser<'a> {
     }
 
     fn lookup_symbol(&self, name: &str) -> Option<Symbol> {
-        self.function.symbol_table.lookup(name).copied()
+        self.function.symbol_table.lookup(name).cloned()
     }
 
     fn take_symbol(&mut self, symbol: char) -> Result<bool, ParseError> {

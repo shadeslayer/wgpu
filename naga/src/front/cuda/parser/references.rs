@@ -3,10 +3,10 @@ use super::*;
 impl Parser<'_> {
     pub(super) fn temporary_pointer(
         &mut self,
-        scalar: Scalar,
+        ty: &TypeResolution,
         span: Span,
     ) -> Result<Handle<Expression>, ParseError> {
-        let ty = self.scalar_handle(scalar, span);
+        let ty = self.type_handle(ty, span);
         let local = self.function.ir.local_variables.append(
             LocalVariable {
                 name: None,
@@ -30,19 +30,19 @@ impl Parser<'_> {
         }
     }
 
-    pub(super) fn rvalue(&mut self, expression: ScalarExpression) -> Result<Value, ParseError> {
+    pub(super) fn rvalue(&mut self, expression: ExpressionValue) -> Result<Value, ParseError> {
         let reference = match expression {
-            ScalarExpression::Value(value) => return Ok(value),
-            ScalarExpression::Reference(reference) => reference,
+            ExpressionValue::Plain(value) => return Ok(value),
+            ExpressionValue::Reference(reference) => reference,
         };
-        let scalar = reference.scalar;
+        let ty = reference.ty.clone();
         let span = reference.span;
         if let Reference::Pointer(pointer) = reference.reference {
-            return self.load_pointer(pointer, scalar, span);
+            return self.load_pointer(pointer, &ty, span);
         }
-        let pointer = self.temporary_pointer(scalar, span)?;
-        self.consume_reference(reference, &mut |parser, source, scalar, span| {
-            let value = parser.load_pointer(source, scalar, span)?;
+        let pointer = self.temporary_pointer(&ty, span)?;
+        self.consume_reference(reference, &mut |parser, source, ty, span| {
+            let value = parser.load_pointer(source, ty, span)?;
             parser.push_statement(
                 Statement::Store {
                     pointer,
@@ -53,29 +53,25 @@ impl Parser<'_> {
             Ok(())
         })?;
         let handle = self.append(Expression::Load { pointer }, span)?;
-        Ok(Value {
-            handle,
-            scalar,
-            span,
-        })
+        Ok(Value { handle, ty, span })
     }
 
     pub(super) fn load_pointer(
         &mut self,
         pointer: Handle<Expression>,
-        scalar: Scalar,
+        ty: &TypeResolution,
         span: Span,
     ) -> Result<Value, ParseError> {
         let handle = self.append(Expression::Load { pointer }, span)?;
         Ok(Value {
             handle,
-            scalar,
+            ty: ty.clone(),
             span,
         })
     }
 
     pub(super) fn discard_result(&mut self, result: ExpressionResult) -> Result<(), ParseError> {
-        if let ExpressionResult::Scalar(ScalarExpression::Reference(reference)) = result {
+        if let ExpressionResult::Value(ExpressionValue::Reference(reference)) = result {
             self.consume_reference(reference, &mut |_, _, _, _| Ok(()))?;
         }
         Ok(())
@@ -84,11 +80,16 @@ impl Parser<'_> {
     pub(super) fn decorate_reference(
         &mut self,
         reference: &mut ReferenceValue,
-        action: &mut impl FnMut(&mut Self, Handle<Expression>, Scalar, Span) -> Result<(), ParseError>,
+        action: &mut impl FnMut(
+            &mut Self,
+            Handle<Expression>,
+            &TypeResolution,
+            Span,
+        ) -> Result<(), ParseError>,
     ) -> Result<(), ParseError> {
         let handle = match reference.reference {
             Reference::Pointer(pointer) => {
-                return action(self, pointer, reference.scalar, reference.span);
+                return action(self, pointer, &reference.ty, reference.span);
             }
             Reference::Conditional(handle) => handle,
         };
@@ -107,11 +108,16 @@ impl Parser<'_> {
     pub(super) fn consume_reference(
         &mut self,
         reference: ReferenceValue,
-        action: &mut impl FnMut(&mut Self, Handle<Expression>, Scalar, Span) -> Result<(), ParseError>,
+        action: &mut impl FnMut(
+            &mut Self,
+            Handle<Expression>,
+            &TypeResolution,
+            Span,
+        ) -> Result<(), ParseError>,
     ) -> Result<(), ParseError> {
         let handle = match reference.reference {
             Reference::Pointer(pointer) => {
-                return action(self, pointer, reference.scalar, reference.span);
+                return action(self, pointer, &reference.ty, reference.span);
             }
             Reference::Conditional(handle) => handle,
         };

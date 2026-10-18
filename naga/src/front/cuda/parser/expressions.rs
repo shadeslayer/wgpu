@@ -3,8 +3,8 @@ use super::*;
 const UNARY_PRECEDENCE: u8 = 11;
 
 impl Parser<'_> {
-    pub(super) fn comma_expression(&mut self) -> Result<ScalarExpression, ParseError> {
-        self.comma_expression_result()?.require_scalar()
+    pub(super) fn comma_expression(&mut self) -> Result<ExpressionValue, ParseError> {
+        self.comma_expression_result()?.require_value()
     }
 
     pub(super) fn comma_expression_result(&mut self) -> Result<ExpressionResult, ParseError> {
@@ -19,8 +19,8 @@ impl Parser<'_> {
     pub(super) fn expression(
         &mut self,
         minimum_precedence: u8,
-    ) -> Result<ScalarExpression, ParseError> {
-        self.expression_result(minimum_precedence)?.require_scalar()
+    ) -> Result<ExpressionValue, ParseError> {
+        self.expression_result(minimum_precedence)?.require_value()
     }
 
     pub(super) fn discard_expression(&mut self) -> Result<(), ParseError> {
@@ -72,7 +72,7 @@ impl Parser<'_> {
                 break;
             }
             self.lexer.next()?;
-            let mut left_value = left.require_scalar()?;
+            let mut left_value = left.require_value()?;
             if matches!(
                 operator,
                 BinaryOperator::LogicalAnd | BinaryOperator::LogicalOr
@@ -109,8 +109,8 @@ impl Parser<'_> {
             };
             if let Some(operator) = operator {
                 return self
-                    .assignment(left.require_scalar()?, operator)
-                    .map(ExpressionResult::Scalar);
+                    .assignment(left.require_value()?, operator)
+                    .map(ExpressionResult::Value);
             }
         }
         Ok(left)
@@ -119,10 +119,10 @@ impl Parser<'_> {
     fn primary(&mut self) -> Result<ExpressionResult, ParseError> {
         let mut value = self.primary_inner()?;
         while let TokenKind::Operator(operator @ ("++" | "--")) = self.lexer.peek()?.kind {
-            let scalar = value.require_scalar()?;
-            let span = scalar.span().until(&self.lexer.peek()?.span);
+            let operand = value.require_value()?;
+            let span = operand.span().until(&self.lexer.peek()?.span);
             self.lexer.next()?;
-            value = ExpressionResult::Scalar(self.update(scalar, operator == "++", true, span)?);
+            value = ExpressionResult::Value(self.update(operand, operator == "++", true, span)?);
         }
         Ok(value)
     }
@@ -135,7 +135,7 @@ impl Parser<'_> {
             let span = token.span.until(&value.span());
             return self
                 .update(value, operator == "++", false, span)
-                .map(ExpressionResult::Scalar);
+                .map(ExpressionResult::Value);
         }
         if self.take_symbol('(')? {
             let checkpoint = self.lexer.clone();
@@ -143,7 +143,7 @@ impl Parser<'_> {
                 let target = self.cast_type()?;
                 if self.take_symbol(')')? {
                     let value = self.expression(UNARY_PRECEDENCE)?;
-                    let mut value = self.convert_value(value, target)?;
+                    let mut value = self.convert_value(value, &target)?;
                     value.span = token.span.until(&value.span);
                     return Ok(value.into());
                 }
@@ -171,7 +171,7 @@ impl Parser<'_> {
                 )?;
                 return Ok(Value {
                     handle,
-                    scalar: Scalar::BOOL,
+                    ty: scalar_resolution(Scalar::BOOL),
                     span,
                 }
                 .into());
@@ -188,7 +188,7 @@ impl Parser<'_> {
                 )?;
                 return Ok(Value {
                     handle,
-                    scalar: value.scalar,
+                    ty: value.ty,
                     span,
                 }
                 .into());
@@ -198,7 +198,7 @@ impl Parser<'_> {
                 return Ok(value.into());
             }
             let span = token.span.until(&value.span);
-            let expression = if value.scalar == Scalar::U32 {
+            let expression = if self.require_scalar_type(&value.ty, value.span)? == Scalar::U32 {
                 let zero = self.append(Expression::Literal(Literal::U32(0)), span)?;
                 Expression::Binary {
                     op: BinaryOperator::Subtract,
@@ -214,7 +214,7 @@ impl Parser<'_> {
             let handle = self.append(expression, span)?;
             return Ok(Value {
                 handle,
-                scalar: value.scalar,
+                ty: value.ty,
                 span,
             }
             .into());
@@ -233,7 +233,7 @@ impl Parser<'_> {
                     self.expect_symbol('(')?;
                     let value = self.comma_expression()?;
                     let end = self.expect_symbol(')')?;
-                    let mut value = self.convert_value(value, target)?;
+                    let mut value = self.convert_value(value, &target)?;
                     value.span = token.span.until(&end);
                     return Ok(value.into());
                 }
@@ -241,7 +241,7 @@ impl Parser<'_> {
                     self.expect_symbol('(')?;
                     let value = self.expression(0)?;
                     let end = self.expect_symbol(')')?;
-                    let mut value = self.convert_value(value, target.scalar)?;
+                    let mut value = self.convert_value(value, &target.ty)?;
                     value.span = token.span.until(&end);
                     return Ok(value.into());
                 }
@@ -252,7 +252,7 @@ impl Parser<'_> {
                     )?;
                     return Ok(Value {
                         handle,
-                        scalar: Scalar::BOOL,
+                        ty: scalar_resolution(Scalar::BOOL),
                         span: token.span,
                     }
                     .into());
@@ -267,7 +267,7 @@ impl Parser<'_> {
                     message: format!("unknown variable `{name}`"),
                     span: token.span,
                 })?;
-                let (pointer, scalar, writable, span) = match symbol {
+                let (pointer, ty, writable, span) = match symbol {
                     Symbol::Type(_) => {
                         return Err(ParseError {
                             message: format!("type `{name}` cannot be used as a value"),
@@ -276,28 +276,28 @@ impl Parser<'_> {
                     }
                     Symbol::Array {
                         pointer,
-                        scalar,
+                        ty,
                         writable,
                     } => {
                         let pointer = self.array_element(pointer, token.span)?;
                         (
                             pointer,
-                            scalar,
+                            ty,
                             writable,
                             self.function.ir.expressions.get_span(pointer),
                         )
                     }
-                    Symbol::Scalar {
+                    Symbol::Variable {
                         pointer,
-                        scalar,
+                        ty,
                         writable,
-                    } => (pointer, scalar, writable, token.span),
+                    } => (pointer, ty, writable, token.span),
                 };
-                Ok(ExpressionResult::Scalar(ScalarExpression::Reference(
+                Ok(ExpressionResult::Value(ExpressionValue::Reference(
                     ReferenceValue {
                         reference: Reference::Pointer(pointer),
                         writable,
-                        scalar,
+                        ty,
                         span,
                     },
                 )))
@@ -306,12 +306,13 @@ impl Parser<'_> {
         }
     }
 
-    pub(super) fn truthy(&mut self, value: ScalarExpression) -> Result<Value, ParseError> {
+    pub(super) fn truthy(&mut self, value: ExpressionValue) -> Result<Value, ParseError> {
         let value = self.rvalue(value)?;
-        if value.scalar == Scalar::BOOL {
+        let scalar = self.require_scalar_type(&value.ty, value.span)?;
+        if scalar == Scalar::BOOL {
             return Ok(value);
         }
-        let literal = match value.scalar.kind {
+        let literal = match scalar.kind {
             ScalarKind::Sint => Literal::I32(0),
             ScalarKind::Uint => Literal::U32(0),
             ScalarKind::Float => Literal::F32(0.0),
@@ -328,14 +329,14 @@ impl Parser<'_> {
         )?;
         Ok(Value {
             handle,
-            scalar: Scalar::BOOL,
+            ty: scalar_resolution(Scalar::BOOL),
             span: value.span,
         })
     }
 
     fn logical(
         &mut self,
-        left: ScalarExpression,
+        left: ExpressionValue,
         operator: BinaryOperator,
         precedence: u8,
     ) -> Result<Value, ParseError> {
@@ -386,7 +387,7 @@ impl Parser<'_> {
         let handle = self.append(Expression::Load { pointer }, span)?;
         Ok(Value {
             handle,
-            scalar: Scalar::BOOL,
+            ty: scalar_resolution(Scalar::BOOL),
             span,
         })
     }
