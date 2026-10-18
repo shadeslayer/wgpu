@@ -16,6 +16,7 @@ mod inline;
 mod integer_math;
 mod integer_operators;
 mod literals;
+mod local_arrays;
 mod local_declarators;
 mod loops;
 mod overloads;

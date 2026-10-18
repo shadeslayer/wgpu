@@ -157,7 +157,7 @@ fn cuda_bare_declarations_do_not_enable_other_declarators_or_malformed_syntax() 
         ("int value = ;", ";"),
         ("int value = 1 extra;", "extra"),
         ("int *value;", "*"),
-        ("int value[2];", "["),
+        ("int value[];", "]"),
         ("int(value);", "("),
         ("int value(2);", "("),
         ("int value{};", "{"),

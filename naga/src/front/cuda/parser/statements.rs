@@ -183,7 +183,18 @@ impl<'a> Parser<'a> {
         loop {
             let (name, span) = self.identifier()?;
             self.check_name(name, span)?;
-            let ty = self.scalar_handle(scalar, span);
+            let base = self.scalar_handle(scalar, span);
+            let is_array = self.take_symbol('[')?;
+            let ty = if is_array {
+                let (size, extent_span) = self.array_size()?;
+                self.expect_symbol(']')?;
+                if self.lexer.peek()?.kind == TokenKind::Symbol('[') {
+                    return self.fail("multidimensional local arrays are unsupported");
+                }
+                self.array_type(base, size, extent_span, span)?
+            } else {
+                base
+            };
             let local = self.function.ir.local_variables.append(
                 LocalVariable {
                     name: Some(String::from(name)),
@@ -193,36 +204,41 @@ impl<'a> Parser<'a> {
                 span,
             );
             let pointer = self.append(Expression::LocalVariable(local), span)?;
-            self.insert_symbol(
-                name,
+            let symbol = if is_array {
+                Symbol::Array {
+                    pointer,
+                    scalar,
+                    writable: !is_const,
+                }
+            } else {
                 Symbol::Scalar {
                     pointer,
                     scalar,
                     writable: !is_const,
-                },
-                span,
-            )?;
-            let value =
-                if !is_const && matches!(self.lexer.peek()?.kind, TokenKind::Symbol(',' | ';')) {
-                    None
-                } else {
-                    self.expect_symbol('=')?;
-                    let value = self.expression(0)?;
-                    Some(self.convert_value(value, scalar)?)
-                };
+                }
+            };
+            self.insert_symbol(name, symbol, span)?;
+            let value = if is_array
+                && matches!(self.lexer.peek()?.kind, TokenKind::Symbol('{' | '='))
+            {
+                self.take_symbol('=')?;
+                self.expect_symbol('{')?;
+                let end = self.expect_symbol('}')?;
+                Some(self.append(Expression::ZeroValue(ty), span.until(&end))?)
+            } else if !is_const && matches!(self.lexer.peek()?.kind, TokenKind::Symbol(',' | ';')) {
+                None
+            } else {
+                self.expect_symbol('=')?;
+                let value = self.expression(0)?;
+                Some(self.convert_value(value, scalar)?.handle)
+            };
             let end = self.lexer.peek()?.span;
             let has_next = self.take_symbol(',')?;
             if !has_next {
                 self.expect_symbol(';')?;
             }
             if let Some(value) = value {
-                self.push_statement(
-                    Statement::Store {
-                        pointer,
-                        value: value.handle,
-                    },
-                    span.until(&end),
-                );
+                self.push_statement(Statement::Store { pointer, value }, span.until(&end));
             }
             if !has_next {
                 return Ok(());
@@ -247,20 +263,9 @@ impl<'a> Parser<'a> {
         let base = self.scalar_handle(scalar, span);
         let is_array = self.take_symbol('[')?;
         let ty = if is_array {
-            let (size, extent_span) = self.shared_array_size()?;
+            let (size, extent_span) = self.array_size()?;
             self.expect_symbol(']')?;
-            let inner = TypeInner::Array {
-                base,
-                size: ArraySize::Constant(size),
-                stride: 4,
-            };
-            if inner.try_size(self.module.to_ctx()).is_none() {
-                return Err(ParseError {
-                    message: String::from("shared array exceeds Naga's type size limit"),
-                    span: extent_span,
-                });
-            }
-            self.module.types.insert(Type { name: None, inner }, span)
+            self.array_type(base, size, extent_span, span)?
         } else {
             base
         };
@@ -299,10 +304,10 @@ impl<'a> Parser<'a> {
         self.insert_symbol(name, symbol, span)
     }
 
-    fn shared_array_size(&mut self) -> Result<(NonZeroU32, Span), ParseError> {
+    fn array_size(&mut self) -> Result<(NonZeroU32, Span), ParseError> {
         let token = self.lexer.next()?;
         let invalid = || ParseError {
-            message: String::from("shared array extent must be a positive integer literal"),
+            message: String::from("array extent must be a positive integer literal"),
             span: token.span,
         };
         let TokenKind::Number(text) = token.kind else {
@@ -313,5 +318,32 @@ impl<'a> Parser<'a> {
             .and_then(NonZeroU32::new)
             .ok_or_else(invalid)?;
         Ok((size, token.span))
+    }
+
+    fn array_type(
+        &mut self,
+        base: Handle<Type>,
+        size: NonZeroU32,
+        extent_span: Span,
+        span: Span,
+    ) -> Result<Handle<Type>, ParseError> {
+        self.layouter
+            .update(self.module.to_ctx())
+            .map_err(|error| ParseError {
+                message: format!("invalid array layout: {error}"),
+                span: extent_span,
+            })?;
+        let inner = TypeInner::Array {
+            base,
+            size: ArraySize::Constant(size),
+            stride: self.layouter[base].to_stride(),
+        };
+        if inner.try_size(self.module.to_ctx()).is_none() {
+            return Err(ParseError {
+                message: String::from("array exceeds Naga's type size limit"),
+                span: extent_span,
+            });
+        }
+        Ok(self.module.types.insert(Type { name: None, inner }, span))
     }
 }

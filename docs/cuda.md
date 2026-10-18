@@ -190,6 +190,21 @@ Local declarations can list comma-separated names, as in
 `int first = 1, next = first + 1;`. Each initializer finishes before the next
 declarator, and all names share the declared scalar type and qualification.
 
+Fixed one-dimensional local arrays support `bool`, `int`, `unsigned int`,
+`float`, and their scalar aliases, in both kernels and device helpers. Extents
+must be positive integer literals. Each invocation owns its array storage;
+elements use the same indexing, assignments, and updates as buffer elements.
+Arrays and scalars can share a declaration, as in `int values[3], next = 1;`.
+
+An empty initializer, `int values[3]{};` or `int values[3] = {};`, zeroes every
+element each time execution reaches the declaration, including inside loops.
+Const arrays require an empty initializer and their elements cannot be modified.
+Bare mutable arrays must be assigned before reading. These rules follow C++
+[array declarations](https://eel.is/c++draft/dcl.array) and
+[aggregate initialization](https://eel.is/c++draft/dcl.init.aggr).
+Nonempty initializer lists, inferred bounds, constant-expression extents,
+multidimensional local arrays, and array-to-pointer conversions remain unsupported.
+
 Supported expressions include indexed buffer reads, scalar locals,
 parentheses, arithmetic and comparisons with scalar conversions, and the logical operators
 `!`, `&&`, and `||`. Logical operators preserve short-circuit evaluation. Numeric
@@ -211,7 +226,7 @@ At statement start, C++ parses `int(value);` as a declaration. Parenthesized
 declarators are unsupported; use `int value = ...;` for a local declaration or
 `(int(value));` for a discarded cast expression.
 Loop conditions are scalar expressions; `for` initializers can declare scalar
-locals, declare scalar aliases, or evaluate an expression. Empty
+or array locals, declare scalar aliases, or evaluate an expression. Empty
 `for` clauses are supported.
 Comma expressions evaluate left to right and preserve the final operand's type
 and value category, including lvalues and void. Earlier operands are discarded.
@@ -241,7 +256,7 @@ such as `2.0f`. Apostrophes may separate decimal digits in the significand and
 exponent, as in `1'024.5f` or `1.25e+0'2f`. Hexadecimal floats remain unsupported.
 Arithmetic promotes booleans to `int`; a `float` operand makes the common
 type `float`, and mixed signed/unsigned integer operands use `unsigned int`.
-Assignments and initializers convert to the destination type. C-style casts,
+Scalar assignments and initializers convert to the destination type. C-style casts,
 `static_cast`, and single-token functional casts such as `int(value)` are
 supported for these scalar types. Float-to-integer conversions truncate toward
 zero within the destination range; unsigned negation wraps modulo 2^32.

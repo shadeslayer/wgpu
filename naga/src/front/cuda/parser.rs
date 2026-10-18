@@ -134,6 +134,7 @@ impl ExpressionResult {
 pub(super) struct Parser<'a> {
     lexer: Lexer<'a>,
     module: Module,
+    layouter: crate::proc::Layouter,
     global_declarations: FastHashMap<&'a str, GlobalDeclaration>,
     function: FunctionContext<'a>,
     workgroup_size: [u32; 3],
@@ -144,6 +145,7 @@ impl<'a> Parser<'a> {
         Self {
             lexer,
             module: Module::default(),
+            layouter: crate::proc::Layouter::default(),
             global_declarations: functions::builtin_declarations(),
             function: FunctionContext::new(FunctionKind::Kernel),
             workgroup_size: options.workgroup_size,
