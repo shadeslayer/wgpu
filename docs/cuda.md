@@ -106,6 +106,12 @@ Helpers have no resource bindings. Prototypes, overloads, recursion, forward
 calls, pointers, references, shared storage, barriers, and
 compute builtins in helpers remain unsupported.
 
+Both helpers and kernels accept standard `inline` in the function header.
+Execution-space, `inline`, return-type, and `const` specifiers may appear in any
+valid order; `unsigned` and `int` may be interleaved with those specifiers.
+Top-level return `const`, including `const void`, does not change the result type.
+The frontend preserves ordinary function calls; `inline` does not force substitution.
+
 ## Source subset
 
 Scalar aliases support `typedef` and `using` for `bool`, `int`, `unsigned int`,

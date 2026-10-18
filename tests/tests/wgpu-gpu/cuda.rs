@@ -18,6 +18,7 @@ pub fn all_tests(tests: &mut Vec<GpuTestInitializer>) {
         CUDA_CONDITIONALS,
         CUDA_SCALAR_ALIASES,
         CUDA_INTEGER_LITERALS,
+        CUDA_INLINE_FUNCTIONS,
     ]);
 }
 
@@ -789,6 +790,63 @@ static CUDA_INTEGER_LITERALS: GpuTestConfiguration = GpuTestConfiguration::new()
                 ]
             } else {
                 [sentinel; 18]
+            };
+            assert_eq!(row, &expected, "thread {index}");
+        }
+    });
+
+#[apply(gpu_test!)]
+static CUDA_INLINE_FUNCTIONS: GpuTestConfiguration = GpuTestConfiguration::new()
+    .parameters(TestParameters::default().test_features_limits())
+    .run_async(|ctx| async move {
+        let length = 70u32;
+        let sentinel = -123456789i32;
+        let input: [i32; 128] = std::array::from_fn(|index| index as i32 % 11 - 5);
+        let buffers = [
+            buffer(
+                &ctx,
+                bytemuck::cast_slice(&[sentinel; 128 * 12]),
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            ),
+            buffer(
+                &ctx,
+                bytemuck::cast_slice(&input),
+                wgpu::BufferUsages::STORAGE,
+            ),
+            buffer(
+                &ctx,
+                bytemuck::cast_slice(&[length, 0, 0, 0]),
+                wgpu::BufferUsages::UNIFORM,
+            ),
+        ];
+        let result = run_kernel(
+            &ctx,
+            include_str!("../../../naga/tests/in/cuda/inline-functions.cu"),
+            &buffers,
+            0,
+            2,
+        )
+        .await;
+        let actual: &[i32] = bytemuck::cast_slice(&result);
+        for (index, row) in actual.as_chunks::<12>().0.iter().enumerate() {
+            let expected = if index < length as usize {
+                let value = input[index];
+                [
+                    value + 2,
+                    value,
+                    (value + 2) * 2,
+                    (value as u32).wrapping_add(3) as i32,
+                    (value as u32).wrapping_sub(1) as i32,
+                    (value as f32 * 1.5 + 2.0) as i32,
+                    1,
+                    value + 1,
+                    value + 2,
+                    0,
+                    value + 6,
+                    value + 2,
+                ]
+            } else {
+                [sentinel; 12]
             };
             assert_eq!(row, &expected, "thread {index}");
         }

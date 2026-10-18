@@ -154,47 +154,10 @@ impl<'a> Parser<'a> {
         loop {
             if self.starts_alias()? {
                 self.alias_declaration(true)?;
-            } else if self.take_ident("__device__")? {
-                self.device_function()?;
-            } else {
+            } else if self.function_definition()? == FunctionKind::Kernel {
                 break;
             }
         }
-        if self.take_ident("extern")? {
-            if self.lexer.peek()?.kind != TokenKind::String("C") {
-                return self.fail("expected `\"C\"` after `extern`");
-            }
-            self.lexer.next()?;
-        }
-        self.expect_ident("__global__")?;
-        self.expect_ident("void")?;
-        let (name, name_span) = self.identifier()?;
-        self.check_function_name(name, name_span)?;
-        self.parameters()?;
-        self.expect_symbol('{')?;
-        self.block_contents()?;
-        self.function
-            .ir
-            .body
-            .extend(self.function.emitter.finish(&self.function.ir.expressions));
-        barriers::check_control_flow(&self.function.ir.body, false, false)?;
-        let function = core::mem::replace(
-            &mut self.function,
-            FunctionContext::new(FunctionKind::Kernel),
-        );
-        self.module.entry_points.push(EntryPoint {
-            name: String::from(name),
-            stage: ShaderStage::Compute,
-            early_depth_test: None,
-            workgroup_size: self.workgroup_size,
-            workgroup_size_overrides: None,
-            function: function.ir,
-            mesh_info: None,
-            task_payload: None,
-            incoming_ray_payload: None,
-        });
-        self.global_declarations
-            .insert(name, GlobalDeclaration::Kernel);
         while self.starts_alias()? {
             self.alias_declaration(true)?;
         }

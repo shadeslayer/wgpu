@@ -1,5 +1,19 @@
 use super::*;
 
+#[derive(Clone, Copy)]
+enum ReturnType {
+    Void,
+    Scalar(Scalar),
+}
+
+struct FunctionHeader<'a> {
+    kind: FunctionKind,
+    result: ReturnType,
+    result_span: Span,
+    name: &'a str,
+    name_span: Span,
+}
+
 impl<'a> Parser<'a> {
     pub(super) fn parameters(&mut self) -> Result<(), ParseError> {
         self.expect_symbol('(')?;
@@ -30,20 +44,167 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    pub(super) fn device_function(&mut self) -> Result<(), ParseError> {
-        let result_span = self.lexer.peek()?.span;
-        let scalar = if self.take_ident("void")? {
-            None
-        } else {
-            Some(self.scalar_type()?.scalar)
+    fn function_header(&mut self) -> Result<FunctionHeader<'a>, ParseError> {
+        let mut kind = None;
+        let mut result = None;
+        let mut result_span = None;
+        let mut inline = false;
+        let mut explicit_const = false;
+        let mut seen_int = false;
+        let mut seen_unsigned = false;
+        loop {
+            let token = self.lexer.peek()?;
+            match token.kind {
+                TokenKind::Ident("inline") => {
+                    if inline {
+                        return self.fail("duplicate inline specifier");
+                    }
+                    inline = true;
+                }
+                TokenKind::Ident("__device__" | "__global__") => {
+                    if kind.is_some() {
+                        return self.fail("expected exactly one CUDA execution space specifier");
+                    }
+                    kind = Some(if token.kind == TokenKind::Ident("__device__") {
+                        FunctionKind::Device
+                    } else {
+                        FunctionKind::Kernel
+                    });
+                }
+                TokenKind::Ident("const") => {
+                    if explicit_const {
+                        return self.fail("duplicate const qualifier");
+                    }
+                    explicit_const = true;
+                    result_span.get_or_insert(token.span);
+                }
+                TokenKind::Ident("int") => {
+                    if seen_int || (result.is_some() && !seen_unsigned) {
+                        return self.fail("incompatible or repeated return type specifier");
+                    }
+                    seen_int = true;
+                    result = Some(ReturnType::Scalar(if seen_unsigned {
+                        Scalar::U32
+                    } else {
+                        Scalar::I32
+                    }));
+                    result_span.get_or_insert(token.span);
+                }
+                TokenKind::Ident("unsigned") => {
+                    if seen_unsigned || (result.is_some() && !seen_int) {
+                        return self.fail("incompatible or repeated return type specifier");
+                    }
+                    seen_unsigned = true;
+                    result = Some(ReturnType::Scalar(Scalar::U32));
+                    result_span.get_or_insert(token.span);
+                }
+                TokenKind::Ident("void" | "float" | "bool") => {
+                    if result.is_some() {
+                        return self.fail("incompatible or repeated return type specifier");
+                    }
+                    result = Some(match token.kind {
+                        TokenKind::Ident("void") => ReturnType::Void,
+                        TokenKind::Ident("float") => ReturnType::Scalar(Scalar::F32),
+                        _ => ReturnType::Scalar(Scalar::BOOL),
+                    });
+                    result_span.get_or_insert(token.span);
+                }
+                TokenKind::Ident(name) if result.is_none() => {
+                    let Some(ty) = self.type_name(name) else {
+                        break;
+                    };
+                    result = Some(ReturnType::Scalar(ty.scalar));
+                    result_span.get_or_insert(token.span);
+                }
+                _ => break,
+            }
+            self.lexer.next()?;
+        }
+        let Some(result) = result else {
+            return self.fail("expected a supported function return type");
         };
-        let (name, span) = self.identifier()?;
-        self.check_function_name(name, span)?;
-        self.function = FunctionContext::new(FunctionKind::Device);
-        self.function.ir.name = Some(String::from(name));
-        if let Some(scalar) = scalar {
+        let Some(kind) = kind else {
+            return self.fail("expected a CUDA execution space specifier");
+        };
+        let (name, name_span) = self.identifier()?;
+        self.check_function_name(name, name_span)?;
+        Ok(FunctionHeader {
+            kind,
+            result,
+            result_span: result_span.unwrap(),
+            name,
+            name_span,
+        })
+    }
+
+    pub(super) fn function_definition(&mut self) -> Result<FunctionKind, ParseError> {
+        let extern_c = self.take_ident("extern")?;
+        if extern_c {
+            if self.lexer.peek()?.kind != TokenKind::String("C") {
+                return self.fail("expected `\"C\"` after `extern`");
+            }
+            self.lexer.next()?;
+        }
+        let header = self.function_header()?;
+        self.function = FunctionContext::new(header.kind);
+        match header.kind {
+            FunctionKind::Device => {
+                if extern_c {
+                    return Err(ParseError {
+                        message: String::from("extern C device helpers are unsupported"),
+                        span: header.name_span,
+                    });
+                }
+                self.device_function(header)?;
+                Ok(FunctionKind::Device)
+            }
+            FunctionKind::Kernel => {
+                self.kernel(header)?;
+                Ok(FunctionKind::Kernel)
+            }
+        }
+    }
+
+    fn kernel(&mut self, header: FunctionHeader<'a>) -> Result<(), ParseError> {
+        if !matches!(header.result, ReturnType::Void) {
+            return Err(ParseError {
+                message: String::from("CUDA kernels must return void"),
+                span: header.result_span,
+            });
+        }
+        self.parameters()?;
+        self.expect_symbol('{')?;
+        self.block_contents()?;
+        self.function
+            .ir
+            .body
+            .extend(self.function.emitter.finish(&self.function.ir.expressions));
+        barriers::check_control_flow(&self.function.ir.body, false, false)?;
+        let function = core::mem::replace(
+            &mut self.function,
+            FunctionContext::new(FunctionKind::Kernel),
+        );
+        self.module.entry_points.push(EntryPoint {
+            name: String::from(header.name),
+            stage: ShaderStage::Compute,
+            early_depth_test: None,
+            workgroup_size: self.workgroup_size,
+            workgroup_size_overrides: None,
+            function: function.ir,
+            mesh_info: None,
+            task_payload: None,
+            incoming_ray_payload: None,
+        });
+        self.global_declarations
+            .insert(header.name, GlobalDeclaration::Kernel);
+        Ok(())
+    }
+
+    fn device_function(&mut self, header: FunctionHeader<'a>) -> Result<(), ParseError> {
+        self.function.ir.name = Some(String::from(header.name));
+        if let ReturnType::Scalar(scalar) = header.result {
             self.function.ir.result = Some(crate::FunctionResult {
-                ty: self.scalar_handle(scalar, result_span),
+                ty: self.scalar_handle(scalar, header.result_span),
                 binding: None,
             });
         }
@@ -53,7 +214,7 @@ impl<'a> Parser<'a> {
         if self.function.ir.result.is_some() && !terminated {
             return Err(ParseError {
                 message: String::from("device helper must return a value on every supported path"),
-                span,
+                span: header.name_span,
             });
         }
         self.flush_emitter();
@@ -64,9 +225,9 @@ impl<'a> Parser<'a> {
             &mut self.function,
             FunctionContext::new(FunctionKind::Kernel),
         );
-        let handle = self.module.functions.append(function.ir, span);
+        let handle = self.module.functions.append(function.ir, header.name_span);
         self.global_declarations
-            .insert(name, GlobalDeclaration::Function(handle));
+            .insert(header.name, GlobalDeclaration::Function(handle));
         Ok(())
     }
 
