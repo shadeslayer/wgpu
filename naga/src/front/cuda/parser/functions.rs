@@ -100,6 +100,10 @@ pub(super) fn builtin_declarations<'a>() -> FastHashMap<&'a str, GlobalDeclarati
                 .into_iter()
                 .map(|(name, _, _, _)| (name, GlobalDeclaration::Functions(Vec::new()))),
         )
+        .chain(core::iter::once((
+            "sqrtf",
+            GlobalDeclaration::Functions(Vec::new()),
+        )))
         .chain(
             VECTOR_TYPES
                 .into_iter()
@@ -147,6 +151,7 @@ enum FunctionCandidate {
         source: Scalar,
         result: Scalar,
     },
+    Sqrt,
     Constructor {
         size: VectorSize,
         scalar: Scalar,
@@ -435,6 +440,7 @@ impl<'a> Parser<'a> {
                     FunctionCandidate::Builtin(_)
                         | FunctionCandidate::Bitcast { .. }
                         | FunctionCandidate::Unary { .. }
+                        | FunctionCandidate::Sqrt
                         | FunctionCandidate::Constructor { .. }
                 )
             })
@@ -605,6 +611,43 @@ impl<'a> Parser<'a> {
                 constant: ConstantValue::default(),
                 handle,
                 ty: scalar_resolution(result),
+                span,
+            }
+            .into());
+        }
+        if candidate == FunctionCandidate::Sqrt {
+            let argument =
+                self.convert_scalar(arguments.into_iter().next().unwrap().into(), Scalar::F32)?;
+            let bits = self.append(
+                Expression::As {
+                    expr: argument.handle,
+                    kind: ScalarKind::Uint,
+                    convert: None,
+                },
+                span,
+            )?;
+            let function = self.sqrtf_function(span)?;
+            let result = self.append_call_result(function, span)?;
+            self.push_statement(
+                Statement::Call {
+                    function,
+                    arguments: alloc::vec![bits],
+                    result: Some(result),
+                },
+                span,
+            );
+            let handle = self.append(
+                Expression::As {
+                    expr: result,
+                    kind: ScalarKind::Float,
+                    convert: None,
+                },
+                span,
+            )?;
+            return Ok(Value {
+                constant: ConstantValue::default(),
+                handle,
+                ty: scalar_resolution(Scalar::F32),
                 span,
             }
             .into());
@@ -889,6 +932,7 @@ impl<'a> Parser<'a> {
                         result,
                     }),
             )
+            .chain((builtin_visible && name == "sqrtf").then_some(FunctionCandidate::Sqrt))
             .chain(
                 vector_constructor(name)
                     .filter(move |_| builtin_visible)
@@ -901,7 +945,9 @@ impl<'a> Parser<'a> {
             FunctionCandidate::Defined(handle) => self.module.functions[handle].arguments.len(),
             FunctionCandidate::Current => self.function.ir.arguments.len(),
             FunctionCandidate::Builtin(builtin) => builtin.parameters.len(),
-            FunctionCandidate::Bitcast { .. } | FunctionCandidate::Unary { .. } => 1,
+            FunctionCandidate::Bitcast { .. }
+            | FunctionCandidate::Unary { .. }
+            | FunctionCandidate::Sqrt => 1,
             FunctionCandidate::Constructor { size, .. } => size as usize,
         }
     }
@@ -916,6 +962,7 @@ impl<'a> Parser<'a> {
             FunctionCandidate::Bitcast { source, .. } | FunctionCandidate::Unary { source, .. } => {
                 return scalar_resolution(source)
             }
+            FunctionCandidate::Sqrt => return scalar_resolution(Scalar::F32),
             FunctionCandidate::Constructor { scalar, .. } => return scalar_resolution(scalar),
         };
         TypeResolution::Handle(argument.ty)
@@ -993,6 +1040,7 @@ impl<'a> Parser<'a> {
             | FunctionCandidate::Builtin(_)
             | FunctionCandidate::Bitcast { .. }
             | FunctionCandidate::Unary { .. }
+            | FunctionCandidate::Sqrt
             | FunctionCandidate::Constructor { .. } => Ok(best_candidate),
             FunctionCandidate::Current => Err(ParseError {
                 message: String::from("recursive device helper calls are unsupported"),

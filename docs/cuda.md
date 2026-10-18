@@ -172,17 +172,28 @@ and [`max`](https://docs.nvidia.com/cuda/parallel-thread-execution/#floating-poi
 rules. Floating `min` and `max` are equivalent to `fminf` and `fmaxf`, as described
 in NVIDIA's [single-precision functions](https://docs.nvidia.com/cuda/archive/13.0.0/cuda-math-api/cuda_math_api/group__CUDA__MATH__SINGLE.html).
 
+`sqrtf(float)` returns `float` and accepts scalar arguments that convert to
+`float`. Positive finite inputs use correctly rounded, round-to-nearest
+ties-to-even results, matching CUDA's default
+[`prec-sqrt=true`](https://docs.nvidia.com/cuda/archive/13.0.1/cuda-compiler-driver-nvcc/index.html#prec-sqrt-true-false-prec-sqrt).
+The calculation uses integer operations on the input representation, including
+subnormal inputs. Both signed zeros and positive infinity retain their bits;
+negative nonzero inputs and NaNs produce the canonical quiet NaN `0x7fc00000`.
+Calls execute at runtime and are not constant expressions, including calls with
+literal arguments. The double-precision `sqrt` and directed-rounding intrinsics
+remain unsupported.
+
 Target floating-point rules still apply. In particular, WGSL permits
 [finite-math assumptions, changes to zero signs, and flushing subnormals](https://gpuweb.github.io/gpuweb/wgsl/#floating-point-evaluation),
 so exceptional values are not guaranteed to retain these bits on every target.
 
-All four names use the same argument sequencing and overload ranking as device
+These names use the same argument sequencing and overload ranking as device
 helpers.
 Additional user-defined overloads participate alongside the predefined ones;
 definitions repeating a predefined parameter signature are rejected, including
 through aliases or top-level `const`. Local values and type names can hide these
-functions. Kernels and file-scope type aliases named `min`, `max`, `fminf`, or
-`fmaxf` remain unsupported.
+functions. Kernels and file-scope type aliases named `min`, `max`, `fminf`,
+`fmaxf`, or `sqrtf` remain unsupported.
 
 ## Bit reinterpretation
 

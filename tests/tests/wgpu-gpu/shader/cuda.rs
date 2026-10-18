@@ -29,6 +29,7 @@ mod local_declarators;
 mod reference_categories;
 mod shared_vectors;
 mod specifiers;
+mod sqrtf;
 mod type_aliases;
 mod uninitialized;
 mod updates;
@@ -59,6 +60,7 @@ pub fn all_tests(tests: &mut Vec<GpuTestInitializer>) {
         CUDA_REFERENCE_CATEGORIES,
         CUDA_SHARED_VECTORS,
         CUDA_SPECIFIERS,
+        CUDA_SQRTF,
         CUDA_TYPE_ALIASES,
         CUDA_UNINITIALIZED,
         CUDA_UPDATES,
@@ -238,6 +240,8 @@ static CUDA_REFERENCE_CATEGORIES: GpuTestConfiguration = configuration(reference
 static CUDA_SHARED_VECTORS: GpuTestConfiguration = configuration(shared_vectors::cases);
 #[apply(gpu_test!)]
 static CUDA_SPECIFIERS: GpuTestConfiguration = configuration(specifiers::cases);
+#[apply(gpu_test!)]
+static CUDA_SQRTF: GpuTestConfiguration = configuration(sqrtf::cases);
 #[apply(gpu_test!)]
 static CUDA_TYPE_ALIASES: GpuTestConfiguration = configuration(type_aliases::cases);
 #[apply(gpu_test!)]
