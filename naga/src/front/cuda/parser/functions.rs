@@ -46,6 +46,7 @@ impl<'a> Parser<'a> {
 
     fn function_header(&mut self) -> Result<FunctionHeader<'a>, ParseError> {
         let mut kind = None;
+        let mut host_span = None;
         let mut result = None;
         let mut result_span = None;
         let mut inline = false;
@@ -61,9 +62,19 @@ impl<'a> Parser<'a> {
                     }
                     inline = true;
                 }
+                TokenKind::Ident("__host__") => {
+                    if host_span.is_some() || kind == Some(FunctionKind::Kernel) {
+                        return self
+                            .fail("duplicate or incompatible CUDA execution space specifier");
+                    }
+                    host_span = Some(token.span);
+                }
                 TokenKind::Ident("__device__" | "__global__") => {
-                    if kind.is_some() {
-                        return self.fail("expected exactly one CUDA execution space specifier");
+                    if kind.is_some()
+                        || (host_span.is_some() && token.kind == TokenKind::Ident("__global__"))
+                    {
+                        return self
+                            .fail("duplicate or incompatible CUDA execution space specifier");
                     }
                     kind = Some(if token.kind == TokenKind::Ident("__device__") {
                         FunctionKind::Device
@@ -119,6 +130,12 @@ impl<'a> Parser<'a> {
                 _ => break,
             }
             self.lexer.next()?;
+        }
+        if let (Some(span), None) = (host_span, kind) {
+            return Err(ParseError {
+                message: String::from("host-only functions are unsupported"),
+                span,
+            });
         }
         let Some(result) = result else {
             return self.fail("expected a supported function return type");

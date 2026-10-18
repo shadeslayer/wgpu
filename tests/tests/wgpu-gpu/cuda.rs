@@ -20,6 +20,7 @@ pub fn all_tests(tests: &mut Vec<GpuTestInitializer>) {
         CUDA_INTEGER_LITERALS,
         CUDA_INLINE_FUNCTIONS,
         CUDA_FLOAT_SEPARATORS,
+        CUDA_DUAL_EXECUTION,
     ]);
 }
 
@@ -901,6 +902,63 @@ static CUDA_FLOAT_SEPARATORS: GpuTestConfiguration = GpuTestConfiguration::new()
                     0x3f80_0000,
                     0x3f80_0002,
                     (input[index] * 0.25 + 10.0).to_bits(),
+                ]
+            } else {
+                [sentinel; 12]
+            };
+            assert_eq!(row, &expected, "thread {index}");
+        }
+    });
+
+#[apply(gpu_test!)]
+static CUDA_DUAL_EXECUTION: GpuTestConfiguration = GpuTestConfiguration::new()
+    .parameters(TestParameters::default().test_features_limits())
+    .run_async(|ctx| async move {
+        let length = 70u32;
+        let sentinel = -123456789i32;
+        let input: [i32; 128] = std::array::from_fn(|index| index as i32 % 11 - 5);
+        let buffers = [
+            buffer(
+                &ctx,
+                bytemuck::cast_slice(&[sentinel; 128 * 12]),
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            ),
+            buffer(
+                &ctx,
+                bytemuck::cast_slice(&input),
+                wgpu::BufferUsages::STORAGE,
+            ),
+            buffer(
+                &ctx,
+                bytemuck::cast_slice(&[length, 0, 0, 0]),
+                wgpu::BufferUsages::UNIFORM,
+            ),
+        ];
+        let result = run_kernel(
+            &ctx,
+            include_str!("../../../naga/tests/in/cuda/dual-execution.cu"),
+            &buffers,
+            0,
+            2,
+        )
+        .await;
+        let actual: &[i32] = bytemuck::cast_slice(&result);
+        for (index, row) in actual.as_chunks::<12>().0.iter().enumerate() {
+            let expected = if index < length as usize {
+                let value = input[index];
+                [
+                    value + 3,
+                    value,
+                    (value + 3) * 2,
+                    (value as u32).wrapping_add(5) as i32,
+                    (value as u32).wrapping_sub(2) as i32,
+                    value * 2 + 4,
+                    1,
+                    value + 1,
+                    value + 2,
+                    0,
+                    value + 9,
+                    value + 2,
                 ]
             } else {
                 [sentinel; 12]

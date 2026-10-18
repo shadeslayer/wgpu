@@ -303,7 +303,7 @@ fn cuda_duplicate_inline_and_explicit_const_report_the_repeated_keyword() {
 }
 
 #[test]
-fn cuda_function_headers_require_exactly_one_execution_space() {
+fn cuda_function_headers_reject_missing_duplicate_or_conflicting_execution_spaces() {
     for (source, token, occurrence) in [
         (
             "__device__ inline int __device__ helper() { return 1; } __global__ void kernel() {}",
@@ -376,10 +376,21 @@ fn cuda_inline_is_not_accepted_in_local_parameter_type_id_or_trailing_positions(
 }
 
 #[test]
-fn cuda_inline_does_not_enable_other_function_directives_or_signatures() {
+fn cuda_inline_dual_execution_helpers_are_ordinary_functions() {
     for source in [
         "__host__ inline __device__ int helper() { return 1; } __global__ void kernel() {}",
         "__device__ inline __host__ int helper() { return 1; } __global__ void kernel() {}",
+    ] {
+        let (module, _) = validate(source);
+        assert_eq!(module.functions.len(), 1);
+        assert_eq!(helper_result(&module, "helper"), Some(naga::Scalar::I32));
+        assert_eq!(module.entry_points.len(), 1);
+    }
+}
+
+#[test]
+fn cuda_inline_does_not_enable_other_function_directives_or_signatures() {
+    for source in [
         "static inline __device__ int helper() { return 1; } __global__ void kernel() {}",
         "__device__ inline static int helper() { return 1; } __global__ void kernel() {}",
         "__device__ __forceinline__ int helper() { return 1; } __global__ void kernel() {}",

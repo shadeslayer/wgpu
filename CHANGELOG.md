@@ -159,6 +159,7 @@ By @sagudev in [#10307](https://github.com/gfx-rs/wgpu/pull/10307).
 - Support CUDA octal, hexadecimal, and binary integer literals with digit separators and 32-bit type selection.
 - Support standard CUDA `inline` helpers and kernels with reordered function header specifiers.
 - Support digit separators in CUDA decimal floating-point literals.
+- Support dual `__host__ __device__` CUDA helpers.
 - Add `@builtin(hit_barycentrics)`, a `vec2<f32>` readable in `@any_hit` and `@closest_hit` ray tracing pipeline shaders, holding two of the barycentric coordinates of the hit point on the triangle (the third is `1.0 - x - y`). Currently only supported with the SPIR-V backend. By @JMS55 in [#10193](https://github.com/gfx-rs/wgpu/pull/10193).
 
 #### Hal

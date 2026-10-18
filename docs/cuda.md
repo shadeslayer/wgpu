@@ -91,6 +91,10 @@ __global__ void apply(float *out, const float *input) {
 }
 ```
 
+Helpers may also carry `__host__`. Translation checks and emits their device
+implementation, including calls to earlier device-only helpers; the host
+implementation is not checked or emitted. Host-only definitions remain unsupported.
+
 The frontend evaluates arguments left to right, converts them to the parameter
 types, and copies them into per-call locals. Assignments affect only those copies;
 `const` parameters cannot be assigned. Return values convert to the declared
