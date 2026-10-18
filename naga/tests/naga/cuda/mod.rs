@@ -28,6 +28,7 @@ mod streaming;
 mod type_aliases;
 mod uninitialized;
 mod updates;
+mod vector_resources;
 mod vector_values;
 mod void_functions;
 

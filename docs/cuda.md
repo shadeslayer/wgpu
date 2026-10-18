@@ -32,15 +32,28 @@ Device and backend resource limits still apply.
 Each source contains one `__global__ void` kernel, optionally preceded by
 `extern "C"`, after any device helper definitions. Parameter types are `float`,
 `int`, or `unsigned int` (`unsigned` is also accepted), either by value or as
-flat pointers; scalar aliases of these types are also accepted.
+flat pointers. Pointer parameters also accept `float2`, `float3`, `float4`,
+`int2`, `int3`, `int4`, `uint2`, `uint3`, and `uint4`. Aliases and pointee
+`const` qualification preserve the underlying element type.
 Parameter number `i` uses group 0, binding `i`, preserving source
 order across both parameter kinds.
 The caller supplies these buffers and dispatches the resulting compute entry
 point by its original kernel name.
 
 Pointer parameters become storage buffers with runtime arrays of the corresponding
-32-bit scalar. A `const` pointee produces a read-only buffer; other buffers permit
-reads and writes. Scalar parameters use 16-byte uniform buffers containing the
+element type. A `const` pointee produces a read-only buffer; other buffers permit
+reads and writes. Element layouts are:
+
+| Element type | Size | Alignment | Array stride |
+| --- | --- | --- | --- |
+| 32-bit scalar | 4 bytes | 4 bytes | 4 bytes |
+| Two-component vector | 8 bytes | 8 bytes | 8 bytes |
+| Three-component vector | 12 bytes | 4 bytes | 12 bytes |
+| Four-component vector | 16 bytes | 16 bytes | 16 bytes |
+
+Vector elements support whole-value copies and scalar field access, including
+assignments and updates to writable fields. Vector parameters require pointers.
+Scalar parameters use 16-byte uniform buffers containing the
 32-bit value at byte offset 0. Each invocation copies the value into a local
 variable; assigning to a non-`const` parameter changes only that invocation's copy.
 
@@ -187,9 +200,9 @@ uses C++23 syntax. Pointer, array, function, and void aliases remain unsupported
 
 Vector values support `float2`, `float3`, `float4`, `int2`, `int3`, `int4`,
 `uint2`, `uint3`, and `uint4`. These types can appear in local variables,
-fixed local arrays, and helper parameters and results. Copies, assignments,
-and conditional arms require matching vector types. Const qualification
-prevents writes to individual fields as well as the complete value.
+fixed local arrays, kernel buffer elements, and helper parameters and results.
+Copies, assignments, and conditional arms require matching vector types. Const
+qualification prevents writes to individual fields as well as the complete value.
 
 The fields `.x`, `.y`, `.z`, and `.w` select one scalar component, up to the
 vector's width. Field access works on locals, array elements, helper results,
@@ -205,7 +218,7 @@ In particular, three-component arrays have a 12-byte element stride and
 4-byte alignment. Vector arithmetic, comparisons, truthiness, indexing, and
 swizzles are unsupported; use individual fields. Vector casts, nonempty
 aggregate initialization, and parenthesized aggregate initialization remain
-unsupported. Kernel parameters and shared declarations still require the scalar
+unsupported. By-value kernel parameters and shared declarations require the scalar
 types described in their sections.
 
 Empty local vector initialization, such as `float3 value{};` or

@@ -175,14 +175,11 @@ impl<'a> Parser<'a> {
 
     fn parameter(&mut self) -> Result<(), ParseError> {
         let type_span = self.lexer.peek()?.span;
-        let QualifiedType { ty, is_const } = self.parse_type()?;
-        if self.function.kind == FunctionKind::Kernel && !matches!(ty, TypeSpecifier::Scalar(_)) {
-            return Err(ParseError {
-                message: String::from("vector kernel parameters are unsupported"),
-                span: type_span,
-            });
-        }
-        let ty = self.lower_type(ty, type_span);
+        let QualifiedType {
+            ty: specifier,
+            is_const,
+        } = self.parse_type()?;
+        let ty = self.lower_type(specifier, type_span);
         if self.function.kind == FunctionKind::Kernel
             && self
                 .module
@@ -192,6 +189,15 @@ impl<'a> Parser<'a> {
         }
         let pointer_span = self.lexer.peek()?.span;
         let is_pointer = self.take_symbol('*')?;
+        if self.function.kind == FunctionKind::Kernel
+            && !is_pointer
+            && !matches!(specifier, TypeSpecifier::Scalar(_))
+        {
+            return Err(ParseError {
+                message: String::from("vector kernel parameters are unsupported"),
+                span: type_span,
+            });
+        }
         if self.function.kind == FunctionKind::Device && is_pointer {
             return Err(ParseError {
                 message: String::from("device helper pointer parameters are unsupported"),
@@ -207,17 +213,7 @@ impl<'a> Parser<'a> {
             return self.value_parameter(name, span, &ty, is_const);
         }
         let base = self.type_handle(&ty, span);
-        let array_ty = self.module.types.insert(
-            Type {
-                name: None,
-                inner: TypeInner::Array {
-                    base,
-                    size: ArraySize::Dynamic,
-                    stride: 4,
-                },
-            },
-            span,
-        );
+        let array_ty = self.array_type(base, ArraySize::Dynamic, type_span, span)?;
         let binding = self.module.global_variables.len() as u32;
         let access = if is_const {
             StorageAccess::LOAD

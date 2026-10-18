@@ -26,6 +26,7 @@ mod specifiers;
 mod type_aliases;
 mod uninitialized;
 mod updates;
+mod vector_resources;
 mod vector_values;
 
 pub fn all_tests(tests: &mut Vec<GpuTestInitializer>) {
@@ -49,6 +50,7 @@ pub fn all_tests(tests: &mut Vec<GpuTestInitializer>) {
         CUDA_TYPE_ALIASES,
         CUDA_UNINITIALIZED,
         CUDA_UPDATES,
+        CUDA_VECTOR_RESOURCES,
         CUDA_VECTOR_VALUES,
     ]);
 }
@@ -218,6 +220,9 @@ static CUDA_TYPE_ALIASES: GpuTestConfiguration = configuration(type_aliases::cas
 static CUDA_UNINITIALIZED: GpuTestConfiguration = configuration(uninitialized::cases);
 #[apply(gpu_test!)]
 static CUDA_UPDATES: GpuTestConfiguration = configuration(updates::cases);
+
+#[apply(gpu_test!)]
+static CUDA_VECTOR_RESOURCES: GpuTestConfiguration = configuration(vector_resources::cases);
 
 #[apply(gpu_test!)]
 static CUDA_VECTOR_VALUES: GpuTestConfiguration = configuration(vector_values::cases);

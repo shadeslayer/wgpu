@@ -193,7 +193,7 @@ impl<'a> Parser<'a> {
                 if self.lexer.peek()?.kind == TokenKind::Symbol('[') {
                     return self.fail("multidimensional local arrays are unsupported");
                 }
-                self.array_type(base, size, extent_span, span)?
+                self.array_type(base, ArraySize::Constant(size), extent_span, span)?
             } else {
                 base
             };
@@ -281,7 +281,7 @@ impl<'a> Parser<'a> {
         let ty = if is_array {
             let (size, extent_span) = self.array_size()?;
             self.expect_symbol(']')?;
-            self.array_type(base, size, extent_span, span)?
+            self.array_type(base, ArraySize::Constant(size), extent_span, span)?
         } else {
             base
         };
@@ -334,32 +334,5 @@ impl<'a> Parser<'a> {
             .and_then(NonZeroU32::new)
             .ok_or_else(invalid)?;
         Ok((size, token.span))
-    }
-
-    fn array_type(
-        &mut self,
-        base: Handle<Type>,
-        size: NonZeroU32,
-        extent_span: Span,
-        span: Span,
-    ) -> Result<Handle<Type>, ParseError> {
-        self.layouter
-            .update(self.module.to_ctx())
-            .map_err(|error| ParseError {
-                message: format!("invalid array layout: {error}"),
-                span: extent_span,
-            })?;
-        let inner = TypeInner::Array {
-            base,
-            size: ArraySize::Constant(size),
-            stride: self.layouter[base].to_stride(),
-        };
-        if inner.try_size(self.module.to_ctx()).is_none() {
-            return Err(ParseError {
-                message: String::from("array exceeds Naga's type size limit"),
-                span: extent_span,
-            });
-        }
-        Ok(self.module.types.insert(Type { name: None, inner }, span))
     }
 }

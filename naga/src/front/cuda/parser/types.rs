@@ -139,6 +139,33 @@ impl<'a> Parser<'a> {
         }
     }
 
+    pub(super) fn array_type(
+        &mut self,
+        base: Handle<Type>,
+        size: ArraySize,
+        layout_span: Span,
+        span: Span,
+    ) -> Result<Handle<Type>, ParseError> {
+        self.layouter
+            .update(self.module.to_ctx())
+            .map_err(|error| ParseError {
+                message: format!("invalid array layout: {error}"),
+                span: layout_span,
+            })?;
+        let inner = TypeInner::Array {
+            base,
+            size,
+            stride: self.layouter[base].to_stride(),
+        };
+        if inner.try_size(self.module.to_ctx()).is_none() {
+            return Err(ParseError {
+                message: String::from("array exceeds Naga's type size limit"),
+                span: layout_span,
+            });
+        }
+        Ok(self.module.types.insert(Type { name: None, inner }, span))
+    }
+
     pub(super) fn require_scalar_type(
         &self,
         ty: &TypeResolution,

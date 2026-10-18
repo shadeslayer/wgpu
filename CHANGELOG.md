@@ -169,6 +169,7 @@ By @sagudev in [#10307](https://github.com/gfx-rs/wgpu/pull/10307).
 - Support CUDA floating-point `min`, `max`, `fminf`, and `fmaxf` with numeric selection for NaN operands.
 - Support fixed-size CUDA local scalar arrays, including empty initialization, aliases, and indexed updates.
 - Support CUDA numeric vector values, component updates, constructors, local arrays, and helper parameters and results.
+- Support CUDA vector buffer parameters with packed three-component layouts and const access.
 - Add `@builtin(hit_barycentrics)`, a `vec2<f32>` readable in `@any_hit` and `@closest_hit` ray tracing pipeline shaders, holding two of the barycentric coordinates of the hit point on the triangle (the third is `1.0 - x - y`). Currently only supported with the SPIR-V backend. By @JMS55 in [#10193](https://github.com/gfx-rs/wgpu/pull/10193).
 
 #### Hal
