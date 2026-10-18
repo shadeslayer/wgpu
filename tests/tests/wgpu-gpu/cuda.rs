@@ -22,6 +22,7 @@ pub fn all_tests(tests: &mut Vec<GpuTestInitializer>) {
         CUDA_FLOAT_SEPARATORS,
         CUDA_DUAL_EXECUTION,
         CUDA_UNINITIALIZED,
+        CUDA_LOCAL_DECLARATORS,
     ]);
 }
 
@@ -1017,6 +1018,63 @@ static CUDA_UNINITIALIZED: GpuTestConfiguration = GpuTestConfiguration::new()
                     value + 10,
                     value,
                     value * 2 + 4,
+                ]
+            } else {
+                [sentinel; 12]
+            };
+            assert_eq!(row, &expected, "thread {index}");
+        }
+    });
+
+#[apply(gpu_test!)]
+static CUDA_LOCAL_DECLARATORS: GpuTestConfiguration = GpuTestConfiguration::new()
+    .parameters(TestParameters::default().test_features_limits())
+    .run_async(|ctx| async move {
+        let length = 70u32;
+        let sentinel = -123456789i32;
+        let input: [i32; 128] = std::array::from_fn(|index| index as i32 % 11 - 5);
+        let buffers = [
+            buffer(
+                &ctx,
+                bytemuck::cast_slice(&[sentinel; 128 * 12]),
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            ),
+            buffer(
+                &ctx,
+                bytemuck::cast_slice(&input),
+                wgpu::BufferUsages::STORAGE,
+            ),
+            buffer(
+                &ctx,
+                bytemuck::cast_slice(&[length, 0, 0, 0]),
+                wgpu::BufferUsages::UNIFORM,
+            ),
+        ];
+        let result = run_kernel(
+            &ctx,
+            include_str!("../../../naga/tests/in/cuda/local-declarators.cu"),
+            &buffers,
+            0,
+            2,
+        )
+        .await;
+        let actual: &[i32] = bytemuck::cast_slice(&result);
+        for (index, row) in actual.as_chunks::<12>().0.iter().enumerate() {
+            let expected = if index < length as usize {
+                let value = input[index];
+                [
+                    value * 111 + 12,
+                    value + 2,
+                    value * 2 + 12,
+                    value + 5,
+                    value + 7,
+                    i32::from(value + 2 > 0),
+                    value + 5,
+                    index as i32 % 5 + 3,
+                    value * 2 + 6,
+                    value + 9,
+                    value * 3 + 11,
+                    value * 2 + 9,
                 ]
             } else {
                 [sentinel; 12]

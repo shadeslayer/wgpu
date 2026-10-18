@@ -132,6 +132,9 @@ uses C++23 syntax. Pointer, array, function, and void aliases remain unsupported
 
 Mutable scalar locals can omit an initializer and be assigned before reading.
 Const locals, including const-qualified aliases, require an initializer.
+Local declarations can list comma-separated names, as in
+`int first = 1, next = first + 1;`. Each initializer finishes before the next
+declarator, and all names share the declared scalar type and qualification.
 
 Supported expressions include indexed buffer reads, scalar locals,
 parentheses, arithmetic and comparisons with scalar conversions, and the logical operators
@@ -153,9 +156,10 @@ Statements include local declarations, expression statements, scoped blocks,
 At statement start, C++ parses `int(value);` as a declaration. Parenthesized
 declarators are unsupported; use `int value = ...;` for a local declaration or
 `(int(value));` for a discarded cast expression.
-Loop conditions are scalar expressions; `for` initializers can declare one
-scalar, declare scalar aliases, or evaluate an expression. Empty
+Loop conditions are scalar expressions; `for` initializers can declare scalar
+locals, declare scalar aliases, or evaluate an expression. Empty
 `for` clauses are supported.
+Comma expressions and comma-separated `for` updates remain unsupported.
 `continue` executes a `for` loop's update before testing the condition again,
 and checks a `do`/`while` condition before the next iteration. A `for` initializer
 is scoped to the loop. Nested blocks support local shadowing. Statements after a

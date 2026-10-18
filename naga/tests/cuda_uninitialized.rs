@@ -207,13 +207,24 @@ fn cuda_bare_declarations_keep_duplicate_reserved_and_hidden_name_errors() {
 }
 
 #[test]
+fn cuda_scalar_declaration_lists_accept_initialized_and_omitted_initializers() {
+    for declaration in [
+        "int value, other; value = 1; other = 2;",
+        "int value = 1, other = 2;",
+    ] {
+        let source =
+            format!("__global__ void kernel(int *out) {{ {declaration} out[0] = value + other; }}");
+        assert_eq!(execute(&source, &[0]), [3]);
+    }
+    validate("__global__ void kernel() { return; int value, other; }");
+}
+
+#[test]
 fn cuda_bare_declarations_do_not_enable_other_declarators_or_malformed_syntax() {
     for (statement, token) in [
         ("int value trailing;", "trailing"),
         ("int value = ;", ";"),
         ("int value = 1 extra;", "extra"),
-        ("int value, other;", ","),
-        ("int value = 1, other = 2;", ","),
         ("int *value;", "*"),
         ("int value[2];", "["),
         ("int(value);", "("),
@@ -237,11 +248,7 @@ fn cuda_bare_declarations_in_unreachable_source_remain_checked() {
         ";",
         1,
     );
-    rejected_at(
-        "__global__ void kernel() { return; int value, other; }",
-        ",",
-        0,
-    );
+    rejected_at("__global__ void kernel() { return; int value,; }", ";", 1);
 }
 
 #[test]

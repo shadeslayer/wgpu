@@ -180,42 +180,54 @@ impl<'a> Parser<'a> {
             return self.shared_declaration();
         }
         let QualifiedScalar { scalar, is_const } = self.scalar_type()?;
-        let (name, span) = self.identifier()?;
-        self.check_name(name, span)?;
-        let ty = self.scalar_handle(scalar, span);
-        let local = self.function.ir.local_variables.append(
-            LocalVariable {
-                name: Some(String::from(name)),
-                ty,
-                init: None,
-            },
-            span,
-        );
-        let pointer = self.append(Expression::LocalVariable(local), span)?;
-        self.insert_symbol(
-            name,
-            Symbol::Scalar {
-                pointer,
-                scalar,
-                writable: !is_const,
-            },
-            span,
-        )?;
-        if !is_const && self.take_symbol(';')? {
-            return Ok(());
+        loop {
+            let (name, span) = self.identifier()?;
+            self.check_name(name, span)?;
+            let ty = self.scalar_handle(scalar, span);
+            let local = self.function.ir.local_variables.append(
+                LocalVariable {
+                    name: Some(String::from(name)),
+                    ty,
+                    init: None,
+                },
+                span,
+            );
+            let pointer = self.append(Expression::LocalVariable(local), span)?;
+            self.insert_symbol(
+                name,
+                Symbol::Scalar {
+                    pointer,
+                    scalar,
+                    writable: !is_const,
+                },
+                span,
+            )?;
+            let value =
+                if !is_const && matches!(self.lexer.peek()?.kind, TokenKind::Symbol(',' | ';')) {
+                    None
+                } else {
+                    self.expect_symbol('=')?;
+                    let value = self.expression(0)?;
+                    Some(self.convert_value(value, scalar)?)
+                };
+            let end = self.lexer.peek()?.span;
+            let has_next = self.take_symbol(',')?;
+            if !has_next {
+                self.expect_symbol(';')?;
+            }
+            if let Some(value) = value {
+                self.push_statement(
+                    Statement::Store {
+                        pointer,
+                        value: value.handle,
+                    },
+                    span.until(&end),
+                );
+            }
+            if !has_next {
+                return Ok(());
+            }
         }
-        self.expect_symbol('=')?;
-        let value = self.expression(0)?;
-        let value = self.convert_value(value, scalar)?;
-        let end = self.expect_symbol(';')?;
-        self.push_statement(
-            Statement::Store {
-                pointer,
-                value: value.handle,
-            },
-            span.until(&end),
-        );
-        Ok(())
     }
 
     fn shared_declaration(&mut self) -> Result<(), ParseError> {
