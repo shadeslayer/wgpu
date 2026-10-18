@@ -218,8 +218,8 @@ In particular, three-component arrays have a 12-byte element stride and
 4-byte alignment. Vector arithmetic, comparisons, truthiness, indexing, and
 swizzles are unsupported; use individual fields. Vector casts, nonempty
 aggregate initialization, and parenthesized aggregate initialization remain
-unsupported. By-value kernel parameters and shared declarations require the scalar
-types described in their sections.
+unsupported. By-value kernel parameters require the scalar types described in
+the kernel interface.
 
 Empty local vector initialization, such as `float3 value{};` or
 `const float4 value = {};`, zeroes every field each time execution reaches the
@@ -322,7 +322,12 @@ operand before its left operand. Logical short-circuiting also applies to assign
 the right operand.
 
 Static `__shared__` declarations support `float`, `int`, and `unsigned int`
-scalars and fixed one-dimensional arrays inside the kernel. Array extents must
+scalars, the numeric vector types above, and fixed one-dimensional arrays of
+those types inside the kernel. Their aliases are also accepted; const-qualified
+shared types remain unsupported. Vector elements use the sizes, alignments, and
+array strides listed in the kernel interface, including packed three-component
+structures. Whole-value copies and scalar component updates use the same rules
+as local vectors. Array extents must
 be positive integer literals using the same bases, separators, and suffix rules.
 Shared variables become workgroup storage without resource bindings; names obey
 the surrounding block scope, and each workgroup has its own storage. Declarations

@@ -22,6 +22,7 @@ mod literals;
 mod local_arrays;
 mod local_declarators;
 mod reference_categories;
+mod shared_vectors;
 mod specifiers;
 mod type_aliases;
 mod uninitialized;
@@ -46,6 +47,7 @@ pub fn all_tests(tests: &mut Vec<GpuTestInitializer>) {
         CUDA_LOCAL_ARRAYS,
         CUDA_LOCAL_DECLARATORS,
         CUDA_REFERENCE_CATEGORIES,
+        CUDA_SHARED_VECTORS,
         CUDA_SPECIFIERS,
         CUDA_TYPE_ALIASES,
         CUDA_UNINITIALIZED,
@@ -212,6 +214,8 @@ static CUDA_LOCAL_ARRAYS: GpuTestConfiguration = configuration(local_arrays::cas
 static CUDA_LOCAL_DECLARATORS: GpuTestConfiguration = configuration(local_declarators::cases);
 #[apply(gpu_test!)]
 static CUDA_REFERENCE_CATEGORIES: GpuTestConfiguration = configuration(reference_categories::cases);
+#[apply(gpu_test!)]
+static CUDA_SHARED_VECTORS: GpuTestConfiguration = configuration(shared_vectors::cases);
 #[apply(gpu_test!)]
 static CUDA_SPECIFIERS: GpuTestConfiguration = configuration(specifiers::cases);
 #[apply(gpu_test!)]

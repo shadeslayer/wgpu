@@ -1,0 +1,4 @@
+targets = "SPIRV | METAL | GLSL | HLSL | WGSL"
+
+[cuda-in]
+workgroup_size = [8, 1, 1]

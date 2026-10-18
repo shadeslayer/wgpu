@@ -23,6 +23,7 @@ mod overloads;
 mod parameters;
 mod reference_categories;
 mod shared;
+mod shared_vectors;
 mod specifiers;
 mod streaming;
 mod type_aliases;

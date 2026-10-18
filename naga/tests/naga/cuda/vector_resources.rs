@@ -251,9 +251,6 @@ fn cuda_vector_resources_keep_general_pointer_and_kernel_value_forms_unsupported
             rejected(&format!(
                 "__global__ void kernel({scalar}{width} value) {{}}"
             ));
-            rejected(&format!(
-                "__global__ void kernel() {{ __shared__ {scalar}{width} values[2]; }}"
-            ));
         }
     }
     for source in [

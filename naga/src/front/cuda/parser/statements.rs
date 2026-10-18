@@ -266,10 +266,11 @@ impl<'a> Parser<'a> {
             ty: specifier,
             is_const,
         } = self.parse_type()?;
-        if !matches!(specifier, TypeSpecifier::Scalar(scalar) if scalar != Scalar::BOOL) || is_const
-        {
+        if matches!(specifier, TypeSpecifier::Scalar(Scalar::BOOL)) || is_const {
             return Err(ParseError {
-                message: String::from("shared storage requires a non-const 32-bit numeric type"),
+                message: String::from(
+                    "shared storage requires a non-const numeric scalar or vector type",
+                ),
                 span: type_span,
             });
         }
