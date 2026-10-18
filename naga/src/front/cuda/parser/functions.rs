@@ -357,7 +357,21 @@ impl<'a> Parser<'a> {
                 span,
             });
         }
-        let (name, name_span) = self.identifier()?;
+        let token = self.lexer.peek()?;
+        let (name, name_span) = if self.take_ident("operator")? {
+            (
+                operators::ADDITION_NAME,
+                self.operator_addition_name(token.span)?,
+            )
+        } else {
+            self.identifier()?
+        };
+        if name == operators::ADDITION_NAME && kind != FunctionKind::Device {
+            return Err(ParseError {
+                message: String::from("operator functions must be device helpers"),
+                span: name_span,
+            });
+        }
         self.check_function_name(name, name_span, kind)?;
         Ok(FunctionHeader {
             kind,
@@ -442,6 +456,22 @@ impl<'a> Parser<'a> {
             });
         }
         self.parameters()?;
+        if header.name == operators::ADDITION_NAME
+            && (self.function.ir.arguments.len() != 2
+                || !self
+                    .function
+                    .ir
+                    .arguments
+                    .iter()
+                    .any(|argument| self.is_source_class(&TypeResolution::Handle(argument.ty))))
+        {
+            return Err(ParseError {
+                message: String::from(
+                    "binary operator+ requires two parameters and a vector class operand",
+                ),
+                span: header.name_span,
+            });
+        }
         if self
             .function_candidates(header.name)
             .filter(|candidate| {
@@ -558,8 +588,18 @@ impl<'a> Parser<'a> {
             }
         }
         let end = self.expect_symbol(')')?;
-        let candidate = self.resolve_overload(name, &arguments, span)?;
-        self.lower_call(candidate, arguments, span.until(&end))
+        self.call_with_arguments(name, arguments, span, span.until(&end))
+    }
+
+    pub(super) fn call_with_arguments(
+        &mut self,
+        name: &str,
+        arguments: Vec<Value>,
+        name_span: Span,
+        span: Span,
+    ) -> Result<ExpressionResult, ParseError> {
+        let candidate = self.resolve_overload(name, &arguments, name_span)?;
+        self.lower_call(candidate, arguments, span)
     }
 
     fn lower_call(

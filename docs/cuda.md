@@ -348,10 +348,37 @@ in the same overload resolution as other helpers.
 
 These types follow CUDA's [built-in vector definitions](https://docs.nvidia.com/cuda/archive/13.0.0/cuda-c-programming-guide/index.html#built-in-vector-types).
 In particular, three-component arrays have a 12-byte element stride and
-4-byte alignment. Vector arithmetic, comparisons, truthiness, indexing, and
-swizzles are unsupported; use individual fields. Vector casts and parenthesized
-aggregate initialization remain unsupported. By-value kernel parameters require
-the scalar types described in the kernel interface.
+4-byte alignment. Vector comparisons, truthiness, indexing, and swizzles remain
+unsupported. Vector addition requires a visible source-defined binary
+`operator+`; other vector arithmetic remains unsupported. Vector casts and
+parenthesized aggregate initialization remain unsupported. By-value kernel
+parameters require the scalar types described in the kernel interface.
+
+Nonmember binary `operator+` definitions take two parameters by value, with at
+least one parameter of a supported vector type. For example:
+
+```cuda
+__device__ float2 operator+(float2 left, float2 right) {
+    return make_float2(left.x + right.x, left.y + right.y);
+}
+```
+
+Both `first + second` and `operator+(first, second)` select from definitions
+visible before the call, using the existing helper overload and conversion
+rules. Scalar-only `+` expressions retain built-in arithmetic. Operators can
+return a supported scalar or vector value, or `void`; void results can only
+appear where an ordinary void helper call is accepted. Calls remain runtime
+expressions and obey the existing helper recursion restrictions.
+
+The frontend evaluates overloaded operands and explicit-call arguments once,
+from left to right. This is the frontend's chosen order, not a general CUDA
+guarantee: C++ distinguishes
+[operator-notation sequencing](https://timsong-cpp.github.io/cppwp/n4861/over.match.oper#2)
+from [explicit function calls](https://timsong-cpp.github.io/cppwp/n4861/expr.call#8).
+Source expressions must still obey the C++ rules for unsequenced side effects.
+Defining `operator+` does not enable vector `+=`, vector unary `+`, or other
+overloaded operators.
+Member operators, references, and templates remain unsupported.
 
 Empty local vector initialization, such as `float3 value{};` or
 `const float4 value = {};`, zeroes every field each time execution reaches the

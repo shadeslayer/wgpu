@@ -13,6 +13,7 @@ mod floorf;
 mod functions;
 mod initializers;
 mod loops;
+mod operators;
 mod references;
 mod sqrtf;
 mod statements;

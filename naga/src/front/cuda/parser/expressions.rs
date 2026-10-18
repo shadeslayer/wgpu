@@ -78,13 +78,17 @@ impl Parser<'_> {
             if precedence < minimum_precedence {
                 break;
             }
-            self.lexer.next()?;
+            let operator_span = self.lexer.next()?.span;
             let mut left_value = left.require_value()?;
             if matches!(
                 operator,
                 BinaryOperator::LogicalAnd | BinaryOperator::LogicalOr
             ) {
                 left = self.logical(left_value, operator, precedence)?.into();
+                continue;
+            }
+            if operator == BinaryOperator::Add {
+                left = self.addition(left_value, precedence, operator_span)?;
                 continue;
             }
             if matches!(
@@ -250,6 +254,10 @@ impl Parser<'_> {
             }
             TokenKind::Ident(name) => {
                 self.lexer.next()?;
+                if name == "operator" {
+                    let span = self.operator_addition_name(token.span)?;
+                    return self.call(operators::ADDITION_NAME, span);
+                }
                 if name == "static_cast" {
                     self.expect_symbol('<')?;
                     let target = self.cast_type()?;
