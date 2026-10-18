@@ -8,6 +8,7 @@ mod context;
 mod conversions;
 mod declarations;
 mod expressions;
+mod floorf;
 mod functions;
 mod initializers;
 mod loops;

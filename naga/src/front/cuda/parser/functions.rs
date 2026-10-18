@@ -25,7 +25,7 @@ const BITCAST_BUILTINS: [(&str, Scalar, Scalar); 4] = [
     ("__uint_as_float", Scalar::U32, Scalar::F32),
 ];
 
-const INTEGER_BUILTINS: [(&str, MathFunction, Scalar, Scalar); 4] = [
+const UNARY_BUILTINS: [(&str, MathFunction, Scalar, Scalar); 5] = [
     (
         "__clz",
         MathFunction::CountLeadingZeros,
@@ -50,6 +50,7 @@ const INTEGER_BUILTINS: [(&str, MathFunction, Scalar, Scalar); 4] = [
         Scalar::U32,
         Scalar::U32,
     ),
+    ("floorf", MathFunction::Floor, Scalar::F32, Scalar::F32),
 ];
 
 #[derive(Clone, Copy, PartialEq)]
@@ -96,7 +97,7 @@ pub(super) fn builtin_declarations<'a>() -> FastHashMap<&'a str, GlobalDeclarati
                 .map(|(name, _, _)| (name, GlobalDeclaration::Functions(Vec::new()))),
         )
         .chain(
-            INTEGER_BUILTINS
+            UNARY_BUILTINS
                 .into_iter()
                 .map(|(name, _, _, _)| (name, GlobalDeclaration::Functions(Vec::new()))),
         )
@@ -660,16 +661,20 @@ impl<'a> Parser<'a> {
         {
             let argument =
                 self.convert_scalar(arguments.into_iter().next().unwrap().into(), source)?;
-            let handle = self.append(
-                Expression::Math {
-                    fun: function,
-                    arg: argument.handle,
-                    arg1: None,
-                    arg2: None,
-                    arg3: None,
-                },
-                span,
-            )?;
+            let handle = if function == MathFunction::Floor {
+                self.floorf(argument.handle, span)?
+            } else {
+                self.append(
+                    Expression::Math {
+                        fun: function,
+                        arg: argument.handle,
+                        arg1: None,
+                        arg2: None,
+                        arg3: None,
+                    },
+                    span,
+                )?
+            };
             let mut value = Value {
                 constant: ConstantValue::default(),
                 handle,
@@ -922,7 +927,7 @@ impl<'a> Parser<'a> {
                     .map(|(_, source, result)| FunctionCandidate::Bitcast { source, result }),
             )
             .chain(
-                INTEGER_BUILTINS
+                UNARY_BUILTINS
                     .into_iter()
                     .find(|&(candidate, _, _, _)| candidate == name)
                     .filter(move |_| builtin_visible)

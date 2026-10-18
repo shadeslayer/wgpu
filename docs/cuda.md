@@ -183,6 +183,16 @@ Calls execute at runtime and are not constant expressions, including calls with
 literal arguments. The double-precision `sqrt` and directed-rounding intrinsics
 remain unsupported.
 
+`floorf(float)` returns the greatest integral value no greater than its argument,
+represented as `float`. Scalar arguments convert to `float` before rounding.
+For example, `floorf(-0.25f)` returns `-1.0f`; negative nonzero subnormal inputs
+also produce `-1.0f`. Integer operations on the received representation preserve
+both signed zeros, both infinities, and large integral values. NaNs produce the
+canonical quiet NaN `0x7fc00000`. These results follow NVIDIA's
+[`floorf` specification](https://docs.nvidia.com/cuda/archive/13.0.1/cuda-math-api/cuda_math_api/group__CUDA__MATH__SINGLE.html).
+Calls execute at runtime and are not constant expressions. Double-precision
+`floor` remains unsupported.
+
 Target floating-point rules still apply. In particular, WGSL permits
 [finite-math assumptions, changes to zero signs, and flushing subnormals](https://gpuweb.github.io/gpuweb/wgsl/#floating-point-evaluation),
 so exceptional values are not guaranteed to retain these bits on every target.
@@ -193,7 +203,7 @@ Additional user-defined overloads participate alongside the predefined ones;
 definitions repeating a predefined parameter signature are rejected, including
 through aliases or top-level `const`. Local values and type names can hide these
 functions. Kernels and file-scope type aliases named `min`, `max`, `fminf`,
-`fmaxf`, or `sqrtf` remain unsupported.
+`fmaxf`, `sqrtf`, or `floorf` remain unsupported.
 
 ## Bit reinterpretation
 

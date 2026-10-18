@@ -13,6 +13,7 @@ mod device_functions;
 mod dual_execution;
 mod float_math;
 mod float_separators;
+mod floorf;
 mod helpers;
 mod inferred_arrays;
 mod inline;
