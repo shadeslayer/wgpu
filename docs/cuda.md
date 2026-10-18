@@ -135,6 +135,25 @@ Static variables and the `__inline_hint__` specifier remain unsupported.
 Top-level return `const`, including `const void`, does not change the result type.
 The frontend preserves ordinary function calls; `inline` does not force substitution.
 
+## Integer mathematical functions
+
+`min` and `max` accept `int` and `unsigned int` operands in either order.
+Boolean arguments promote to `int`. If either operand is unsigned, both values
+convert to `unsigned int` and the result is unsigned; otherwise the result is
+`int`. For example, `min(-1, 2u)` is `2u`, while `max(-1, 2u)` is `0xffffffffu`.
+These rules follow NVIDIA's [integer overloads](https://docs.nvidia.com/cuda/archive/13.0.0/cuda-math-api/cuda_math_api/group__CUDA__MATH__INT.html).
+
+Calls use the same argument sequencing and overload ranking as device helpers.
+Additional user-defined overloads participate alongside the predefined ones;
+definitions repeating a predefined parameter signature are rejected, including
+through aliases or top-level `const`. Local values and type names can hide these
+functions. Kernels and file-scope type aliases named `min` or `max` remain
+unsupported.
+
+The predefined `float, float` signature participates in overload selection, but
+selecting it produces an unsupported-feature error. Mixed floating-point and
+integer calls can be ambiguous; an exact user-defined overload can resolve them.
+
 ## Source subset
 
 Scalar aliases support `typedef` and `using` for `bool`, `int`, `unsigned int`,

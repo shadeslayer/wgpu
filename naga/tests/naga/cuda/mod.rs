@@ -12,6 +12,7 @@ mod dual_execution;
 mod float_separators;
 mod helpers;
 mod inline;
+mod integer_math;
 mod integer_operators;
 mod literals;
 mod local_declarators;

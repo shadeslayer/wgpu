@@ -1,5 +1,47 @@
 use super::*;
 
+use crate::MathFunction;
+
+const MATH_BUILTINS: [(&str, MathFunction); 2] =
+    [("min", MathFunction::Min), ("max", MathFunction::Max)];
+
+const MATH_SIGNATURES: [([Scalar; 2], Scalar); 5] = [
+    ([Scalar::I32, Scalar::I32], Scalar::I32),
+    ([Scalar::U32, Scalar::U32], Scalar::U32),
+    ([Scalar::I32, Scalar::U32], Scalar::U32),
+    ([Scalar::U32, Scalar::I32], Scalar::U32),
+    ([Scalar::F32, Scalar::F32], Scalar::F32),
+];
+
+#[derive(Clone, Copy, PartialEq)]
+struct MathBuiltin {
+    function: MathFunction,
+    parameters: [Scalar; 2],
+    result: Scalar,
+}
+
+fn math_builtins(name: &str) -> impl Iterator<Item = MathBuiltin> + Clone {
+    let function = MATH_BUILTINS
+        .into_iter()
+        .find_map(|(candidate, function)| (candidate == name).then_some(function));
+    MATH_SIGNATURES
+        .into_iter()
+        .filter_map(move |(parameters, result)| {
+            function.map(|function| MathBuiltin {
+                function,
+                parameters,
+                result,
+            })
+        })
+}
+
+pub(super) fn builtin_declarations<'a>() -> FastHashMap<&'a str, GlobalDeclaration> {
+    MATH_BUILTINS
+        .into_iter()
+        .map(|(name, _)| (name, GlobalDeclaration::Functions(Vec::new())))
+        .collect()
+}
+
 #[derive(Clone, Copy)]
 enum ReturnType {
     Void,
@@ -18,6 +60,7 @@ struct FunctionHeader<'a> {
 enum FunctionCandidate {
     Defined(Handle<Function>),
     Current,
+    Builtin(MathBuiltin),
 }
 
 fn conversion_rank(source: Scalar, target: Scalar) -> u8 {
@@ -278,6 +321,21 @@ impl<'a> Parser<'a> {
             });
         }
         self.parameters()?;
+        if math_builtins(header.name).any(|builtin| {
+            self.function.ir.arguments.len() == builtin.parameters.len()
+                && builtin
+                    .parameters
+                    .into_iter()
+                    .enumerate()
+                    .all(|(index, scalar)| {
+                        self.candidate_scalar(FunctionCandidate::Current, index) == scalar
+                    })
+        }) {
+            return Err(ParseError {
+                message: format!("duplicate builtin definition `{}`", header.name),
+                span: header.name_span,
+            });
+        }
         if let Some(&GlobalDeclaration::Functions(ref functions)) =
             self.global_declarations.get(header.name)
         {
@@ -367,7 +425,39 @@ impl<'a> Parser<'a> {
             }
         }
         let end = self.expect_symbol(')')?;
-        let function = self.resolve_overload(name, &arguments, span)?;
+        let candidate = self.resolve_overload(name, &arguments, span)?;
+        if let FunctionCandidate::Builtin(builtin) = candidate {
+            if builtin.result == Scalar::F32 {
+                return Err(ParseError {
+                    message: String::from("floating-point min/max builtins are unsupported"),
+                    span,
+                });
+            }
+            let mut arguments = arguments.into_iter();
+            let left = arguments.next().unwrap();
+            let right = arguments.next().unwrap();
+            let (left, right) = self.usual_arithmetic(left.into(), right.into())?;
+            let span = span.until(&end);
+            let handle = self.append(
+                Expression::Math {
+                    fun: builtin.function,
+                    arg: left.handle,
+                    arg1: Some(right.handle),
+                    arg2: None,
+                    arg3: None,
+                },
+                span,
+            )?;
+            return Ok(Value {
+                handle,
+                scalar: builtin.result,
+                span,
+            }
+            .into());
+        }
+        let FunctionCandidate::Defined(function) = candidate else {
+            unreachable!()
+        };
         let mut converted = Vec::with_capacity(arguments.len());
         for (index, value) in arguments.into_iter().enumerate() {
             let parameter = &self.module.functions[function].arguments[index];
@@ -421,18 +511,40 @@ impl<'a> Parser<'a> {
         let current = (self.function.kind == FunctionKind::Device
             && self.function.ir.name.as_deref() == Some(name))
         .then_some(FunctionCandidate::Current);
+        let builtin_visible = matches!(
+            self.global_declarations.get(name),
+            Some(&GlobalDeclaration::Functions(_))
+        );
         functions
             .iter()
             .copied()
             .map(FunctionCandidate::Defined)
             .chain(current)
+            .chain(
+                math_builtins(name)
+                    .filter(move |_| builtin_visible)
+                    .map(FunctionCandidate::Builtin),
+            )
     }
 
-    fn candidate_function(&self, candidate: FunctionCandidate) -> &Function {
+    fn candidate_arity(&self, candidate: FunctionCandidate) -> usize {
         match candidate {
-            FunctionCandidate::Defined(handle) => &self.module.functions[handle],
-            FunctionCandidate::Current => &self.function.ir,
+            FunctionCandidate::Defined(handle) => self.module.functions[handle].arguments.len(),
+            FunctionCandidate::Current => self.function.ir.arguments.len(),
+            FunctionCandidate::Builtin(builtin) => builtin.parameters.len(),
         }
+    }
+
+    fn candidate_scalar(&self, candidate: FunctionCandidate, index: usize) -> Scalar {
+        let argument = match candidate {
+            FunctionCandidate::Defined(handle) => &self.module.functions[handle].arguments[index],
+            FunctionCandidate::Current => &self.function.ir.arguments[index],
+            FunctionCandidate::Builtin(builtin) => return builtin.parameters[index],
+        };
+        let TypeInner::Scalar(scalar) = self.module.types[argument.ty].inner else {
+            unreachable!()
+        };
+        scalar
     }
 
     fn better_candidate(
@@ -441,21 +553,16 @@ impl<'a> Parser<'a> {
         right_candidate: FunctionCandidate,
         arguments: &[Value],
     ) -> bool {
-        let left_parameters = &self.candidate_function(left_candidate).arguments;
-        let right_parameters = &self.candidate_function(right_candidate).arguments;
         let mut has_better_conversion = false;
-        for ((left_parameter, right_parameter), argument) in
-            left_parameters.iter().zip(right_parameters).zip(arguments)
-        {
-            let TypeInner::Scalar(left_scalar) = self.module.types[left_parameter.ty].inner else {
-                unreachable!()
-            };
-            let TypeInner::Scalar(right_scalar) = self.module.types[right_parameter.ty].inner
-            else {
-                unreachable!()
-            };
-            let left_rank = conversion_rank(argument.scalar, left_scalar);
-            let right_rank = conversion_rank(argument.scalar, right_scalar);
+        for (index, argument) in arguments.iter().enumerate() {
+            let left_rank = conversion_rank(
+                argument.scalar,
+                self.candidate_scalar(left_candidate, index),
+            );
+            let right_rank = conversion_rank(
+                argument.scalar,
+                self.candidate_scalar(right_candidate, index),
+            );
             if left_rank > right_rank {
                 return false;
             }
@@ -469,10 +576,10 @@ impl<'a> Parser<'a> {
         name: &str,
         arguments: &[Value],
         span: Span,
-    ) -> Result<Handle<Function>, ParseError> {
-        let mut viable_candidates = self.function_candidates(name).filter(|&candidate| {
-            self.candidate_function(candidate).arguments.len() == arguments.len()
-        });
+    ) -> Result<FunctionCandidate, ParseError> {
+        let mut viable_candidates = self
+            .function_candidates(name)
+            .filter(|&candidate| self.candidate_arity(candidate) == arguments.len());
         let mut remaining_candidates = viable_candidates.clone();
         let Some(mut best_candidate) = remaining_candidates.next() else {
             return Err(ParseError {
@@ -495,7 +602,7 @@ impl<'a> Parser<'a> {
             });
         }
         match best_candidate {
-            FunctionCandidate::Defined(handle) => Ok(handle),
+            FunctionCandidate::Defined(_) | FunctionCandidate::Builtin(_) => Ok(best_candidate),
             FunctionCandidate::Current => Err(ParseError {
                 message: String::from("recursive device helper calls are unsupported"),
                 span,

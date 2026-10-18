@@ -144,7 +144,7 @@ impl<'a> Parser<'a> {
         Self {
             lexer,
             module: Module::default(),
-            global_declarations: FastHashMap::default(),
+            global_declarations: functions::builtin_declarations(),
             function: FunctionContext::new(FunctionKind::Kernel),
             workgroup_size: options.workgroup_size,
         }
@@ -436,6 +436,19 @@ impl<'a> Parser<'a> {
                 self.function.expression_graph_depths[left.index()]
                     .max(self.function.expression_graph_depths[right.index()])
                     + 1
+            }
+            Expression::Math {
+                arg,
+                arg1,
+                arg2,
+                arg3,
+                ..
+            } => {
+                let mut depth = self.function.expression_graph_depths[arg.index()];
+                for operand in [arg1, arg2, arg3].into_iter().flatten() {
+                    depth = depth.max(self.function.expression_graph_depths[operand.index()]);
+                }
+                depth + 1
             }
             _ => 0,
         };
