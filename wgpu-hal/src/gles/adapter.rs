@@ -930,6 +930,10 @@ impl super::Adapter {
         );
 
         let r = renderer.to_lowercase();
+        workarounds.set(
+            super::Workarounds::MESA_INTEL_VOLATILE_STRUCT_ARRAYS,
+            r.contains("mesa") && r.contains("intel"),
+        );
         // Check for Mesa sRGB clear bug. See
         // [`super::PrivateCapabilities::MESA_I915_SRGB_SHADER_CLEAR`].
         if context.is_owned()

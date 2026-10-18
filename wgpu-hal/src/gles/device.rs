@@ -11,7 +11,7 @@ use core::{cmp::max, convert::TryInto, num::NonZeroU32, ptr, sync::atomic::Order
 
 use arrayvec::ArrayVec;
 use glow::HasContext;
-use naga::FastHashMap;
+use naga::{FastHashMap, FastHashSet};
 use wgpu_sync::Mutex;
 
 use super::{conv, PrivateCapabilities};
@@ -26,11 +26,41 @@ type NameBindingMap = FastHashMap<String, (super::BindingRegister, u8)>;
 
 struct CompilationContext<'a> {
     layout: &'a super::PipelineLayout,
+    workarounds: super::Workarounds,
     sampler_map: &'a mut super::SamplerBindMap,
     name_binding_map: &'a mut NameBindingMap,
     immediates_items: &'a mut Vec<naga::back::glsl::ImmediateItem>,
     multiview_mask: Option<NonZeroU32>,
     clip_distance_count: &'a mut u32,
+}
+
+fn contains_packed_struct_array(module: &naga::Module, ty: naga::Handle<naga::Type>) -> bool {
+    let mut pending = vec![ty];
+    let mut visited = FastHashSet::default();
+    while let Some(ty) = pending.pop() {
+        if !visited.insert(ty) {
+            continue;
+        }
+        match module.types[ty].inner {
+            naga::TypeInner::Array {
+                base, stride: 12, ..
+            } if matches!(
+                module.types[base].inner,
+                naga::TypeInner::Struct { span: 12, .. }
+            ) =>
+            {
+                return true;
+            }
+            naga::TypeInner::Array { base, .. } | naga::TypeInner::BindingArray { base, .. } => {
+                pending.push(base);
+            }
+            naga::TypeInner::Struct { ref members, .. } => {
+                pending.extend(members.iter().map(|member| member.ty));
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 impl CompilationContext<'_> {
@@ -382,7 +412,7 @@ impl super::Device {
                 }
             };
 
-            let (module, info) = naga::back::pipeline_constants::process_overrides(
+            let (mut module, info) = naga::back::pipeline_constants::process_overrides(
                 &naga.module,
                 &naga.info,
                 Some((naga_stage, stage.entry_point)),
@@ -398,6 +428,37 @@ impl super::Device {
                 .iter()
                 .position(|ep| ep.name.as_str() == stage.entry_point)
                 .ok_or(crate::PipelineError::EntryPoint(naga_stage))?;
+
+            if context
+                .workarounds
+                .contains(super::Workarounds::MESA_INTEL_VOLATILE_STRUCT_ARRAYS)
+            {
+                let globals: Vec<_> = module
+                    .global_variables
+                    .iter()
+                    .filter_map(|(handle, global)| {
+                        let naga::AddressSpace::Storage { access } = global.space else {
+                            return None;
+                        };
+                        (!info.get_entry_point(entry_point_index)[handle].is_empty()
+                            && access
+                                .contains(naga::StorageAccess::LOAD | naga::StorageAccess::STORE)
+                            && !global
+                                .memory_decorations
+                                .contains(naga::MemoryDecorations::VOLATILE)
+                            && contains_packed_struct_array(&module, global.ty))
+                        .then_some(handle)
+                    })
+                    .collect();
+                if !globals.is_empty() {
+                    let module = module.to_mut();
+                    for handle in globals {
+                        module.global_variables[handle]
+                            .memory_decorations
+                            .insert(naga::MemoryDecorations::VOLATILE);
+                    }
+                }
+            }
 
             use naga::proc::BoundsCheckPolicy;
             // The image bounds checks require the TEXTURE_LEVELS feature available in GL core 4.3+.
@@ -500,15 +561,7 @@ impl super::Device {
                 group_to_binding_to_slot: group_to_binding_to_slot.into_boxed_slice(),
             })
             .or_insert_with(|| unsafe {
-                Self::create_program(
-                    gl,
-                    shaders,
-                    layout,
-                    label,
-                    multiview_mask,
-                    self.shared.shading_language_version,
-                    self.shared.private_caps,
-                )
+                Self::create_program(gl, shaders, layout, label, multiview_mask, &self.shared)
             })
             .to_owned()?;
         drop(guard);
@@ -533,17 +586,16 @@ impl super::Device {
         layout: &super::PipelineLayout,
         #[cfg_attr(target_family = "wasm", allow(unused))] label: Option<&str>,
         multiview_mask: Option<NonZeroU32>,
-        glsl_version: naga::back::glsl::Version,
-        private_caps: PrivateCapabilities,
+        shared: &super::AdapterShared,
     ) -> Result<Arc<super::PipelineInner>, crate::PipelineError> {
-        let glsl_version = match glsl_version {
+        let glsl_version = match shared.shading_language_version {
             naga::back::glsl::Version::Embedded { version, .. } => format!("{version} es"),
             naga::back::glsl::Version::Desktop(version) => format!("{version}"),
         };
         let program = unsafe { gl.create_program() }.unwrap();
         #[cfg(native)]
         if let Some(label) = label {
-            if private_caps.contains(PrivateCapabilities::DEBUG_FNS) {
+            if shared.private_caps.contains(PrivateCapabilities::DEBUG_FNS) {
                 let name = program.0.get();
                 unsafe { gl.object_label(glow::PROGRAM, name, Some(label)) };
             }
@@ -564,6 +616,7 @@ impl super::Device {
             };
             let context = CompilationContext {
                 layout,
+                workarounds: shared.workarounds,
                 sampler_map: &mut sampler_map,
                 name_binding_map: &mut name_binding_map,
                 immediates_items: pc_item,
@@ -610,7 +663,10 @@ impl super::Device {
             log::debug!("\tLink message: {msg}");
         }
 
-        if !private_caps.contains(PrivateCapabilities::SHADER_BINDING_LAYOUT) {
+        if !shared
+            .private_caps
+            .contains(PrivateCapabilities::SHADER_BINDING_LAYOUT)
+        {
             // This remapping is only needed if we aren't able to put the binding layout
             // in the shader. We can't remap storage buffers this way.
             unsafe { gl.use_program(Some(program)) };

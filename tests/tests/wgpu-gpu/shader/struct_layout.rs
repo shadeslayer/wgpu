@@ -2,13 +2,16 @@ use std::fmt::Write;
 
 use wgpu::{Backends, DownlevelFlags, Features, Limits};
 
-use crate::shader::{shader_input_output_test, InputStorageType, ShaderTest, MAX_BUFFER_SIZE};
+use crate::shader::{
+    shader_input_output_test, InputStorageType, ShaderBuffer, ShaderTest, MAX_BUFFER_SIZE,
+};
 use wgpu_test::{apply, gpu_test, GpuTestConfiguration, GpuTestInitializer, TestParameters};
 
 pub fn all_tests(vec: &mut Vec<GpuTestInitializer>) {
     vec.extend([
         UNIFORM_INPUT,
         STORAGE_INPUT,
+        STORAGE_FIELD_WRITES,
         IMMEDIATES_INPUT,
         UNIFORM_INPUT_INT64,
         STORAGE_INPUT_INT64,
@@ -50,6 +53,97 @@ static STORAGE_INPUT: GpuTestConfiguration = GpuTestConfiguration::new()
             InputStorageType::Storage,
             create_struct_layout_tests(InputStorageType::Storage),
         )
+    });
+
+#[apply(gpu_test!)]
+static STORAGE_FIELD_WRITES: GpuTestConfiguration = GpuTestConfiguration::new()
+    .parameters(
+        TestParameters::default()
+            .downlevel_flags(DownlevelFlags::COMPUTE_SHADERS)
+            .limits(Limits::downlevel_defaults()),
+    )
+    .run_async(|ctx| {
+        let mut input = [0x0123_4567_u32; 32];
+        for (word, value) in input
+            .iter_mut()
+            .zip([0.5_f32, -1.25, 2.5, -4.5, 5.25, -6.5, 8.5, -9.25, 10.5])
+        {
+            *word = value.to_bits();
+        }
+        let mut expected = [0xdead_beef_u32; 32];
+        for (word, value) in expected
+            .iter_mut()
+            .zip([-3.5_f32, 5.25, -6.5, 8.5, 5.25, -6.5])
+        {
+            *word = value.to_bits();
+        }
+        expected[21..23].copy_from_slice(&[8.5_f32, 8.5].map(f32::to_bits));
+        let source = r#"struct Triple { x: f32, y: f32, z: f32, }
+@group(0) @binding(0) var<storage, read> input: array<Triple>;
+@group(0) @binding(1) var<storage, read_write> output: array<Triple>;
+@compute @workgroup_size(1, 1, 1)
+fn main() {
+    output[0] = input[0];
+    output[1] = input[1];
+    output[1].x = output[1].x + 1.0;
+    let rhs = input[2].x;
+    output[1].x = rhs;
+    let immediately = output[1].x;
+    output[7].x = immediately;
+    output[0].x = input[1].x;
+    output[0].y = input[1].y;
+    output[0].z = input[1].z;
+    output[0].x = output[0].x + 1.0;
+    output[7].y = output[1].x;
+}
+"#;
+        let wrapped = format!(
+            "struct Wrapper {{ values: array<Triple>, }}\n{}",
+            source
+                .replace("input: array<Triple>;", "input: Wrapper;")
+                .replace("output: array<Triple>;", "output: Wrapper;")
+                .replace("input[", "input.values[")
+                .replace("output[", "output.values[")
+        );
+        let tests = [
+            (
+                "packed storage fields preserve adjacent writes",
+                source.into(),
+            ),
+            (
+                "wrapped packed storage fields preserve adjacent writes",
+                wrapped,
+            ),
+        ]
+        .into_iter()
+        .map(|(name, source)| {
+            ShaderTest::new(
+                name.into(),
+                String::new(),
+                String::new(),
+                &[] as &[u32],
+                &expected,
+            )
+            .module_source(source, "main".into())
+            .module_buffers(
+                vec![
+                    ShaderBuffer::new(
+                        0,
+                        wgpu::BufferBindingType::Storage { read_only: true },
+                        &input,
+                    ),
+                    ShaderBuffer::new(
+                        1,
+                        wgpu::BufferBindingType::Storage { read_only: false },
+                        &[0xdead_beef_u32; 32],
+                    ),
+                ],
+                1,
+                [1, 1, 1],
+            )
+        })
+        .collect();
+        shader_input_output_test(ctx, InputStorageType::Storage, tests)
     });
 
 #[apply(gpu_test!)]

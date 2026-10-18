@@ -260,6 +260,8 @@ bitflags::bitflags! {
         const MESA_I915_SRGB_SHADER_CLEAR = 1 << 0;
         /// Buffer map must emulated because it is not supported natively
         const EMULATE_BUFFER_MAP = 1 << 1;
+        /// Prevent incorrect forwarding across stores to packed struct arrays.
+        const MESA_INTEL_VOLATILE_STRUCT_ARRAYS = 1 << 2;
     }
 }
 
