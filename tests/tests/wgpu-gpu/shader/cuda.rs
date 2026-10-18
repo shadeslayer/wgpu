@@ -3,17 +3,21 @@ use naga::valid::{Capabilities, ValidationFlags, Validator};
 use wgpu::{DownlevelFlags, Limits};
 use wgpu_test::{apply, gpu_test, GpuTestConfiguration, GpuTestInitializer, TestParameters};
 
-use super::{shader_input_output_test, InputStorageType, ShaderTest, MAX_BUFFER_SIZE};
+use super::{
+    shader_input_output_test, InputStorageType, ShaderBuffer, ShaderTest, MAX_BUFFER_SIZE,
+};
 
 mod arithmetic;
 mod comma;
 mod conditionals;
+mod control_flow;
 mod declarations;
 mod dual_execution;
 mod float_math;
 mod float_separators;
 mod inline;
 mod integer_math;
+mod kernels;
 mod literals;
 mod local_arrays;
 mod local_declarators;
@@ -25,10 +29,12 @@ mod updates;
 mod vector_values;
 
 pub fn all_tests(tests: &mut Vec<GpuTestInitializer>) {
+    kernels::all_tests(tests);
     tests.extend([
         CUDA_ARITHMETIC,
         CUDA_COMMA,
         CUDA_CONDITIONALS,
+        CUDA_CONTROL_FLOW,
         CUDA_DECLARATIONS,
         CUDA_DUAL_EXECUTION,
         CUDA_FLOAT_MATH,
@@ -79,16 +85,7 @@ fn scalar_case(
     assert!(expected.len() <= full_expected.len(), "{name}");
     full_expected[..expected.len()].copy_from_slice(expected);
 
-    let mut module = parse_str(
-        source,
-        &Options {
-            workgroup_size: [1, 1, 1],
-        },
-    )
-    .unwrap_or_else(|error| panic!("{name}: {error}"));
-    Validator::new(ValidationFlags::all(), Capabilities::empty())
-        .validate(&module)
-        .unwrap_or_else(|error| panic!("{name}: {error}"));
+    let mut module = parse_module(name, source, [1, 1, 1]);
     assert_eq!(module.entry_points.len(), 1, "{name}");
     assert_eq!(module.entry_points[0].workgroup_size, [1, 1, 1], "{name}");
     assert!(
@@ -126,11 +123,35 @@ fn scalar_case(
         "{name}"
     );
     output.binding.as_mut().unwrap().binding = 1;
-    let info = Validator::new(ValidationFlags::all(), Capabilities::empty())
+    let (wgsl, entry_point) = write_module(name, &module);
+
+    ShaderTest::new(
+        name.into(),
+        String::new(),
+        String::new(),
+        &[0_u32],
+        &full_expected,
+    )
+    .module_source(wgsl, entry_point)
+    .output_initial_values(initial)
+}
+
+fn parse_module(name: &str, source: &str, workgroup_size: [u32; 3]) -> naga::Module {
+    let module = parse_str(source, &Options { workgroup_size })
+        .unwrap_or_else(|error| panic!("{name}: {error}"));
+    Validator::new(ValidationFlags::all(), Capabilities::empty())
         .validate(&module)
         .unwrap_or_else(|error| panic!("{name}: {error}"));
+    assert_eq!(module.entry_points.len(), 1, "{name}");
+    module
+}
+
+fn write_module(name: &str, module: &naga::Module) -> (String, String) {
+    let info = Validator::new(ValidationFlags::all(), Capabilities::empty())
+        .validate(module)
+        .unwrap_or_else(|error| panic!("{name}: {error}"));
     let wgsl = naga::back::wgsl::write_string(
-        &module,
+        module,
         &info,
         naga::back::wgsl::WriterFlags::EXPLICIT_TYPES,
     )
@@ -140,16 +161,25 @@ fn scalar_case(
     Validator::new(ValidationFlags::all(), Capabilities::empty())
         .validate(&roundtrip)
         .unwrap_or_else(|error| panic!("{name}: {error}"));
+    (wgsl, roundtrip.entry_points[0].name.clone())
+}
 
+fn module_case<O: bytemuck::Pod + std::fmt::Debug + PartialEq>(
+    name: &str,
+    source: &str,
+    workgroup_size: [u32; 3],
+    expected: &[O],
+) -> ShaderTest {
+    let module = parse_module(name, source, workgroup_size);
+    let (wgsl, entry_point) = write_module(name, &module);
     ShaderTest::new(
         name.into(),
         String::new(),
         String::new(),
         &[0_u32],
-        &full_expected,
+        expected,
     )
-    .module_source(wgsl, roundtrip.entry_points[0].name.clone())
-    .output_initial_values(initial)
+    .module_source(wgsl, entry_point)
 }
 
 #[apply(gpu_test!)]
@@ -158,6 +188,8 @@ static CUDA_ARITHMETIC: GpuTestConfiguration = configuration(arithmetic::cases);
 static CUDA_COMMA: GpuTestConfiguration = configuration(comma::cases);
 #[apply(gpu_test!)]
 static CUDA_CONDITIONALS: GpuTestConfiguration = configuration(conditionals::cases);
+#[apply(gpu_test!)]
+static CUDA_CONTROL_FLOW: GpuTestConfiguration = configuration(control_flow::cases);
 #[apply(gpu_test!)]
 static CUDA_DECLARATIONS: GpuTestConfiguration = configuration(declarations::cases);
 #[apply(gpu_test!)]
