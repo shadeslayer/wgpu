@@ -172,6 +172,19 @@ and [`max`](https://docs.nvidia.com/cuda/parallel-thread-execution/#floating-poi
 rules. Floating `min` and `max` are equivalent to `fminf` and `fmaxf`, as described
 in NVIDIA's [single-precision functions](https://docs.nvidia.com/cuda/archive/13.0.0/cuda-math-api/cuda_math_api/group__CUDA__MATH__SINGLE.html).
 
+`fabsf(float)` and the `fabs(float)` overload return the absolute value as
+`float`. Integer operations preserve the magnitude of the received representation,
+including subnormal inputs. Both signed zeros produce positive zero, both
+infinities produce positive infinity, and NaNs produce the canonical quiet NaN
+`0x7fc00000`; CUDA leaves the NaN representation unspecified.
+These results follow NVIDIA's
+[`fabsf` specification](https://docs.nvidia.com/cuda/archive/13.0.1/cuda-math-api/cuda_math_api/group__CUDA__MATH__SINGLE.html).
+`fabsf` converts scalar arguments to `float` before taking the absolute value.
+Integral arguments to `fabs` select unsupported double-precision overloads;
+use `fabsf` or explicitly convert to `float`. Exact user-defined integral
+overloads still participate and take precedence over the library templates.
+Calls execute at runtime and are not constant expressions.
+
 `sqrtf(float)` returns `float` and accepts scalar arguments that convert to
 `float`. Positive finite inputs use correctly rounded, round-to-nearest
 ties-to-even results, matching CUDA's default
@@ -203,7 +216,7 @@ Additional user-defined overloads participate alongside the predefined ones;
 definitions repeating a predefined parameter signature are rejected, including
 through aliases or top-level `const`. Local values and type names can hide these
 functions. Kernels and file-scope type aliases named `min`, `max`, `fminf`,
-`fmaxf`, `sqrtf`, or `floorf` remain unsupported.
+`fmaxf`, `fabs`, `fabsf`, `sqrtf`, or `floorf` remain unsupported.
 
 ## Bit reinterpretation
 

@@ -25,7 +25,7 @@ const BITCAST_BUILTINS: [(&str, Scalar, Scalar); 4] = [
     ("__uint_as_float", Scalar::U32, Scalar::F32),
 ];
 
-const UNARY_BUILTINS: [(&str, MathFunction, Scalar, Scalar); 5] = [
+const UNARY_BUILTINS: [(&str, MathFunction, Scalar, Scalar); 7] = [
     (
         "__clz",
         MathFunction::CountLeadingZeros,
@@ -51,6 +51,8 @@ const UNARY_BUILTINS: [(&str, MathFunction, Scalar, Scalar); 5] = [
         Scalar::U32,
     ),
     ("floorf", MathFunction::Floor, Scalar::F32, Scalar::F32),
+    ("fabsf", MathFunction::Abs, Scalar::F32, Scalar::F32),
+    ("fabs", MathFunction::Abs, Scalar::F32, Scalar::F32),
 ];
 
 #[derive(Clone, Copy, PartialEq)]
@@ -152,6 +154,7 @@ enum FunctionCandidate {
         source: Scalar,
         result: Scalar,
     },
+    IntegralFabs(Scalar),
     Sqrt,
     Constructor {
         size: VectorSize,
@@ -661,10 +664,10 @@ impl<'a> Parser<'a> {
         {
             let argument =
                 self.convert_scalar(arguments.into_iter().next().unwrap().into(), source)?;
-            let handle = if function == MathFunction::Floor {
-                self.floorf(argument.handle, span)?
-            } else {
-                self.append(
+            let handle = match function {
+                MathFunction::Floor => self.floorf(argument.handle, span)?,
+                MathFunction::Abs => self.absolute_value(argument.handle, span)?,
+                _ => self.append(
                     Expression::Math {
                         fun: function,
                         arg: argument.handle,
@@ -673,7 +676,7 @@ impl<'a> Parser<'a> {
                         arg3: None,
                     },
                     span,
-                )?
+                )?,
             };
             let mut value = Value {
                 constant: ConstantValue::default(),
@@ -952,6 +955,7 @@ impl<'a> Parser<'a> {
             FunctionCandidate::Builtin(builtin) => builtin.parameters.len(),
             FunctionCandidate::Bitcast { .. }
             | FunctionCandidate::Unary { .. }
+            | FunctionCandidate::IntegralFabs(_)
             | FunctionCandidate::Sqrt => 1,
             FunctionCandidate::Constructor { size, .. } => size as usize,
         }
@@ -964,9 +968,9 @@ impl<'a> Parser<'a> {
             FunctionCandidate::Builtin(builtin) => {
                 return scalar_resolution(builtin.parameters[index])
             }
-            FunctionCandidate::Bitcast { source, .. } | FunctionCandidate::Unary { source, .. } => {
-                return scalar_resolution(source)
-            }
+            FunctionCandidate::Bitcast { source, .. }
+            | FunctionCandidate::Unary { source, .. }
+            | FunctionCandidate::IntegralFabs(source) => return scalar_resolution(source),
             FunctionCandidate::Sqrt => return scalar_resolution(Scalar::F32),
             FunctionCandidate::Constructor { scalar, .. } => return scalar_resolution(scalar),
         };
@@ -1008,17 +1012,21 @@ impl<'a> Parser<'a> {
         arguments: &[Value],
         span: Span,
     ) -> Result<FunctionCandidate, ParseError> {
-        let mut viable_candidates = self.function_candidates(name).filter(|&candidate| {
-            self.candidate_arity(candidate) == arguments.len()
-                && arguments.iter().enumerate().all(|(index, argument)| {
-                    conversion_rank(
-                        &argument.ty,
-                        &self.candidate_type(candidate, index),
-                        &self.module,
-                    )
-                    .is_some()
-                })
-        });
+        let integral_fabs = self.integral_fabs_candidate(name, arguments);
+        let mut viable_candidates =
+            self.function_candidates(name)
+                .chain(integral_fabs)
+                .filter(|&candidate| {
+                    self.candidate_arity(candidate) == arguments.len()
+                        && arguments.iter().enumerate().all(|(index, argument)| {
+                            conversion_rank(
+                                &argument.ty,
+                                &self.candidate_type(candidate, index),
+                                &self.module,
+                            )
+                            .is_some()
+                        })
+                });
         let mut remaining_candidates = viable_candidates.clone();
         let Some(mut best_candidate) = remaining_candidates.next() else {
             return Err(ParseError {
@@ -1051,6 +1059,43 @@ impl<'a> Parser<'a> {
                 message: String::from("recursive device helper calls are unsupported"),
                 span,
             }),
+            FunctionCandidate::IntegralFabs(_) => Err(ParseError {
+                message: String::from("integral fabs requires unsupported double precision"),
+                span,
+            }),
         }
+    }
+
+    fn integral_fabs_candidate(
+        &self,
+        name: &str,
+        arguments: &[Value],
+    ) -> Option<FunctionCandidate> {
+        if name != "fabs"
+            || arguments.len() != 1
+            || !matches!(
+                self.global_declarations.get(name),
+                Some(&GlobalDeclaration::Functions(_))
+            )
+        {
+            return None;
+        }
+        let &TypeInner::Scalar(source) = arguments[0].ty.inner_with(&self.module.types) else {
+            return None;
+        };
+        if ![Scalar::BOOL, Scalar::I32, Scalar::U32].contains(&source) {
+            return None;
+        }
+        // An exact ordinary overload wins its tie with the arithmetic template.
+        let exact_ordinary = self.function_candidates(name).any(|candidate| {
+            matches!(
+                candidate,
+                FunctionCandidate::Defined(_) | FunctionCandidate::Current
+            ) && self.candidate_arity(candidate) == 1
+                && self
+                    .module
+                    .compare_types(&self.candidate_type(candidate, 0), &arguments[0].ty)
+        });
+        (!exact_ordinary).then_some(FunctionCandidate::IntegralFabs(source))
     }
 }

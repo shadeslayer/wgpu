@@ -11,6 +11,7 @@ mod conversions;
 mod declarations;
 mod device_functions;
 mod dual_execution;
+mod fabs;
 mod float_math;
 mod float_separators;
 mod floorf;

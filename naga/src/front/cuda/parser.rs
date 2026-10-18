@@ -1,5 +1,6 @@
 use alloc::{format, string::String, vec::Vec};
 
+mod absolute_value;
 mod barriers;
 mod conditionals;
 mod constant_evaluation;

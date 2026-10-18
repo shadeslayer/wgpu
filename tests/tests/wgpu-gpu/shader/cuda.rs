@@ -15,6 +15,7 @@ mod constant_expressions;
 mod control_flow;
 mod declarations;
 mod dual_execution;
+mod fabs;
 mod float_math;
 mod float_separators;
 mod floorf;
@@ -48,6 +49,7 @@ pub fn all_tests(tests: &mut Vec<GpuTestInitializer>) {
         CUDA_CONTROL_FLOW,
         CUDA_DECLARATIONS,
         CUDA_DUAL_EXECUTION,
+        CUDA_FABS,
         CUDA_FLOAT_MATH,
         CUDA_FLOAT_SEPARATORS,
         CUDA_FLOORF,
@@ -216,6 +218,8 @@ static CUDA_CONTROL_FLOW: GpuTestConfiguration = configuration(control_flow::cas
 static CUDA_DECLARATIONS: GpuTestConfiguration = configuration(declarations::cases);
 #[apply(gpu_test!)]
 static CUDA_DUAL_EXECUTION: GpuTestConfiguration = configuration(dual_execution::cases);
+#[apply(gpu_test!)]
+static CUDA_FABS: GpuTestConfiguration = configuration(fabs::cases);
 #[apply(gpu_test!)]
 static CUDA_FLOAT_MATH: GpuTestConfiguration = configuration(float_math::cases);
 #[apply(gpu_test!)]

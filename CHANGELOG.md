@@ -178,6 +178,7 @@ By @sagudev in [#10307](https://github.com/gfx-rs/wgpu/pull/10307).
 - Infer CUDA local array bounds from nonempty initializer lists.
 - Support CUDA scalar `sqrtf` with correctly rounded results using integer arithmetic.
 - Support CUDA scalar `floorf`, including negative subnormals and large integral values.
+- Support CUDA `fabsf` and the `fabs(float)` overload, preserving scalar conversions and overload selection.
 - Add `@builtin(hit_barycentrics)`, a `vec2<f32>` readable in `@any_hit` and `@closest_hit` ray tracing pipeline shaders, holding two of the barycentric coordinates of the hit point on the triangle (the third is `1.0 - x - y`). Currently only supported with the SPIR-V backend. By @JMS55 in [#10193](https://github.com/gfx-rs/wgpu/pull/10193).
 
 #### Hal
