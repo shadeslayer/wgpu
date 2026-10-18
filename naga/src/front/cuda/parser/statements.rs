@@ -201,6 +201,9 @@ impl<'a> Parser<'a> {
             },
             span,
         )?;
+        if !is_const && self.take_symbol(';')? {
+            return Ok(());
+        }
         self.expect_symbol('=')?;
         let value = self.expression(0)?;
         let value = self.convert_value(value, scalar)?;

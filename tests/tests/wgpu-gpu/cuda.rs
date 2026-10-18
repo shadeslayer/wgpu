@@ -21,6 +21,7 @@ pub fn all_tests(tests: &mut Vec<GpuTestInitializer>) {
         CUDA_INLINE_FUNCTIONS,
         CUDA_FLOAT_SEPARATORS,
         CUDA_DUAL_EXECUTION,
+        CUDA_UNINITIALIZED,
     ]);
 }
 
@@ -959,6 +960,63 @@ static CUDA_DUAL_EXECUTION: GpuTestConfiguration = GpuTestConfiguration::new()
                     0,
                     value + 9,
                     value + 2,
+                ]
+            } else {
+                [sentinel; 12]
+            };
+            assert_eq!(row, &expected, "thread {index}");
+        }
+    });
+
+#[apply(gpu_test!)]
+static CUDA_UNINITIALIZED: GpuTestConfiguration = GpuTestConfiguration::new()
+    .parameters(TestParameters::default().test_features_limits())
+    .run_async(|ctx| async move {
+        let length = 70u32;
+        let sentinel = -123456789i32;
+        let input: [i32; 128] = std::array::from_fn(|index| index as i32 % 11 - 5);
+        let buffers = [
+            buffer(
+                &ctx,
+                bytemuck::cast_slice(&[sentinel; 128 * 12]),
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            ),
+            buffer(
+                &ctx,
+                bytemuck::cast_slice(&input),
+                wgpu::BufferUsages::STORAGE,
+            ),
+            buffer(
+                &ctx,
+                bytemuck::cast_slice(&[length, 0, 0, 0]),
+                wgpu::BufferUsages::UNIFORM,
+            ),
+        ];
+        let result = run_kernel(
+            &ctx,
+            include_str!("../../../naga/tests/in/cuda/uninitialized.cu"),
+            &buffers,
+            0,
+            2,
+        )
+        .await;
+        let actual: &[i32] = bytemuck::cast_slice(&result);
+        for (index, row) in actual.as_chunks::<12>().0.iter().enumerate() {
+            let expected = if index < length as usize {
+                let value = input[index];
+                [
+                    if index % 2 == 0 { value + 7 } else { value - 4 },
+                    if index % 3 == 0 { value + 3 } else { value - 2 },
+                    (value as f32 * 1.5 + 2.0) as i32,
+                    i32::from(value < 0),
+                    (value + 5) * 3,
+                    [0, 1, 3, 6, 12][index % 5],
+                    value * 3 + 3,
+                    value * 3 - 3,
+                    value + 3,
+                    value + 10,
+                    value,
+                    value * 2 + 4,
                 ]
             } else {
                 [sentinel; 12]
