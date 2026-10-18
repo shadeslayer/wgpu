@@ -19,6 +19,7 @@ pub mod array_size_overrides;
 pub mod compilation_messages;
 pub mod data_builtins;
 pub mod module_label;
+pub mod module_source;
 pub mod numeric_builtins;
 pub mod struct_layout;
 pub mod workgroup_size_overrides;
@@ -29,6 +30,7 @@ pub fn all_tests(tests: &mut Vec<GpuTestInitializer>) {
     compilation_messages::all_tests(tests);
     data_builtins::all_tests(tests);
     module_label::all_tests(tests);
+    module_source::all_tests(tests);
     numeric_builtins::all_tests(tests);
     struct_layout::all_tests(tests);
     workgroup_size_overrides::all_tests(tests);
@@ -56,6 +58,8 @@ impl InputStorageType {
 struct ShaderTest {
     /// Human readable name
     name: String,
+    module_source: Option<String>,
+    entry_point: String,
     /// Header text. This is arbitrary code injected at the top of the shader. Replaces {{header}}
     header: String,
     /// This text will be the body of the `Input` struct. Replaces "{{input_members}}"
@@ -86,6 +90,7 @@ struct ShaderTest {
     ///
     /// Defaults to u32::MAX.
     output_initialization: u32,
+    output_initial_values: Vec<u32>,
     /// Which backends this test will fail on. If the test passes on this
     /// backend when it shouldn't, an assert will be raised.
     ///
@@ -150,6 +155,8 @@ impl ShaderTest {
     ) -> Self {
         Self {
             name,
+            module_source: None,
+            entry_point: String::from("cs_main"),
             header: String::new(),
             custom_struct_members,
             body,
@@ -159,8 +166,32 @@ impl ShaderTest {
             output_values: vec![bytemuck::pod_collect_to_vec(output_values)],
             output_comparison_fn: Self::default_comparison_function::<O>,
             output_initialization: u32::MAX,
+            output_initial_values: Vec::new(),
             failures: Backends::empty(),
         }
+    }
+
+    fn module_source(mut self, source: String, entry_point: String) -> Self {
+        self.module_source = Some(source);
+        self.entry_point = entry_point;
+
+        self
+    }
+
+    fn output_initial_values<O: bytemuck::Pod>(mut self, values: &[O]) -> Self {
+        self.output_initial_values = bytemuck::pod_collect_to_vec(values);
+
+        self
+    }
+
+    fn buffer_sizes_valid(&self) -> bool {
+        let max_words = MAX_BUFFER_SIZE as usize / 4;
+        self.input_values.len() <= max_words
+            && self
+                .output_values
+                .iter()
+                .all(|values| values.len() <= max_words)
+            && self.output_initial_values.len() <= max_words
     }
 
     fn header(mut self, header: String) -> Self {
@@ -290,8 +321,7 @@ async fn shader_input_output_test(
 
     let mut fail = false;
     for test in tests {
-        assert!(test.input_values.len() <= MAX_BUFFER_SIZE as usize / 4);
-        assert!(test.output_values.len() <= MAX_BUFFER_SIZE as usize / 4);
+        assert!(test.buffer_sizes_valid(), "buffer too large: {}", test.name);
 
         let test_name = test.name;
 
@@ -299,19 +329,23 @@ async fn shader_input_output_test(
 
         // This isn't terribly efficient but the string is short and it's a test.
         // The body and input members are the longest part, so do them last.
-        let mut processed = source
-            .replace("{{header}}", &test.header)
-            .replace("{{storage_type}}", storage_type.as_str())
-            .replace("{{input_type}}", &test.input_type)
-            .replace("{{output_type}}", &test.output_type)
-            .replace("{{input_members}}", &test.custom_struct_members)
-            .replace("{{body}}", &test.body);
-
-        // Add the bindings for all inputs besides immediates.
-        processed = if matches!(storage_type, InputStorageType::Immediate) {
-            processed.replace("{{input_bindings}}", "")
+        let processed = if let Some(module_source) = test.module_source {
+            module_source
         } else {
-            processed.replace("{{input_bindings}}", "@group(0) @binding(0)")
+            let processed = source
+                .replace("{{header}}", &test.header)
+                .replace("{{storage_type}}", storage_type.as_str())
+                .replace("{{input_type}}", &test.input_type)
+                .replace("{{output_type}}", &test.output_type)
+                .replace("{{input_members}}", &test.custom_struct_members)
+                .replace("{{body}}", &test.body);
+
+            // Add the bindings for all inputs besides immediates.
+            if matches!(storage_type, InputStorageType::Immediate) {
+                processed.replace("{{input_bindings}}", "")
+            } else {
+                processed.replace("{{input_bindings}}", "@group(0) @binding(0)")
+            }
         };
 
         let sm = ctx.device.create_shader_module(ShaderModuleDescriptor {
@@ -325,14 +359,17 @@ async fn shader_input_output_test(
                 label: Some(&format!("pipeline {test_name}")),
                 layout: Some(&pll),
                 module: &sm,
-                entry_point: Some("cs_main"),
+                entry_point: Some(&test.entry_point),
                 compilation_options: Default::default(),
                 cache: None,
             });
 
         // -- Initializing data --
 
-        let output_pre_init_data = vec![test.output_initialization; MAX_BUFFER_SIZE as usize / 4];
+        let mut output_pre_init_data =
+            vec![test.output_initialization; MAX_BUFFER_SIZE as usize / 4];
+        output_pre_init_data[..test.output_initial_values.len()]
+            .copy_from_slice(&test.output_initial_values);
         ctx.queue.write_buffer(
             &output_buffer,
             0,
