@@ -8,6 +8,7 @@ use super::{
 };
 
 mod arithmetic;
+mod bitcasts;
 mod comma;
 mod conditionals;
 mod control_flow;
@@ -34,6 +35,7 @@ pub fn all_tests(tests: &mut Vec<GpuTestInitializer>) {
     kernels::all_tests(tests);
     tests.extend([
         CUDA_ARITHMETIC,
+        CUDA_BITCASTS,
         CUDA_COMMA,
         CUDA_CONDITIONALS,
         CUDA_CONTROL_FLOW,
@@ -188,6 +190,8 @@ fn module_case<O: bytemuck::Pod + std::fmt::Debug + PartialEq>(
 
 #[apply(gpu_test!)]
 static CUDA_ARITHMETIC: GpuTestConfiguration = configuration(arithmetic::cases);
+#[apply(gpu_test!)]
+static CUDA_BITCASTS: GpuTestConfiguration = configuration(bitcasts::cases);
 #[apply(gpu_test!)]
 static CUDA_COMMA: GpuTestConfiguration = configuration(comma::cases);
 #[apply(gpu_test!)]

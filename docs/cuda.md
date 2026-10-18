@@ -184,6 +184,35 @@ through aliases or top-level `const`. Local values and type names can hide these
 functions. Kernels and file-scope type aliases named `min`, `max`, `fminf`, or
 `fmaxf` remain unsupported.
 
+## Bit reinterpretation
+
+These predefined functions reinterpret a 32-bit scalar's representation:
+
+| Function | Parameter | Result |
+| --- | --- | --- |
+| `__float_as_int` | `float` | `int` |
+| `__float_as_uint` | `float` | `unsigned int` |
+| `__int_as_float` | `int` | `float` |
+| `__uint_as_float` | `unsigned int` | `float` |
+
+Each call first converts its argument to the parameter type, then reinterprets
+the bits as the result type. For example, `__float_as_uint(1u)` returns
+`0x3f800000u`, the representation of `1.0f`. Ordinary casts still perform numeric
+conversions. These signatures follow NVIDIA's
+[type casting intrinsics](https://docs.nvidia.com/cuda/archive/13.0.0/cuda-math-api/cuda_math_api/group__CUDA__MATH__INTRINSIC__CAST.html).
+
+Calls use the same argument evaluation, overload selection, and name hiding
+rules as other predefined functions. Additional user-defined overloads are
+accepted; definitions repeating a predefined parameter signature are rejected,
+including through aliases or top-level `const`. Kernels and file-scope aliases
+cannot use these function names. Other bit reinterpretation intrinsics remain
+unsupported.
+
+Floating-point results execute at runtime, including calls with literal bit
+patterns for infinity and NaN. Target floating-point rules still apply:
+WGSL permits [changes to zero signs, subnormal flushing, and finite-math assumptions](https://gpuweb.github.io/gpuweb/wgsl/#floating-point-evaluation),
+so exceptional bit patterns are not guaranteed to survive every target.
+
 ## Source subset
 
 Aliases support `typedef` and `using` for `bool`, `int`, `unsigned int`,

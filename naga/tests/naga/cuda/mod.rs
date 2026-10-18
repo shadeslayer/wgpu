@@ -2,6 +2,7 @@
 
 mod adversarial;
 mod barriers;
+mod bitcasts;
 mod comma;
 mod conditionals;
 mod control_flow;
