@@ -239,7 +239,7 @@ Metal output for `__brev` requires MSL version 1.2 or newer.
 ## Constant expressions
 
 Scalar `constexpr` variables support `bool`, `int`, `unsigned int`, `float`,
-and their aliases with an `= expression` initializer. They are read-only and
+and their aliases with an `= expression` or braced initializer. They are read-only and
 can appear in blocks, `for` initializers, and at file scope before, between,
 or after functions. File-scope variables require `constexpr`; they become Naga
 constants without consuming buffer bindings.
@@ -269,8 +269,7 @@ Reading parameters or buffers, modifying variables, and
 calling the supported functions cannot supply constant values. Compute
 builtins, including `blockDim`, are not C++ constant expressions.
 
-`constexpr` arrays, vectors, functions, and braced initializers remain
-unsupported.
+`constexpr` arrays, vectors, and functions remain unsupported.
 
 ## Source subset
 
@@ -304,10 +303,9 @@ in the same overload resolution as other helpers.
 These types follow CUDA's [built-in vector definitions](https://docs.nvidia.com/cuda/archive/13.0.0/cuda-c-programming-guide/index.html#built-in-vector-types).
 In particular, three-component arrays have a 12-byte element stride and
 4-byte alignment. Vector arithmetic, comparisons, truthiness, indexing, and
-swizzles are unsupported; use individual fields. Vector casts, nonempty
-aggregate initialization, and parenthesized aggregate initialization remain
-unsupported. By-value kernel parameters require the scalar types described in
-the kernel interface.
+swizzles are unsupported; use individual fields. Vector casts and parenthesized
+aggregate initialization remain unsupported. By-value kernel parameters require
+the scalar types described in the kernel interface.
 
 Empty local vector initialization, such as `float3 value{};` or
 `const float4 value = {};`, zeroes every field each time execution reaches the
@@ -328,12 +326,48 @@ Arrays and other locals can share a declaration, as in `int values[3], next = 1;
 
 An empty initializer, `int values[3]{};` or `int values[3] = {};`, zeroes every
 element each time execution reaches the declaration, including inside loops.
-Const arrays require an empty initializer and their elements cannot be modified.
+Const arrays require an initializer and their elements cannot be modified.
 Bare mutable arrays must be assigned before reading. These rules follow C++
 [array declarations](https://eel.is/c++draft/dcl.array) and
 [aggregate initialization](https://eel.is/c++draft/dcl.init.aggr).
-Nonempty initializer lists and inferred bounds,
-multidimensional local arrays, and array-to-pointer conversions remain unsupported.
+Inferred bounds, multidimensional local arrays, and array-to-pointer conversions
+remain unsupported.
+
+Local scalars, vectors, and fixed arrays accept direct-list and copy-list
+initialization, including partial lists and a trailing comma:
+
+```cuda
+int count{3};
+float3 point = {1.0f, 2.0f};
+int values[3]{1, values[0] + 1};
+int2 pairs[2]{1, 2, 3};
+```
+
+Omitted elements become zero when their turn to initialize is reached.
+Each element finishes initialization before the next clause is evaluated, so
+the example initializes `values` to `1, 2, 0` and `pairs` to `(1, 2), (3, 0)`.
+Arrays of vectors accept nested lists, brace elision, and whole-value copies
+from matching vector types. A vector list containing one matching vector
+expression copies it, as in `int3 copied{original};`.
+
+List initialization follows C++20
+[narrowing rules](https://timsong-cpp.github.io/cppwp/n4861/dcl.init.list#7).
+Float-to-integer conversions are rejected, including conversions to `bool`.
+Integer conversions that cannot represent every source value require a constant
+expression whose value fits the destination. Integer-to-float conversions require
+a constant expression whose value is represented exactly, including when the
+source type is `bool`. Explicit casts can perform an ordinary conversion first.
+For example, `float value{runtime_integer};` is rejected, while
+`float value{float(runtime_integer)};` is accepted.
+
+Scalar lists contain at most one expression; extra scalar brace nesting is
+rejected, following the
+[nested-brace clarification](https://cplusplus.github.io/CWG/issues/cwg_closed.html#1501).
+Thus `int values[2]{{1}, {}};` is valid and `int value{{1}};` is not.
+List initialization is currently limited to declarations of these existing
+types. Designated initializers, braced temporaries, assignments, returns, and
+helper arguments remain unsupported. Shared-storage initializers also remain
+unsupported.
 
 Supported expressions include indexed buffer reads, scalar locals,
 parentheses, arithmetic and comparisons with scalar conversions, and the logical operators
@@ -388,7 +422,8 @@ such as `2.0f`. Apostrophes may separate decimal digits in the significand and
 exponent, as in `1'024.5f` or `1.25e+0'2f`. Hexadecimal floats remain unsupported.
 Arithmetic promotes booleans to `int`; a `float` operand makes the common
 type `float`, and mixed signed/unsigned integer operands use `unsigned int`.
-Scalar assignments and initializers convert to the destination type. C-style casts,
+Scalar assignments and ordinary `= expression` initializers convert to the
+destination type; brace initializers use the narrowing rules above. C-style casts,
 `static_cast`, and single-token functional casts such as `int(value)` are
 supported for these scalar types. Float-to-integer conversions truncate toward
 zero within the destination range; unsigned negation wraps modulo 2^32.

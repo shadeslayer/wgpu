@@ -183,7 +183,7 @@ fn cuda_local_declarators_keep_other_declarator_forms_unsupported() {
         ("int first = 1, second[];", "]", 0),
         ("int first = 1, (second);", "(", 0),
         ("int first = 1, second(2);", "(", 0),
-        ("int first = 1, second{};", "{", 0),
+        ("int first = 1, second{,};", ",", 1),
         ("int first = 1, float second = 2;", "float", 0),
         ("int first = 1, const second = 2;", "const", 0),
         ("__shared__ int first, second;", ",", 0),

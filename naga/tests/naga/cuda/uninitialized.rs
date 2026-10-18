@@ -160,8 +160,8 @@ fn cuda_bare_declarations_do_not_enable_other_declarators_or_malformed_syntax() 
         ("int value[];", "]"),
         ("int(value);", "("),
         ("int value(2);", "("),
-        ("int value{};", "{"),
-        ("int value = {};", "{"),
+        ("int value{,};", ","),
+        ("int value = {,};", ","),
     ] {
         let prefix = "/* café 漢 */ __global__ void kernel() { ";
         let source = format!("{prefix}{statement} }}");

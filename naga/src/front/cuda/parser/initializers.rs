@@ -1,0 +1,360 @@
+use super::*;
+
+use core::num::NonZeroU32;
+
+impl Parser<'_> {
+    pub(super) fn starts_list_initializer(&self) -> Result<bool, ParseError> {
+        let mut lookahead = self.lexer.clone();
+        lookahead.next_if(TokenKind::Symbol('='))?;
+        Ok(lookahead.peek()?.kind == TokenKind::Symbol('{'))
+    }
+
+    pub(super) fn value_initializer(
+        &mut self,
+        target: &TypeResolution,
+    ) -> Result<Value, ParseError> {
+        let has_equals = self.take_symbol('=')?;
+        if self.lexer.peek()?.kind == TokenKind::Symbol('{') {
+            let span = self.lexer.peek()?.span;
+            let scalar = self.require_scalar_type(target, span)?;
+            return self.scalar_list_initializer(scalar);
+        }
+        if !has_equals {
+            self.expect_symbol('=')?;
+        }
+        let value = self.expression(0)?;
+        self.convert_value(value, target)
+    }
+
+    pub(super) fn aggregate_initializer(
+        &mut self,
+        pointer: Handle<Expression>,
+        specifier: TypeSpecifier,
+        actual_ty: Handle<Type>,
+        array_count: Option<NonZeroU32>,
+    ) -> Result<(), ParseError> {
+        self.take_symbol('=')?;
+        let span = self.expect_symbol('{')?;
+        if self.take_symbol('}')? {
+            let value = self.append(Expression::ZeroValue(actual_ty), span)?;
+            self.push_statement(Statement::Store { pointer, value }, span);
+            return Ok(());
+        }
+
+        let Some(array_count) = array_count else {
+            return self.vector_list_initializer(pointer, specifier, actual_ty, true, span);
+        };
+        let element_ty = match self.module.types[actual_ty].inner {
+            TypeInner::Array { base, .. } => base,
+            _ => return self.fail("expected an array initializer"),
+        };
+        let mut initialized_count = 0;
+        loop {
+            if initialized_count == array_count.get() {
+                return self.fail("too many array initializer clauses");
+            }
+            let element = self.append(
+                Expression::AccessIndex {
+                    base: pointer,
+                    index: initialized_count,
+                },
+                span,
+            )?;
+            match specifier {
+                TypeSpecifier::Scalar(scalar) => {
+                    let value = self.scalar_initializer_clause(scalar)?;
+                    self.push_statement(
+                        Statement::Store {
+                            pointer: element,
+                            value: value.handle,
+                        },
+                        value.span,
+                    );
+                }
+                TypeSpecifier::Vector { .. } => {
+                    let opening = self.lexer.peek()?.span;
+                    let has_braces = self.take_symbol('{')?;
+                    self.vector_list_initializer(
+                        element, specifier, element_ty, has_braces, opening,
+                    )?;
+                }
+            }
+            initialized_count += 1;
+            if !self.take_symbol(',')? || self.lexer.peek()?.kind == TokenKind::Symbol('}') {
+                break;
+            }
+        }
+        let end = self.expect_symbol('}')?;
+        if initialized_count < array_count.get() {
+            self.zero_array_tail(
+                pointer,
+                element_ty,
+                initialized_count,
+                array_count,
+                span.until(&end),
+            )?;
+        }
+        Ok(())
+    }
+
+    fn scalar_initializer_clause(&mut self, scalar: Scalar) -> Result<Value, ParseError> {
+        if self.lexer.peek()?.kind == TokenKind::Symbol('{') {
+            self.scalar_list_initializer(scalar)
+        } else {
+            let expression = self.expression(0)?;
+            let value = self.rvalue(expression)?;
+            self.list_convert_scalar(value, scalar)
+        }
+    }
+
+    fn scalar_list_initializer(&mut self, scalar: Scalar) -> Result<Value, ParseError> {
+        let start = self.expect_symbol('{')?;
+        let mut value = if self.lexer.peek()?.kind == TokenKind::Symbol('}') {
+            let literal = match scalar {
+                Scalar::BOOL => Literal::Bool(false),
+                Scalar::I32 => Literal::I32(0),
+                Scalar::U32 => Literal::U32(0),
+                Scalar::F32 => Literal::F32(0.0),
+                _ => return self.fail("unsupported scalar list initializer"),
+            };
+            Value {
+                handle: self.append(Expression::Literal(literal), start)?,
+                ty: scalar_resolution(scalar),
+                span: start,
+                constant: literal.into(),
+            }
+        } else {
+            if self.lexer.peek()?.kind == TokenKind::Symbol('{') {
+                return self.fail("nested scalar initializer lists are unsupported");
+            }
+            let expression = self.expression(0)?;
+            let value = self.rvalue(expression)?;
+            let value = self.list_convert_scalar(value, scalar)?;
+            self.take_symbol(',')?;
+            value
+        };
+        let end = self.expect_symbol('}')?;
+        value.span = start.until(&end);
+        Ok(value)
+    }
+
+    fn list_convert_scalar(&mut self, value: Value, target: Scalar) -> Result<Value, ParseError> {
+        let source = self.require_scalar_type(&value.ty, value.span)?;
+        let is_representable = source == target
+            || match target {
+                Scalar::I32 => {
+                    source == Scalar::BOOL
+                        || matches!(value.constant.literal, Some(Literal::U32(integer)) if integer <= i32::MAX as u32)
+                }
+                Scalar::U32 => {
+                    source == Scalar::BOOL
+                        || matches!(value.constant.literal, Some(Literal::I32(integer)) if integer >= 0)
+                }
+                Scalar::BOOL => matches!(
+                    value.constant.literal,
+                    Some(Literal::I32(0 | 1) | Literal::U32(0 | 1))
+                ),
+                Scalar::F32 => {
+                    let integer = match value.constant.literal {
+                        Some(Literal::Bool(boolean)) => Some(f64::from(u32::from(boolean))),
+                        Some(Literal::I32(integer)) => Some(f64::from(integer)),
+                        Some(Literal::U32(integer)) => Some(f64::from(integer)),
+                        _ => None,
+                    };
+                    integer.is_some_and(|integer| f64::from(integer as f32) == integer)
+                }
+                _ => false,
+            };
+        if !is_representable {
+            return Err(ParseError {
+                message: String::from("narrowing conversion in initializer list"),
+                span: value.span,
+            });
+        }
+        self.convert_scalar(value.into(), target)
+    }
+
+    fn vector_list_initializer(
+        &mut self,
+        pointer: Handle<Expression>,
+        specifier: TypeSpecifier,
+        actual_ty: Handle<Type>,
+        has_braces: bool,
+        span: Span,
+    ) -> Result<(), ParseError> {
+        let TypeSpecifier::Vector { size, scalar } = specifier else {
+            return self.fail("expected a vector initializer");
+        };
+        if has_braces && self.take_symbol('}')? {
+            let value = self.append(Expression::ZeroValue(actual_ty), span)?;
+            self.push_statement(Statement::Store { pointer, value }, span);
+            return Ok(());
+        }
+
+        let mut pending_value = if self.lexer.peek()?.kind == TokenKind::Symbol('{') {
+            None
+        } else {
+            let expression = self.expression(0)?;
+            let value = self.rvalue(expression)?;
+            if self
+                .module
+                .compare_types(&value.ty, &TypeResolution::Handle(actual_ty))
+            {
+                self.push_statement(
+                    Statement::Store {
+                        pointer,
+                        value: value.handle,
+                    },
+                    value.span,
+                );
+                if has_braces {
+                    self.take_symbol(',')?;
+                    self.expect_symbol('}')?;
+                }
+                return Ok(());
+            }
+            Some(value)
+        };
+
+        let mut initialized_count = 0;
+        loop {
+            let value = match pending_value.take() {
+                Some(value) => self.list_convert_scalar(value, scalar)?,
+                None => self.scalar_initializer_clause(scalar)?,
+            };
+            let field = self.append(
+                Expression::AccessIndex {
+                    base: pointer,
+                    index: initialized_count,
+                },
+                span,
+            )?;
+            self.push_statement(
+                Statement::Store {
+                    pointer: field,
+                    value: value.handle,
+                },
+                value.span,
+            );
+            initialized_count += 1;
+            if initialized_count == size as u32 {
+                break;
+            }
+            if !self.take_symbol(',')? || self.lexer.peek()?.kind == TokenKind::Symbol('}') {
+                break;
+            }
+        }
+
+        if has_braces {
+            if initialized_count == size as u32 {
+                self.take_symbol(',')?;
+            }
+            self.expect_symbol('}')?;
+        }
+        let scalar_ty = self.scalar_handle(scalar, span);
+        for index in initialized_count..size as u32 {
+            let field = self.append(
+                Expression::AccessIndex {
+                    base: pointer,
+                    index,
+                },
+                span,
+            )?;
+            let value = self.append(Expression::ZeroValue(scalar_ty), span)?;
+            self.push_statement(
+                Statement::Store {
+                    pointer: field,
+                    value,
+                },
+                span,
+            );
+        }
+        Ok(())
+    }
+
+    fn zero_array_tail(
+        &mut self,
+        pointer: Handle<Expression>,
+        element_ty: Handle<Type>,
+        initialized_count: u32,
+        array_count: NonZeroU32,
+        span: Span,
+    ) -> Result<(), ParseError> {
+        let counter = self.temporary_pointer(&scalar_resolution(Scalar::U32), span)?;
+        let initial = self.append(Expression::Literal(Literal::U32(initialized_count)), span)?;
+        self.push_statement(
+            Statement::Store {
+                pointer: counter,
+                value: initial,
+            },
+            span,
+        );
+        let limit = self.append(Expression::Literal(Literal::U32(array_count.get())), span)?;
+        let ((), body) = self.capture_block(|parser| {
+            let index = parser.append(Expression::Load { pointer: counter }, span)?;
+            let condition = parser.append(
+                Expression::Binary {
+                    op: BinaryOperator::GreaterEqual,
+                    left: index,
+                    right: limit,
+                },
+                span,
+            )?;
+            let mut accept = crate::Block::new();
+            accept.push(Statement::Break, span);
+            parser.push_statement(
+                Statement::If {
+                    condition,
+                    accept,
+                    reject: crate::Block::new(),
+                },
+                span,
+            );
+            let element = parser.append(
+                Expression::Access {
+                    base: pointer,
+                    index,
+                },
+                span,
+            )?;
+            let value = parser.append(Expression::ZeroValue(element_ty), span)?;
+            parser.push_statement(
+                Statement::Store {
+                    pointer: element,
+                    value,
+                },
+                span,
+            );
+            Ok(())
+        })?;
+        let ((), continuing) = self.capture_block(|parser| {
+            let index = parser.append(Expression::Load { pointer: counter }, span)?;
+            let one = parser.append(Expression::Literal(Literal::U32(1)), span)?;
+            let value = parser.append(
+                Expression::Binary {
+                    op: BinaryOperator::Add,
+                    left: index,
+                    right: one,
+                },
+                span,
+            )?;
+            parser.push_statement(
+                Statement::Store {
+                    pointer: counter,
+                    value,
+                },
+                span,
+            );
+            Ok(())
+        })?;
+        self.push_statement(
+            Statement::Loop {
+                body,
+                continuing,
+                break_if: None,
+            },
+            span,
+        );
+        Ok(())
+    }
+}

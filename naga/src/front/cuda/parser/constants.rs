@@ -70,11 +70,7 @@ impl<'a> Parser<'a> {
         &mut self,
         ty: &TypeResolution,
     ) -> Result<Literal, ParseError> {
-        self.expect_symbol('=')?;
-        let (value, _) = self.capture_block(|parser| {
-            let value = parser.expression(0)?;
-            parser.convert_value(value, ty)
-        })?;
+        let (value, _) = self.capture_block(|parser| parser.value_initializer(ty))?;
         Self::required_constant(&value)
     }
 

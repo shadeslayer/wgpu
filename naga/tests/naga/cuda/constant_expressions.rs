@@ -522,8 +522,8 @@ fn cuda_constant_expressions_reject_unsupported_constexpr_declarations_and_missi
         "constexpr int values[2] = {};",
         "constexpr float3 value = make_float3(1, 2, 3);",
         "constexpr int *pointer = 0;",
-        "constexpr int value{2};",
-        "constexpr int value = {2};",
+        "constexpr int value{2, 3};",
+        "constexpr int value = {2, 3};",
         "constexpr constexpr int value = 2;",
     ] {
         rejected(&format!("__global__ void kernel() {{ {declaration} }}"));

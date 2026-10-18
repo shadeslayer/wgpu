@@ -196,15 +196,18 @@ impl<'a> Parser<'a> {
             if is_constexpr && is_array {
                 return self.fail("constexpr arrays are unsupported");
             }
-            let ty = if is_array {
+            let (ty, array_count) = if is_array {
                 let (size, extent_span) = self.array_size()?;
                 self.expect_symbol(']')?;
                 if self.lexer.peek()?.kind == TokenKind::Symbol('[') {
                     return self.fail("multidimensional local arrays are unsupported");
                 }
-                self.array_type(base, ArraySize::Constant(size), extent_span, span)?
+                (
+                    self.array_type(base, ArraySize::Constant(size), extent_span, span)?,
+                    Some(size),
+                )
             } else {
-                base
+                (base, None)
             };
             let local = self.function.ir.local_variables.append(
                 LocalVariable {
@@ -229,57 +232,51 @@ impl<'a> Parser<'a> {
                 }
             };
             self.insert_symbol(name, symbol, span)?;
-            let value = if is_constexpr {
+            let initializer = if is_constexpr {
                 let literal = self.constant_initializer(&declared_ty)?;
                 self.function.constant_locals.insert(local, literal);
                 Some(self.append(Expression::Literal(literal), span)?)
-            } else if is_array && matches!(self.lexer.peek()?.kind, TokenKind::Symbol('{' | '=')) {
-                self.take_symbol('=')?;
-                self.expect_symbol('{')?;
-                let end = self.expect_symbol('}')?;
-                Some(self.append(Expression::ZeroValue(ty), span.until(&end))?)
             } else if !is_const && matches!(self.lexer.peek()?.kind, TokenKind::Symbol(',' | ';')) {
                 None
-            } else {
-                let direct_empty = matches!(specifier, TypeSpecifier::Vector { .. })
-                    && self.lexer.peek()?.kind == TokenKind::Symbol('{');
-                if !direct_empty {
-                    self.expect_symbol('=')?;
-                }
-                if matches!(specifier, TypeSpecifier::Vector { .. }) && self.take_symbol('{')? {
-                    let end = self.expect_symbol('}')?;
-                    Some(self.append(Expression::ZeroValue(ty), span.until(&end))?)
-                } else if is_const
-                    && matches!(
-                        specifier,
-                        TypeSpecifier::Scalar(Scalar::BOOL | Scalar::I32 | Scalar::U32)
-                    )
-                {
-                    let (value, body) = self.capture_block(|parser| {
-                        let value = parser.expression(0)?;
-                        parser.convert_value(value, &declared_ty)
-                    })?;
-                    if let Some(literal) = value.constant.literal {
-                        self.function.constant_locals.insert(local, literal);
-                        Some(self.append(Expression::Literal(literal), value.span)?)
-                    } else {
-                        self.append_block(body);
-                        Some(value.handle)
-                    }
+            } else if is_array
+                || (matches!(specifier, TypeSpecifier::Vector { .. })
+                    && self.starts_list_initializer()?)
+            {
+                self.aggregate_initializer(pointer, specifier, ty, array_count)?;
+                None
+            } else if is_const
+                && matches!(
+                    specifier,
+                    TypeSpecifier::Scalar(Scalar::BOOL | Scalar::I32 | Scalar::U32)
+                )
+            {
+                let (value, body) =
+                    self.capture_block(|parser| parser.value_initializer(&declared_ty))?;
+                if let Some(literal) = value.constant.literal {
+                    self.function.constant_locals.insert(local, literal);
+                    Some(self.append(Expression::Literal(literal), value.span)?)
                 } else {
-                    let value = self.expression(0)?;
-                    Some(self.convert_value(value, &declared_ty)?.handle)
+                    self.append_block(body);
+                    Some(value.handle)
                 }
+            } else {
+                Some(self.value_initializer(&declared_ty)?.handle)
             };
             let end = self.lexer.peek()?.span;
-            let has_next = self.take_symbol(',')?;
-            if !has_next {
+            let has_next_declarator = self.take_symbol(',')?;
+            if !has_next_declarator {
                 self.expect_symbol(';')?;
             }
-            if let Some(value) = value {
-                self.push_statement(Statement::Store { pointer, value }, span.until(&end));
+            if let Some(initializer) = initializer {
+                self.push_statement(
+                    Statement::Store {
+                        pointer,
+                        value: initializer,
+                    },
+                    span.until(&end),
+                );
             }
-            if !has_next {
+            if !has_next_declarator {
                 return Ok(());
             }
         }

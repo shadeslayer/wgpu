@@ -9,6 +9,7 @@ mod conversions;
 mod declarations;
 mod expressions;
 mod functions;
+mod initializers;
 mod loops;
 mod references;
 mod statements;
