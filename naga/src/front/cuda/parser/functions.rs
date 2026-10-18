@@ -25,6 +25,33 @@ const BITCAST_BUILTINS: [(&str, Scalar, Scalar); 4] = [
     ("__uint_as_float", Scalar::U32, Scalar::F32),
 ];
 
+const INTEGER_BUILTINS: [(&str, MathFunction, Scalar, Scalar); 4] = [
+    (
+        "__clz",
+        MathFunction::CountLeadingZeros,
+        Scalar::I32,
+        Scalar::I32,
+    ),
+    (
+        "__ffs",
+        MathFunction::FirstTrailingBit,
+        Scalar::I32,
+        Scalar::I32,
+    ),
+    (
+        "__popc",
+        MathFunction::CountOneBits,
+        Scalar::U32,
+        Scalar::I32,
+    ),
+    (
+        "__brev",
+        MathFunction::ReverseBits,
+        Scalar::U32,
+        Scalar::U32,
+    ),
+];
+
 #[derive(Clone, Copy, PartialEq)]
 struct MathBuiltin {
     function: MathFunction,
@@ -69,6 +96,11 @@ pub(super) fn builtin_declarations<'a>() -> FastHashMap<&'a str, GlobalDeclarati
                 .map(|(name, _, _)| (name, GlobalDeclaration::Functions(Vec::new()))),
         )
         .chain(
+            INTEGER_BUILTINS
+                .into_iter()
+                .map(|(name, _, _, _)| (name, GlobalDeclaration::Functions(Vec::new()))),
+        )
+        .chain(
             VECTOR_TYPES
                 .into_iter()
                 .flat_map(|(name, constructor, size, scalar)| {
@@ -106,8 +138,19 @@ enum FunctionCandidate {
     Defined(Handle<Function>),
     Current,
     Builtin(MathBuiltin),
-    Bitcast { source: Scalar, result: Scalar },
-    Constructor { size: VectorSize, scalar: Scalar },
+    Bitcast {
+        source: Scalar,
+        result: Scalar,
+    },
+    Unary {
+        function: MathFunction,
+        source: Scalar,
+        result: Scalar,
+    },
+    Constructor {
+        size: VectorSize,
+        scalar: Scalar,
+    },
 }
 
 fn conversion_rank(
@@ -391,6 +434,7 @@ impl<'a> Parser<'a> {
                     candidate,
                     FunctionCandidate::Builtin(_)
                         | FunctionCandidate::Bitcast { .. }
+                        | FunctionCandidate::Unary { .. }
                         | FunctionCandidate::Constructor { .. }
                 )
             })
@@ -550,6 +594,44 @@ impl<'a> Parser<'a> {
                 span,
             }
             .into());
+        }
+        if let FunctionCandidate::Unary {
+            function,
+            source,
+            result,
+        } = candidate
+        {
+            let argument =
+                self.convert_scalar(arguments.into_iter().next().unwrap().into(), source)?;
+            let span = span.until(&end);
+            let handle = self.append(
+                Expression::Math {
+                    fun: function,
+                    arg: argument.handle,
+                    arg1: None,
+                    arg2: None,
+                    arg3: None,
+                },
+                span,
+            )?;
+            let mut value = Value {
+                handle,
+                ty: scalar_resolution(source),
+                span,
+            };
+            if function == MathFunction::FirstTrailingBit {
+                // CUDA numbers set bits from one and returns zero for no set bits.
+                let one = self.append(Expression::Literal(Literal::I32(1)), span)?;
+                value.handle = self.append(
+                    Expression::Binary {
+                        op: BinaryOperator::Add,
+                        left: value.handle,
+                        right: one,
+                    },
+                    span,
+                )?;
+            }
+            return Ok(self.convert_scalar(value.into(), result)?.into());
         }
         if let FunctionCandidate::Builtin(builtin) = candidate {
             let mut arguments = arguments.into_iter();
@@ -779,6 +861,17 @@ impl<'a> Parser<'a> {
                     .map(|(_, source, result)| FunctionCandidate::Bitcast { source, result }),
             )
             .chain(
+                INTEGER_BUILTINS
+                    .into_iter()
+                    .find(|&(candidate, _, _, _)| candidate == name)
+                    .filter(move |_| builtin_visible)
+                    .map(|(_, function, source, result)| FunctionCandidate::Unary {
+                        function,
+                        source,
+                        result,
+                    }),
+            )
+            .chain(
                 vector_constructor(name)
                     .filter(move |_| builtin_visible)
                     .map(|(size, scalar)| FunctionCandidate::Constructor { size, scalar }),
@@ -790,7 +883,7 @@ impl<'a> Parser<'a> {
             FunctionCandidate::Defined(handle) => self.module.functions[handle].arguments.len(),
             FunctionCandidate::Current => self.function.ir.arguments.len(),
             FunctionCandidate::Builtin(builtin) => builtin.parameters.len(),
-            FunctionCandidate::Bitcast { .. } => 1,
+            FunctionCandidate::Bitcast { .. } | FunctionCandidate::Unary { .. } => 1,
             FunctionCandidate::Constructor { size, .. } => size as usize,
         }
     }
@@ -802,7 +895,9 @@ impl<'a> Parser<'a> {
             FunctionCandidate::Builtin(builtin) => {
                 return scalar_resolution(builtin.parameters[index])
             }
-            FunctionCandidate::Bitcast { source, .. } => return scalar_resolution(source),
+            FunctionCandidate::Bitcast { source, .. } | FunctionCandidate::Unary { source, .. } => {
+                return scalar_resolution(source)
+            }
             FunctionCandidate::Constructor { scalar, .. } => return scalar_resolution(scalar),
         };
         TypeResolution::Handle(argument.ty)
@@ -879,6 +974,7 @@ impl<'a> Parser<'a> {
             FunctionCandidate::Defined(_)
             | FunctionCandidate::Builtin(_)
             | FunctionCandidate::Bitcast { .. }
+            | FunctionCandidate::Unary { .. }
             | FunctionCandidate::Constructor { .. } => Ok(best_candidate),
             FunctionCandidate::Current => Err(ParseError {
                 message: String::from("recursive device helper calls are unsupported"),

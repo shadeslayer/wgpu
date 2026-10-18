@@ -17,6 +17,7 @@ mod dual_execution;
 mod float_math;
 mod float_separators;
 mod inline;
+mod integer_intrinsics;
 mod integer_math;
 mod kernels;
 mod literals;
@@ -44,6 +45,7 @@ pub fn all_tests(tests: &mut Vec<GpuTestInitializer>) {
         CUDA_FLOAT_MATH,
         CUDA_FLOAT_SEPARATORS,
         CUDA_INLINE,
+        CUDA_INTEGER_INTRINSICS,
         CUDA_INTEGER_MATH,
         CUDA_LITERALS,
         CUDA_LOCAL_ARRAYS,
@@ -208,6 +210,8 @@ static CUDA_FLOAT_MATH: GpuTestConfiguration = configuration(float_math::cases);
 static CUDA_FLOAT_SEPARATORS: GpuTestConfiguration = configuration(float_separators::cases);
 #[apply(gpu_test!)]
 static CUDA_INLINE: GpuTestConfiguration = configuration(inline::cases);
+#[apply(gpu_test!)]
+static CUDA_INTEGER_INTRINSICS: GpuTestConfiguration = configuration(integer_intrinsics::cases);
 #[apply(gpu_test!)]
 static CUDA_INTEGER_MATH: GpuTestConfiguration = configuration(integer_math::cases);
 #[apply(gpu_test!)]

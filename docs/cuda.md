@@ -213,6 +213,29 @@ patterns for infinity and NaN. Target floating-point rules still apply:
 WGSL permits [changes to zero signs, subnormal flushing, and finite-math assumptions](https://gpuweb.github.io/gpuweb/wgsl/#floating-point-evaluation),
 so exceptional bit patterns are not guaranteed to survive every target.
 
+## Integer intrinsics
+
+These predefined functions operate on 32-bit integer representations:
+
+| Function | Parameter | Result | Operation |
+| --- | --- | --- | --- |
+| `__clz` | `int` | `int` | Count leading zero bits; zero returns 32. |
+| `__ffs` | `int` | `int` | Return the first set bit's position, starting at 1; zero returns 0. |
+| `__popc` | `unsigned int` | `int` | Count set bits. |
+| `__brev` | `unsigned int` | `unsigned int` | Reverse all 32 bits. |
+
+Negative `int` arguments use their two's-complement representation. For example,
+`__clz(-1)` is 0, `__ffs(-2)` is 2, and `__brev(1u)` is `0x80000000u`.
+Arguments convert to the declared parameter type before the operation, so
+`__popc(3.75f)` is 2. The signed result of `__popc` is preserved: `__popc(3u) - 3`
+is -1. These signatures and results follow NVIDIA's
+[integer intrinsics](https://docs.nvidia.com/cuda/archive/13.0.0/cuda-math-api/cuda_math_api/group__CUDA__MATH__INTRINSIC__INT.html).
+
+These names use the same argument evaluation, overload selection, name hiding,
+and predefined-signature restrictions as the bit reinterpretation functions
+above. The 64-bit `ll` variants and other integer intrinsics remain unsupported.
+Metal output for `__brev` requires MSL version 1.2 or newer.
+
 ## Source subset
 
 Aliases support `typedef` and `using` for `bool`, `int`, `unsigned int`,

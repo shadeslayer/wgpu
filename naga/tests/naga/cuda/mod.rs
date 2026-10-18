@@ -14,6 +14,7 @@ mod float_math;
 mod float_separators;
 mod helpers;
 mod inline;
+mod integer_intrinsics;
 mod integer_math;
 mod integer_operators;
 mod literals;
