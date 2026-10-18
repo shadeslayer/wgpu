@@ -10,6 +10,7 @@ mod comma;
 mod conditionals;
 mod declarations;
 mod dual_execution;
+mod float_math;
 mod float_separators;
 mod inline;
 mod integer_math;
@@ -28,6 +29,7 @@ pub fn all_tests(tests: &mut Vec<GpuTestInitializer>) {
         CUDA_CONDITIONALS,
         CUDA_DECLARATIONS,
         CUDA_DUAL_EXECUTION,
+        CUDA_FLOAT_MATH,
         CUDA_FLOAT_SEPARATORS,
         CUDA_INLINE,
         CUDA_INTEGER_MATH,
@@ -52,6 +54,22 @@ fn configuration(cases: fn() -> Vec<ShaderTest>) -> GpuTestConfiguration {
 }
 
 fn case(name: &str, source: &str, initial: &[i32], expected: &[i32]) -> ShaderTest {
+    scalar_case(name, source, initial, expected, naga::Scalar::I32)
+}
+
+fn float_case(name: &str, source: &str, initial: &[u32], expected: &[u32]) -> ShaderTest {
+    let initial: Vec<i32> = initial.iter().map(|&bits| bits as i32).collect();
+    let expected: Vec<i32> = expected.iter().map(|&bits| bits as i32).collect();
+    scalar_case(name, source, &initial, &expected, naga::Scalar::F32)
+}
+
+fn scalar_case(
+    name: &str,
+    source: &str,
+    initial: &[i32],
+    expected: &[i32],
+    scalar: naga::Scalar,
+) -> ShaderTest {
     assert_eq!(initial.len(), expected.len(), "{name}");
     let mut full_expected = vec![-1_i32; MAX_BUFFER_SIZE as usize / 4];
     assert!(expected.len() <= full_expected.len(), "{name}");
@@ -100,7 +118,7 @@ fn case(name: &str, source: &str, initial: &[i32], expected: &[i32]) -> ShaderTe
     };
     assert_eq!(
         module.types[base].inner,
-        naga::TypeInner::Scalar(naga::Scalar::I32),
+        naga::TypeInner::Scalar(scalar),
         "{name}"
     );
     output.binding.as_mut().unwrap().binding = 1;
@@ -140,6 +158,8 @@ static CUDA_CONDITIONALS: GpuTestConfiguration = configuration(conditionals::cas
 static CUDA_DECLARATIONS: GpuTestConfiguration = configuration(declarations::cases);
 #[apply(gpu_test!)]
 static CUDA_DUAL_EXECUTION: GpuTestConfiguration = configuration(dual_execution::cases);
+#[apply(gpu_test!)]
+static CUDA_FLOAT_MATH: GpuTestConfiguration = configuration(float_math::cases);
 #[apply(gpu_test!)]
 static CUDA_FLOAT_SEPARATORS: GpuTestConfiguration = configuration(float_separators::cases);
 #[apply(gpu_test!)]

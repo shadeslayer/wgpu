@@ -135,7 +135,7 @@ Static variables and the `__inline_hint__` specifier remain unsupported.
 Top-level return `const`, including `const void`, does not change the result type.
 The frontend preserves ordinary function calls; `inline` does not force substitution.
 
-## Integer mathematical functions
+## Mathematical functions
 
 `min` and `max` accept `int` and `unsigned int` operands in either order.
 Boolean arguments promote to `int`. If either operand is unsigned, both values
@@ -143,16 +143,32 @@ convert to `unsigned int` and the result is unsigned; otherwise the result is
 `int`. For example, `min(-1, 2u)` is `2u`, while `max(-1, 2u)` is `0xffffffffu`.
 These rules follow NVIDIA's [integer overloads](https://docs.nvidia.com/cuda/archive/13.0.0/cuda-math-api/cuda_math_api/group__CUDA__MATH__INT.html).
 
-Calls use the same argument sequencing and overload ranking as device helpers.
+The `float, float` overloads of `min` and `max`, and the functions `fminf` and
+`fmaxf`, return `float`. `fminf` and `fmaxf` also accept scalar arguments that
+convert to `float`, including integers and booleans. Mixed floating-point and
+integer calls to `min` or `max` can be ambiguous.
+
+These floating-point functions choose the numeric argument when the other is
+NaN, and return a quiet NaN when both are NaNs. The frontend chooses the
+canonical bits `0x7fc00000` for that result; CUDA does not specify its payload.
+The lowering orders negative zero below positive zero and preserves subnormal
+operand bits, following the default PTX
+[`min`](https://docs.nvidia.com/cuda/parallel-thread-execution/#floating-point-instructions-min)
+and [`max`](https://docs.nvidia.com/cuda/parallel-thread-execution/#floating-point-instructions-max)
+rules. Floating `min` and `max` are equivalent to `fminf` and `fmaxf`, as described
+in NVIDIA's [single-precision functions](https://docs.nvidia.com/cuda/archive/13.0.0/cuda-math-api/cuda_math_api/group__CUDA__MATH__SINGLE.html).
+
+Target floating-point rules still apply. In particular, WGSL permits
+[finite-math assumptions, changes to zero signs, and flushing subnormals](https://gpuweb.github.io/gpuweb/wgsl/#floating-point-evaluation),
+so exceptional values are not guaranteed to retain these bits on every target.
+
+All four names use the same argument sequencing and overload ranking as device
+helpers.
 Additional user-defined overloads participate alongside the predefined ones;
 definitions repeating a predefined parameter signature are rejected, including
 through aliases or top-level `const`. Local values and type names can hide these
-functions. Kernels and file-scope type aliases named `min` or `max` remain
-unsupported.
-
-The predefined `float, float` signature participates in overload selection, but
-selecting it produces an unsupported-feature error. Mixed floating-point and
-integer calls can be ambiguous; an exact user-defined overload can resolve them.
+functions. Kernels and file-scope type aliases named `min`, `max`, `fminf`, or
+`fmaxf` remain unsupported.
 
 ## Source subset
 

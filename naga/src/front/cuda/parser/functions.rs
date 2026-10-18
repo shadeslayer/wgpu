@@ -2,8 +2,12 @@ use super::*;
 
 use crate::MathFunction;
 
-const MATH_BUILTINS: [(&str, MathFunction); 2] =
-    [("min", MathFunction::Min), ("max", MathFunction::Max)];
+const MATH_BUILTINS: [(&str, MathFunction); 4] = [
+    ("min", MathFunction::Min),
+    ("max", MathFunction::Max),
+    ("fminf", MathFunction::Min),
+    ("fmaxf", MathFunction::Max),
+];
 
 const MATH_SIGNATURES: [([Scalar; 2], Scalar); 5] = [
     ([Scalar::I32, Scalar::I32], Scalar::I32),
@@ -24,8 +28,14 @@ fn math_builtins(name: &str) -> impl Iterator<Item = MathBuiltin> + Clone {
     let function = MATH_BUILTINS
         .into_iter()
         .find_map(|(candidate, function)| (candidate == name).then_some(function));
-    MATH_SIGNATURES
-        .into_iter()
+    let signatures = if matches!(name, "fminf" | "fmaxf") {
+        &MATH_SIGNATURES[4..]
+    } else {
+        &MATH_SIGNATURES[..]
+    };
+    signatures
+        .iter()
+        .copied()
         .filter_map(move |(parameters, result)| {
             function.map(|function| MathBuiltin {
                 function,
@@ -427,27 +437,24 @@ impl<'a> Parser<'a> {
         let end = self.expect_symbol(')')?;
         let candidate = self.resolve_overload(name, &arguments, span)?;
         if let FunctionCandidate::Builtin(builtin) = candidate {
-            if builtin.result == Scalar::F32 {
-                return Err(ParseError {
-                    message: String::from("floating-point min/max builtins are unsupported"),
-                    span,
-                });
-            }
             let mut arguments = arguments.into_iter();
-            let left = arguments.next().unwrap();
-            let right = arguments.next().unwrap();
-            let (left, right) = self.usual_arithmetic(left.into(), right.into())?;
+            let left = self.convert_value(arguments.next().unwrap().into(), builtin.result)?;
+            let right = self.convert_value(arguments.next().unwrap().into(), builtin.result)?;
             let span = span.until(&end);
-            let handle = self.append(
-                Expression::Math {
-                    fun: builtin.function,
-                    arg: left.handle,
-                    arg1: Some(right.handle),
-                    arg2: None,
-                    arg3: None,
-                },
-                span,
-            )?;
+            let handle = if builtin.result == Scalar::F32 {
+                self.float_minmax(builtin.function, left.handle, right.handle, span)?
+            } else {
+                self.append(
+                    Expression::Math {
+                        fun: builtin.function,
+                        arg: left.handle,
+                        arg1: Some(right.handle),
+                        arg2: None,
+                        arg3: None,
+                    },
+                    span,
+                )?
+            };
             return Ok(Value {
                 handle,
                 scalar: builtin.result,
@@ -498,6 +505,141 @@ impl<'a> Parser<'a> {
             Some(value) => value.into(),
             None => ExpressionResult::Void(span),
         })
+    }
+
+    fn float_minmax(
+        &mut self,
+        function: MathFunction,
+        left: Handle<Expression>,
+        right: Handle<Expression>,
+        span: Span,
+    ) -> Result<Handle<Expression>, ParseError> {
+        let sign_bit = self.append(Expression::Literal(Literal::U32(0x8000_0000)), span)?;
+        let magnitude_mask = self.append(Expression::Literal(Literal::U32(0x7fff_ffff)), span)?;
+        let infinity_bits = self.append(Expression::Literal(Literal::U32(0x7f80_0000)), span)?;
+        let canonical_nan_bits =
+            self.append(Expression::Literal(Literal::U32(0x7fc0_0000)), span)?;
+        let operands = [left, right].map(|value| {
+            let bits = self.append(
+                Expression::As {
+                    expr: value,
+                    kind: ScalarKind::Uint,
+                    convert: None,
+                },
+                span,
+            )?;
+            let is_negative = self.append(
+                Expression::Binary {
+                    op: BinaryOperator::GreaterEqual,
+                    left: bits,
+                    right: sign_bit,
+                },
+                span,
+            )?;
+            let reversed_bits = self.append(
+                Expression::Unary {
+                    op: UnaryOperator::BitwiseNot,
+                    expr: bits,
+                },
+                span,
+            )?;
+            let positive_key = self.append(
+                Expression::Binary {
+                    op: BinaryOperator::ExclusiveOr,
+                    left: bits,
+                    right: sign_bit,
+                },
+                span,
+            )?;
+            let ordering_key = self.append(
+                Expression::Select {
+                    condition: is_negative,
+                    accept: reversed_bits,
+                    reject: positive_key,
+                },
+                span,
+            )?;
+            let absolute_bits = self.append(
+                Expression::Binary {
+                    op: BinaryOperator::And,
+                    left: bits,
+                    right: magnitude_mask,
+                },
+                span,
+            )?;
+            let is_nan = self.append(
+                Expression::Binary {
+                    op: BinaryOperator::Greater,
+                    left: absolute_bits,
+                    right: infinity_bits,
+                },
+                span,
+            )?;
+            Ok::<_, ParseError>((bits, ordering_key, is_nan))
+        });
+        let [left, right] = operands;
+        let (left_bits, left_key, left_is_nan) = left?;
+        let (right_bits, right_key, right_is_nan) = right?;
+        let choose_left = self.append(
+            Expression::Binary {
+                op: if function == MathFunction::Min {
+                    BinaryOperator::Less
+                } else {
+                    BinaryOperator::Greater
+                },
+                left: left_key,
+                right: right_key,
+            },
+            span,
+        )?;
+        let selected_bits = self.append(
+            Expression::Select {
+                condition: choose_left,
+                accept: left_bits,
+                reject: right_bits,
+            },
+            span,
+        )?;
+        let selected_bits = self.append(
+            Expression::Select {
+                condition: left_is_nan,
+                accept: right_bits,
+                reject: selected_bits,
+            },
+            span,
+        )?;
+        let selected_bits = self.append(
+            Expression::Select {
+                condition: right_is_nan,
+                accept: left_bits,
+                reject: selected_bits,
+            },
+            span,
+        )?;
+        let both_are_nan = self.append(
+            Expression::Binary {
+                op: BinaryOperator::LogicalAnd,
+                left: left_is_nan,
+                right: right_is_nan,
+            },
+            span,
+        )?;
+        let bits = self.append(
+            Expression::Select {
+                condition: both_are_nan,
+                accept: canonical_nan_bits,
+                reject: selected_bits,
+            },
+            span,
+        )?;
+        self.append(
+            Expression::As {
+                expr: bits,
+                kind: ScalarKind::Float,
+                convert: None,
+            },
+            span,
+        )
     }
 
     fn function_candidates<'b>(

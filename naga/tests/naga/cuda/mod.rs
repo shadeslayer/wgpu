@@ -9,6 +9,7 @@ mod conversions;
 mod declarations;
 mod device_functions;
 mod dual_execution;
+mod float_math;
 mod float_separators;
 mod helpers;
 mod inline;

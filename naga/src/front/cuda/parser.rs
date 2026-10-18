@@ -450,6 +450,16 @@ impl<'a> Parser<'a> {
                 }
                 depth + 1
             }
+            Expression::Select {
+                condition,
+                accept,
+                reject,
+            } => {
+                self.function.expression_graph_depths[condition.index()]
+                    .max(self.function.expression_graph_depths[accept.index()])
+                    .max(self.function.expression_graph_depths[reject.index()])
+                    + 1
+            }
             _ => 0,
         };
         if depth > 64 {

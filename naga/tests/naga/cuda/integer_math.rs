@@ -282,7 +282,7 @@ fn cuda_integer_minmax_reject_definitions_of_implicit_canonical_signatures() {
 }
 
 #[test]
-fn cuda_integer_minmax_reject_selected_float_builtins_without_integer_fallback() {
+fn cuda_integer_minmax_keep_ambiguity_with_float_overloads() {
     for name in ["min", "max"] {
         let source = format!(
             "__device__ int {name}(bool first, unsigned second) {{ return 9; }}
@@ -291,9 +291,7 @@ fn cuda_integer_minmax_reject_selected_float_builtins_without_integer_fallback()
         assert!(rejected(&source).message.contains("ambiguous"));
         let source =
             format!("__global__ void kernel(float *out) {{ out[0] = {name}(1.0f, 2.0f); }}");
-        let error = rejected(&source);
-        assert!(error.message.contains("float"));
-        assert_eq!(&source[error.span.to_range().unwrap()], name);
+        validate(&source);
         for arguments in ["1.0f, 2", "2, 1.0f", "true, 1.0f", "1.0f, 2u"] {
             let source = format!("__global__ void kernel() {{ {name}({arguments}); }}");
             assert!(rejected(&source).message.contains("ambiguous"));
@@ -326,15 +324,11 @@ fn cuda_integer_minmax_void_arguments_report_the_inner_call_span() {
 
 #[test]
 fn cuda_integer_minmax_results_are_values_and_source_errors_remain_checked() {
-    for body in [
-        "min(1, 2) = 3;",
-        "++max(1, 2);",
-        "return; min(missing, 2);",
-        "return; max(1.0f, 2.0f);",
-    ] {
+    for body in ["min(1, 2) = 3;", "++max(1, 2);", "return; min(missing, 2);"] {
         rejected(&format!("__global__ void kernel() {{ {body} }}"));
     }
     validate("__global__ void kernel() { return; min(1, 2); }");
+    validate("__global__ void kernel() { return; max(1.0f, 2.0f); }");
 }
 
 #[test]
