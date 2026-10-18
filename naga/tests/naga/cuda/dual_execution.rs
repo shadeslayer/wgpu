@@ -2,8 +2,7 @@
 
 use naga::front::cuda::{parse_str, Options};
 
-mod cuda_helpers;
-use cuda_helpers::{execute, validate};
+use super::helpers::{execute, validate};
 
 fn function<'a>(
     module: &'a naga::Module,

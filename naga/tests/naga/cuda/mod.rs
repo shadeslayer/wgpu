@@ -1,8 +1,35 @@
 #![cfg(feature = "cuda-in")]
 
+mod adversarial;
+mod barriers;
+mod comma;
+mod conditionals;
+mod control_flow;
+mod conversions;
+mod declarations;
+mod device_functions;
+mod dual_execution;
+mod float_separators;
+mod helpers;
+mod inline;
+mod integer_operators;
+mod literals;
+mod local_declarators;
+mod loops;
+mod overloads;
+mod parameters;
+mod reference_categories;
+mod shared;
+mod specifiers;
+mod streaming;
+mod type_aliases;
+mod uninitialized;
+mod updates;
+mod void_functions;
+
 use naga::front::cuda::{parse_str, Options};
 
-const VECTOR_ADD: &str = include_str!("in/cuda/vector-add.cu");
+const VECTOR_ADD: &str = include_str!("../../in/cuda/vector-add.cu");
 
 fn validate(source: &str, options: &Options) -> (naga::Module, naga::valid::ModuleInfo) {
     let module = parse_str(source, options).unwrap();

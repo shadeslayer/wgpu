@@ -455,7 +455,7 @@ fn cuda_device_functions_preserve_nesting_limits() {
 #[test]
 #[cfg(all(feature = "wgsl-in", feature = "wgsl-out"))]
 fn cuda_device_function_signatures_and_calls_roundtrip_through_wgsl() {
-    let module = validate(include_str!("in/cuda/device-functions.cu"));
+    let module = validate(include_str!("../../in/cuda/device-functions.cu"));
     let mut validator = naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
         naga::valid::Capabilities::empty(),

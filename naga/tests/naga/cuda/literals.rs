@@ -2,8 +2,7 @@
 
 use naga::front::cuda::{parse_str, Options};
 
-mod cuda_helpers;
-use cuda_helpers::{execute, validate};
+use super::helpers::{execute, validate};
 
 fn literal(text: &str) -> naga::Literal {
     let source = format!("__global__ void kernel() {{ unsigned int value = {text}; }}");

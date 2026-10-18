@@ -2,8 +2,7 @@
 
 use naga::front::cuda::{parse_str, Options};
 
-mod cuda_helpers;
-use cuda_helpers::{execute, validate};
+use super::helpers::{execute, validate};
 
 fn rejected(source: &str) -> naga::front::cuda::ParseError {
     let error = parse_str(source, &Options::default()).unwrap_err();
@@ -619,7 +618,7 @@ fn cuda_conditional_rejects_malformed_and_excessively_nested_source() {
 #[cfg(all(feature = "wgsl-in", feature = "wgsl-out"))]
 #[test]
 fn cuda_conditionals_roundtrip_through_wgsl() {
-    let (module, info) = validate(include_str!("in/cuda/conditionals.cu"));
+    let (module, info) = validate(include_str!("../../in/cuda/conditionals.cu"));
     let source =
         naga::back::wgsl::write_string(&module, &info, naga::back::wgsl::WriterFlags::empty())
             .unwrap();

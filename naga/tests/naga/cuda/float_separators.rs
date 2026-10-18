@@ -2,8 +2,7 @@
 
 use naga::front::cuda::{parse_str, Options};
 
-mod cuda_helpers;
-use cuda_helpers::{execute, validate};
+use super::helpers::{execute, validate};
 
 fn returned_bits(module: &naga::Module, name: &str) -> u32 {
     let function = module

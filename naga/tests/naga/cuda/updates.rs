@@ -2,8 +2,7 @@
 
 use naga::front::cuda::{parse_str, Options};
 
-mod cuda_helpers;
-use cuda_helpers::{execute, validate};
+use super::helpers::{execute, validate};
 
 const UPDATES: &str = "__global__ void updates(int *out, int value) {\n\
     int previous = value++;\n\

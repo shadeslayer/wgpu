@@ -1,3 +1,5 @@
+#[cfg(feature = "cuda-in")]
+mod cuda;
 mod example_wgsl;
 mod snapshots;
 mod spirv_capabilities;

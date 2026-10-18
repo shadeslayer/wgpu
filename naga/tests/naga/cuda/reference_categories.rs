@@ -1,7 +1,6 @@
 #![cfg(feature = "cuda-in")]
 
-mod cuda_helpers;
-use cuda_helpers::{execute, validate};
+use super::helpers::{execute, validate};
 
 #[test]
 fn cuda_discarded_reference_evaluates_its_index_without_loading_storage() {

@@ -87,8 +87,8 @@ they should be easy to copy into a standalone project.
 
 ## `naga` CUDA Frontend Tests
 
-- Located in: `naga/tests/cuda*.rs`
-- Run with `cargo nextest run -p naga -E 'binary(/cuda/) | test(front::cuda)'`
+- Located in: `naga/tests/naga/cuda/`
+- Run with `cargo nextest run -p naga -E 'test(cuda)'`
 - Verify the supported CUDA source subset, rejection of unsupported syntax,
   arithmetic semantics, parser depth limits, and output from every shader backend.
 

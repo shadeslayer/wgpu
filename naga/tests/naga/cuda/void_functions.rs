@@ -324,7 +324,7 @@ fn cuda_void_unreachable_source_remains_checked() {
 #[test]
 #[cfg(all(feature = "wgsl-in", feature = "wgsl-out"))]
 fn cuda_void_calls_and_returns_roundtrip_through_wgsl() {
-    let module = validate(include_str!("in/cuda/void-functions.cu"));
+    let module = validate(include_str!("../../in/cuda/void-functions.cu"));
     let mut validator = naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
         naga::valid::Capabilities::empty(),
