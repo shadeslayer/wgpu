@@ -739,6 +739,85 @@ impl<W: Write> Writer<W> {
         Ok(())
     }
 
+    fn write_switch(
+        &mut self,
+        module: &Module,
+        selector: Handle<crate::Expression>,
+        cases: &[crate::SwitchCase],
+        func_ctx: &back::FunctionCtx<'_>,
+        level: back::Level,
+    ) -> BackendResult {
+        write!(self.out, "{level}switch ")?;
+        self.write_expr(module, selector, func_ctx)?;
+        writeln!(self.out, " {{")?;
+
+        let case_level = level.next();
+        let body_level = case_level.next();
+        let mut new_case = true;
+        for (case_index, case) in cases.iter().enumerate() {
+            let grouped_label = case.fall_through && case.body.is_empty();
+            match case.value {
+                crate::SwitchValue::I32(value) => {
+                    if new_case {
+                        write!(self.out, "{case_level}case ")?;
+                    }
+                    write!(self.out, "{value}")?;
+                }
+                crate::SwitchValue::U32(value) => {
+                    if new_case {
+                        write!(self.out, "{case_level}case ")?;
+                    }
+                    write!(self.out, "{value}u")?;
+                }
+                crate::SwitchValue::Default => {
+                    if new_case {
+                        if grouped_label {
+                            write!(self.out, "{case_level}case ")?;
+                        } else {
+                            write!(self.out, "{case_level}")?;
+                        }
+                    }
+                    write!(self.out, "default")?;
+                }
+            }
+
+            new_case = !grouped_label;
+            if grouped_label {
+                write!(self.out, ", ")?;
+                continue;
+            }
+            writeln!(self.out, ": {{")?;
+
+            if case.fall_through {
+                // WGSL has no fallthrough, so append the following case bodies.
+                for following_case in &cases[case_index..] {
+                    writeln!(self.out, "{body_level}{{")?;
+                    let previous_named_expression_count = self.named_expressions.len();
+                    for statement in following_case.body.iter() {
+                        self.write_stmt(module, statement, func_ctx, body_level.next())?;
+                    }
+                    self.named_expressions
+                        .truncate(previous_named_expression_count);
+                    writeln!(self.out, "{body_level}}}")?;
+                    if !following_case.fall_through {
+                        break;
+                    }
+                }
+            } else {
+                let previous_named_expression_count = self.named_expressions.len();
+                for statement in case.body.iter() {
+                    self.write_stmt(module, statement, func_ctx, body_level)?;
+                }
+                self.named_expressions
+                    .truncate(previous_named_expression_count);
+            }
+            writeln!(self.out, "{case_level}}}")?;
+        }
+
+        writeln!(self.out, "{level}}}")?;
+        Ok(())
+    }
+
     /// Helper method used to write statements
     ///
     /// # Notes
@@ -966,67 +1045,7 @@ impl<W: Write> Writer<W> {
             Statement::Switch {
                 selector,
                 ref cases,
-            } => {
-                // Start the switch
-                write!(self.out, "{level}")?;
-                write!(self.out, "switch ")?;
-                self.write_expr(module, selector, func_ctx)?;
-                writeln!(self.out, " {{")?;
-
-                let l2 = level.next();
-                let mut new_case = true;
-                for case in cases {
-                    if case.fall_through && !case.body.is_empty() {
-                        // TODO: we could do the same workaround as we did for the HLSL backend
-                        return Err(Error::Unimplemented(
-                            "fall-through switch case block".into(),
-                        ));
-                    }
-
-                    match case.value {
-                        crate::SwitchValue::I32(value) => {
-                            if new_case {
-                                write!(self.out, "{l2}case ")?;
-                            }
-                            write!(self.out, "{value}")?;
-                        }
-                        crate::SwitchValue::U32(value) => {
-                            if new_case {
-                                write!(self.out, "{l2}case ")?;
-                            }
-                            write!(self.out, "{value}u")?;
-                        }
-                        crate::SwitchValue::Default => {
-                            if new_case {
-                                if case.fall_through {
-                                    write!(self.out, "{l2}case ")?;
-                                } else {
-                                    write!(self.out, "{l2}")?;
-                                }
-                            }
-                            write!(self.out, "default")?;
-                        }
-                    }
-
-                    new_case = !case.fall_through;
-
-                    if case.fall_through {
-                        write!(self.out, ", ")?;
-                    } else {
-                        writeln!(self.out, ": {{")?;
-                    }
-
-                    for sta in case.body.iter() {
-                        self.write_stmt(module, sta, func_ctx, l2.next())?;
-                    }
-
-                    if !case.fall_through {
-                        writeln!(self.out, "{l2}}}")?;
-                    }
-                }
-
-                writeln!(self.out, "{level}}}")?
-            }
+            } => self.write_switch(module, selector, cases, func_ctx, level)?,
             Statement::Loop {
                 ref body,
                 ref continuing,

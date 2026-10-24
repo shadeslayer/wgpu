@@ -1,0 +1,173 @@
+#version 450
+
+layout(local_size_x = 1) in;
+layout(set = 0, binding = 0, std430) buffer Output {
+    int values[];
+};
+
+int case_chain(int selector) {
+    int result = 0;
+    switch (selector) {
+        case -1:
+            result += 1;
+        case 0:
+            result += 10;
+        case 1:
+            result += 100;
+            break;
+        default:
+            result += 1000;
+        case 2:
+            result += 10000;
+            break;
+    }
+    return result;
+}
+
+int grouped_labels(uint selector) {
+    int result = 0;
+    switch (selector) {
+        case 0u:
+        case 1u:
+            result += 3;
+        case 2u:
+            result += 5;
+            break;
+        default:
+            result = 7;
+            break;
+    }
+    return result;
+}
+
+int nested_switches(int outer, int inner) {
+    int result = 0;
+    switch (outer) {
+        case 0:
+            result += 1;
+            switch (inner) {
+                case 0:
+                    result += 10;
+                default:
+                    result += 20;
+                    break;
+            }
+        case 1:
+            result += 100;
+            break;
+        default:
+            result = 900;
+            break;
+    }
+    return result;
+}
+
+int loop_jumps(int selector) {
+    int result = 0;
+    for (int iteration = 0; iteration < 4; ++iteration) {
+        switch (selector) {
+            case 0:
+                if (iteration == 1) {
+                    continue;
+                }
+                result += iteration + 1;
+            case 1:
+                if (iteration == 2) {
+                    break;
+                }
+                result += 10;
+                break;
+            default:
+                result += 100;
+                continue;
+        }
+        result += 1000;
+    }
+    return result;
+}
+
+int terminal_paths(int selector, int flag) {
+    int result = 0;
+    switch (selector) {
+        case 0:
+            if (flag != 0) {
+                return 3;
+            }
+            result += 1;
+        case 1:
+            return result + 5;
+        default:
+            result = 9;
+        case 2: {
+            return result + 10;
+        }
+    }
+    return -1;
+}
+
+int update_value(int value) {
+    values[29] += 1;
+    return value + values[29];
+}
+
+int call_results(int selector) {
+    int result = 2;
+    switch (selector) {
+        case 0: {
+            int named_value = update_value(result);
+            result = named_value + named_value;
+        }
+        case 1: {
+            int named_value = update_value(result);
+            result = named_value * named_value;
+        }
+        default: {
+            int named_value = update_value(result);
+            result = named_value + named_value;
+            break;
+        }
+    }
+    return result;
+}
+
+void main() {
+    values[0] = case_chain(-1);
+    values[1] = case_chain(0);
+    values[2] = case_chain(1);
+    values[3] = case_chain(2);
+    values[4] = case_chain(8);
+    values[5] = grouped_labels(0u);
+    values[6] = grouped_labels(1u);
+    values[7] = grouped_labels(2u);
+    values[8] = grouped_labels(8u);
+    values[9] = nested_switches(0, 0);
+    values[10] = nested_switches(0, 8);
+    values[11] = nested_switches(1, 0);
+    values[12] = nested_switches(8, 0);
+    values[13] = loop_jumps(0);
+    values[14] = loop_jumps(1);
+    values[15] = loop_jumps(8);
+    values[16] = terminal_paths(0, 1);
+    values[17] = terminal_paths(0, 0);
+    values[18] = terminal_paths(1, 1);
+    values[19] = terminal_paths(8, 0);
+    values[20] = terminal_paths(2, 0);
+    int counter = 0;
+    switch (counter++) {
+        case 0:
+            values[21] = counter;
+        case 1:
+            values[22] = counter + 1;
+            break;
+        default:
+            values[21] = 99;
+            break;
+    }
+    values[23] = counter;
+    values[29] = 0;
+    values[24] = call_results(0);
+    values[25] = call_results(1);
+    values[26] = call_results(8);
+    values[27] = values[29];
+    values[28] = update_value(values[26]);
+}

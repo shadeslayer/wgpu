@@ -7,3 +7,4 @@ mod spirv_debug_info;
 mod spirv_roundtrip;
 mod validation;
 mod wgsl_errors;
+mod wgsl_switch_fallthrough;
