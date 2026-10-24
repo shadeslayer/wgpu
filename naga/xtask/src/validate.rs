@@ -196,6 +196,48 @@ fn try_push_job(jobs: &mut Vec<Job>, f: impl FnOnce(&mut Vec<Job>) -> anyhow::Re
     }
 }
 
+fn normalize_spirv_assembly_line(line: &str) -> std::borrow::Cow<'_, str> {
+    use std::fmt::Write as _;
+
+    let instruction = line
+        .split_once(';')
+        .map_or(line, |(instruction, _)| instruction);
+    if instruction.split_whitespace().next() != Some("OpSwitch") {
+        return if line.contains(" OpExtInst ") {
+            std::borrow::Cow::Owned(line.replace(" DebugPrintf ", " 1 "))
+        } else {
+            std::borrow::Cow::Borrowed(line)
+        };
+    }
+
+    let mut normalized = String::new();
+    let mut copied_until = 0;
+    let mut operand_index = 0;
+    let mut fragment_start = 0;
+    for fragment in instruction.split_inclusive(char::is_whitespace) {
+        let operand = fragment.trim_end();
+        if !operand.is_empty() {
+            if operand_index >= 3 && operand_index % 2 == 1 {
+                if let Ok(value) = operand.parse::<u32>() {
+                    if value > i32::MAX as u32 {
+                        // Hex preserves rspirv's raw case bits for either signedness.
+                        normalized.push_str(&line[copied_until..fragment_start]);
+                        write!(&mut normalized, "{value:#x}").unwrap();
+                        copied_until = fragment_start + operand.len();
+                    }
+                }
+            }
+            operand_index += 1;
+        }
+        fragment_start += fragment.len();
+    }
+    if copied_until == 0 {
+        return std::borrow::Cow::Borrowed(line);
+    }
+    normalized.push_str(&line[copied_until..]);
+    std::borrow::Cow::Owned(normalized)
+}
+
 fn validate_spirv(path: &Path, spirv_as: &str, spirv_val: &str) -> anyhow::Result<()> {
     let second_line = {
         let mut file = BufReader::new(open_file(path)?);
@@ -254,12 +296,7 @@ fn validate_spirv(path: &Path, spirv_as: &str, spirv_val: &str) -> anyhow::Resul
                 break;
             }
 
-            if line.contains(" OpExtInst ") {
-                let normalized_line = line.replace(" DebugPrintf ", " 1 ");
-                spirv_as_stdin.write_all(normalized_line.as_bytes())?;
-            } else {
-                spirv_as_stdin.write_all(line.as_bytes())?;
-            }
+            spirv_as_stdin.write_all(normalize_spirv_assembly_line(&line).as_bytes())?;
 
             line.clear();
         }
@@ -476,3 +513,6 @@ fn validate_hlsl(
         )
     })
 }
+
+#[cfg(test)]
+mod tests;
