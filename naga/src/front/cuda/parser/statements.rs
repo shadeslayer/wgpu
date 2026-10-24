@@ -26,7 +26,7 @@ impl<'a> Parser<'a> {
 
     pub(super) fn scoped_statement(&mut self) -> Result<(crate::Block, bool), ParseError> {
         let compound = self.lexer.next_if(Token::Paren('{'))?;
-        self.function.symbol_table.push_scope();
+        let initialization_start = self.function.push_scope();
         let result = self.capture_block(|parser| {
             if compound {
                 parser.block_contents()
@@ -34,7 +34,7 @@ impl<'a> Parser<'a> {
                 parser.statement()
             }
         });
-        self.function.symbol_table.pop_scope();
+        self.function.pop_scope(initialization_start);
         result.map(|(terminated, body)| (body, terminated))
     }
 
@@ -79,6 +79,15 @@ impl<'a> Parser<'a> {
                 start,
             );
             return Ok(accept_terminated && reject_terminated);
+        }
+        if self.take_ident("switch")? {
+            return self.switch_statement(start);
+        }
+        if matches!(token.0, Token::Word("case" | "default")) {
+            return Err(ParseError {
+                message: String::from("case and default labels require a direct switch body"),
+                span: start,
+            });
         }
         if self.take_ident("return")? {
             let value = if let Some(ref result) = self.function.ir.result {
@@ -130,9 +139,15 @@ impl<'a> Parser<'a> {
         }
         if matches!(token.0, Token::Word("break" | "continue")) {
             self.lexer.next()?;
-            if self.function.loop_depth == 0 {
+            if self.function.loop_depth == 0
+                && (token.0 == Token::Word("continue") || self.function.switch_depth == 0)
+            {
                 return Err(ParseError {
-                    message: String::from("jump requires an enclosing loop"),
+                    message: if token.0 == Token::Word("continue") {
+                        String::from("continue requires an enclosing loop")
+                    } else {
+                        String::from("break requires an enclosing loop or switch")
+                    },
                     span: start,
                 });
             }
@@ -209,6 +224,7 @@ impl<'a> Parser<'a> {
             };
             let ty = array.as_ref().map_or(base, |array| array.ty);
             let array_count = array.as_ref().and_then(|array| array.count);
+            let has_initializer = !matches!(self.lexer.peek()?.0, Token::Separator(',' | ';'));
             let local = self.function.ir.local_variables.append(
                 LocalVariable {
                     name: Some(String::from(name)),
@@ -270,6 +286,9 @@ impl<'a> Parser<'a> {
             } else {
                 Some(self.value_initializer(&declared_ty)?.handle)
             };
+            if has_initializer {
+                self.function.initialized_declarations.push(span);
+            }
             let end = self.lexer.peek()?.1;
             let has_next_declarator = self.lexer.next_if(Token::Separator(','))?;
             if !has_next_declarator {

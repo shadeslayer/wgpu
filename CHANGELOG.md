@@ -148,6 +148,7 @@ By @sagudev in [#10307](https://github.com/gfx-rs/wgpu/pull/10307).
 - Support CUDA scalar arithmetic conversions, assignment conversions, and explicit casts.
 - Support CUDA assignment expressions, compound arithmetic assignments, and prefix/postfix updates.
 - Support CUDA `for`, `while`, and `do`/`while` loops with `break` and `continue`.
+- Support CUDA switches with constant case labels, fallthrough, and scoped declarations.
 - Support CUDA integer remainder, bitwise operators, shifts, and their compound assignments.
 - Support static CUDA `__shared__` scalars and fixed one-dimensional arrays.
 - Support multidimensional CUDA local and shared arrays, nested initialization, and inferred outer local bounds.

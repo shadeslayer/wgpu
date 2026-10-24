@@ -480,13 +480,35 @@ other vector combinations are unsupported. Both arms may be void in discarded
 expressions or void returns; mixing void and value arms is unsupported.
 
 Statements include local declarations, expression statements, scoped blocks,
-`if`/`else`, `for`, `while`, `do`/`while`, `break`, `continue`, and `return`.
+`if`/`else`, `switch`, `for`, `while`, `do`/`while`, `break`, `continue`, and `return`.
 At statement start, C++ parses `int(value);` as a declaration. Parenthesized
 declarators are unsupported; use `int value = ...;` for a local declaration or
 `(int(value));` for a discarded cast expression.
 Loop conditions are scalar expressions; `for` initializers can declare scalar
 or array locals, declare scalar aliases, or evaluate an expression. Empty
 `for` clauses are supported.
+
+Switch selectors accept `int`, `unsigned int`, and `bool`; booleans promote to
+`int`. The selector is evaluated once. Case labels require integral constant
+expressions that fit the promoted selector type without narrowing. Duplicate
+converted values and multiple defaults are rejected, following C++
+[switch statements](https://timsong-cpp.github.io/cppwp/n4861/stmt.switch).
+The default label can appear anywhere. Execution falls through subsequent labels
+until a jump or the end of the body; an unmatched selector without a default
+executes no body statements. `break` exits the nearest loop or switch, while
+`continue` targets the nearest enclosing loop.
+
+A switch can have a compound body or a single statement, including a leading
+case/default label chain. An unlabeled body is checked but never executed.
+Declarations share the switch body's scope, so bare locals and aliases can be
+used by later cases. Entering a label that bypasses an active local initializer,
+including a `constexpr` or array initializer, is rejected. Initializers inside
+closed nested scopes do not block later labels, following C++
+[declaration statements](https://timsong-cpp.github.io/cppwp/n4861/stmt.dcl#3).
+Nested switches are supported. Switch initialization statements, declaration
+conditions, and labels that enter a nested block, branch, or loop remain
+unsupported.
+
 Comma expressions evaluate left to right and preserve the final operand's type
 and value category, including lvalues and void. Earlier operands are discarded.
 Discarded lvalues evaluate their addresses without loading their referenced
@@ -560,15 +582,15 @@ a control barrier covering both workgroup and storage memory, following
 [CUDA's synchronization semantics](https://docs.nvidia.com/cuda/archive/13.0.0/cuda-c-programming-guide/index.html#synchronization-functions).
 The first implementation accepts this zero-argument statement only in
 straight-line kernel flow, including unconditional nested blocks. Barriers
-inside `if` branches or loops, or after a possible earlier `return`, produce a
-parse error. This conservative restriction rejects some valid CUDA programs
+inside `if` branches, switch cases, or loops, or after a possible earlier `return`,
+produce a parse error. This conservative restriction rejects some valid CUDA programs
 until control-barrier uniformity analysis is available. Conditions and loops
 without returns may precede a barrier; returns after the last barrier are
 allowed. Synchronization does not extend across workgroups.
 
 Unsupported syntax produces a parse error with a source span. This includes
 preprocessor directives and includes, host code and launch syntax,
-general pointer operations, switches,
+general pointer operations,
 dynamic shared memory, atomics, other synchronization primitives, templates,
 double precision, and inline PTX. No CUDA runtime ABI or NVIDIA device code is
 generated.

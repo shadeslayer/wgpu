@@ -13,6 +13,8 @@ pub(super) struct FunctionContext<'a> {
     pub(super) symbol_table: SymbolTable<&'a str, Symbol>,
     pub(super) statement_depth: u32,
     pub(super) loop_depth: u32,
+    pub(super) switch_depth: u32,
+    pub(super) initialized_declarations: Vec<Span>,
     pub(super) builtin_arguments: [Option<Handle<Expression>>; 3],
     pub(super) expression_depth: u32,
     pub(super) expression_graph_depths: Vec<u32>,
@@ -22,6 +24,16 @@ pub(super) struct FunctionContext<'a> {
 }
 
 impl FunctionContext<'_> {
+    pub(super) fn push_scope(&mut self) -> usize {
+        self.symbol_table.push_scope();
+        self.initialized_declarations.len()
+    }
+
+    pub(super) fn pop_scope(&mut self, initialization_start: usize) {
+        self.symbol_table.pop_scope();
+        self.initialized_declarations.truncate(initialization_start);
+    }
+
     pub(super) fn new(kind: FunctionKind) -> Self {
         let ir = Function::default();
         let mut emitter = crate::proc::Emitter::default();
@@ -33,6 +45,8 @@ impl FunctionContext<'_> {
             symbol_table: SymbolTable::default(),
             statement_depth: 0,
             loop_depth: 0,
+            switch_depth: 0,
+            initialized_declarations: Vec::new(),
             builtin_arguments: [None; 3],
             expression_depth: 0,
             expression_graph_depths: Vec::new(),

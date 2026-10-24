@@ -17,6 +17,7 @@ mod operators;
 mod references;
 mod sqrtf;
 mod statements;
+mod switches;
 mod types;
 mod updates;
 

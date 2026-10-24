@@ -37,6 +37,7 @@ mod shared_vectors;
 mod specifiers;
 mod sqrtf;
 mod streaming;
+mod switches;
 mod type_aliases;
 mod uninitialized;
 mod updates;
@@ -146,7 +147,7 @@ fn cuda_rejects_unsupported_or_invalid_source() {
         "__global__ void bad(unsigned int *out) { out[0] = threadIdx.x ? 1u 2u; }",
         "__global__ void bad(unsigned int *out) { out[0] = 4294967296u; }",
         "__global__ void bad(unsigned int *out) { out[0] = 08u; }",
-        "__global__ void bad(unsigned int *out) { switch (threadIdx.x) { case 0: out[0] = 1u; } }",
+        "__global__ void bad(unsigned int *out) { switch (1.0f) { case 0: out[0] = 1u; } }",
         "__global__ void bad(unsigned int *out) { out[0] = atomicAdd(out, 1u); }",
         "__global__ void bad(unsigned int *out) { return 1u; }",
         "__global__ void empty() {} trailing",

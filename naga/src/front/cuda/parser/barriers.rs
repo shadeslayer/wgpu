@@ -36,6 +36,11 @@ pub(super) fn check_control_flow(
                 may_have_returned |= check_control_flow(body, true, may_have_returned)?;
                 may_have_returned |= check_control_flow(continuing, true, may_have_returned)?;
             }
+            Statement::Switch { ref cases, .. } => {
+                for case in cases {
+                    may_have_returned |= check_control_flow(&case.body, true, may_have_returned)?;
+                }
+            }
             Statement::Return { .. } => may_have_returned = true,
             _ => {}
         }

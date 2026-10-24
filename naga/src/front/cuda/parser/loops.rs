@@ -42,9 +42,9 @@ impl Parser<'_> {
 
     pub(super) fn for_loop(&mut self, start: Span) -> Result<(), ParseError> {
         self.lexer.expect_span(Token::Paren('('))?;
-        self.function.symbol_table.push_scope();
+        let initialization_start = self.function.push_scope();
         let result = self.for_loop_body(start);
-        self.function.symbol_table.pop_scope();
+        self.function.pop_scope(initialization_start);
         self.push_statement(Statement::Block(result?), start);
         Ok(())
     }
