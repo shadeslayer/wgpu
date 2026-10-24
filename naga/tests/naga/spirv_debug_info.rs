@@ -4,17 +4,6 @@
 //! packed the raw UTF-8 bytes without any interior-NUL handling, so the emitted instruction
 //! word count disagreed with where a parser stops the string.
 
-use std::io::Write as _;
-use std::process::{Command, Stdio};
-
-fn words_to_bytes(words: &[u32]) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(words.len() * 4);
-    for word in words {
-        bytes.extend_from_slice(&word.to_le_bytes());
-    }
-    bytes
-}
-
 /// Emit SPIR-V for a trivial compute shader with debug info forced on, then run
 /// the result through `spirv-val`. Panics if `spirv-val` rejects the module.
 fn write_and_validate(file_name: &str, source_code: &str) {
@@ -43,34 +32,7 @@ fn write_and_validate(file_name: &str, source_code: &str) {
 
     let words =
         naga::back::spv::write_vec(&module, &info, &options, Some(&pipeline_options)).unwrap();
-    let bytes = words_to_bytes(&words);
-
-    let mut child = Command::new("spirv-val")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect(
-            "Failed to execute spirv-val. It can be installed \
-            by installing the Vulkan SDK and adding it to your path.",
-        );
-
-    child
-        .stdin
-        .as_mut()
-        .unwrap()
-        .write_all(&bytes)
-        .expect("failed to write SPIR-V module to spirv-val stdin");
-
-    let output = child
-        .wait_with_output()
-        .expect("failed to wait for spirv-val");
-
-    assert!(
-        output.status.success(),
-        "spirv-val rejected naga output:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    super::helpers::validate_spirv(&words);
 }
 
 /// Sanity check: a trivial shader with clean strings must validate, proving the
