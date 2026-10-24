@@ -150,6 +150,7 @@ By @sagudev in [#10307](https://github.com/gfx-rs/wgpu/pull/10307).
 - Support CUDA `for`, `while`, and `do`/`while` loops with `break` and `continue`.
 - Support CUDA integer remainder, bitwise operators, shifts, and their compound assignments.
 - Support static CUDA `__shared__` scalars and fixed one-dimensional arrays.
+- Support multidimensional CUDA local and shared arrays, nested initialization, and inferred outer local bounds.
 - Support CUDA `__syncthreads()` in straight-line kernel control flow.
 - Support previously defined CUDA `__device__` helpers with scalar parameters and return values.
 - Support void CUDA device helpers, including implicit returns and discarded calls.

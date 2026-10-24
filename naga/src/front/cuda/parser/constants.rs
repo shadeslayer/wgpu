@@ -99,28 +99,18 @@ impl<'a> Parser<'a> {
     }
 
     pub(super) fn constant_array_address(
-        &self,
-        base: Handle<Expression>,
-        index: Option<Literal>,
+        is_discardable: bool,
+        count: Option<core::num::NonZeroU32>,
+        index: ConstantValue,
     ) -> bool {
-        if !self.pointer_constant(base).is_discardable {
+        if !is_discardable || !index.is_discardable {
             return false;
         }
-        let index = match index {
+        let index = match index.literal {
             Some(Literal::I32(index)) if index >= 0 => index as u32,
             Some(Literal::U32(index)) => index,
             _ => return false,
         };
-        let ty = match self.function.ir.expressions[base] {
-            Expression::LocalVariable(local) => {
-                if self.function.pending_array == Some(local) {
-                    return index == 0;
-                }
-                self.function.ir.local_variables[local].ty
-            }
-            Expression::GlobalVariable(global) => self.module.global_variables[global].ty,
-            _ => return false,
-        };
-        matches!(self.module.types[ty].inner, TypeInner::Array { size: ArraySize::Constant(count), .. } if index < count.get())
+        count.map_or(index == 0, |count| index < count.get())
     }
 }

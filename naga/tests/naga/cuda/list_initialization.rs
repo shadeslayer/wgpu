@@ -392,7 +392,7 @@ fn cuda_lists_reject_empty_inferred_arrays_and_unsupported_initialization_contex
     for body in [
         "int values[]{};",
         "int values[] = {};",
-        "int values[2][2]{{1}};",
+        "int values[2][2]{{1, 2, 3}};",
         "int *pointer{0};",
         "__shared__ int values[2]{1};",
         "__shared__ int3 point{1};",

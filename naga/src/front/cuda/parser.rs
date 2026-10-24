@@ -400,29 +400,65 @@ impl<'a> Parser<'a> {
 
     fn array_element(
         &mut self,
-        base: Handle<Expression>,
+        mut base: Handle<Expression>,
+        mut element_ty: TypeResolution,
         span: Span,
-    ) -> Result<(Handle<Expression>, bool), ParseError> {
-        self.lexer.expect_span(Token::Paren('['))?;
-        let index = self.expression(0)?;
-        let index = self.rvalue(index)?;
-        let scalar = self.require_scalar_type(&index.ty, index.span)?;
-        if !matches!(scalar.kind, ScalarKind::Sint | ScalarKind::Uint) {
-            return Err(ParseError {
-                message: String::from("array index must be an integer"),
-                span: index.span,
-            });
+    ) -> Result<(Handle<Expression>, TypeResolution, bool), ParseError> {
+        let (array_ty, is_pending) = match self.function.ir.expressions[base] {
+            Expression::LocalVariable(local) => (
+                self.function.ir.local_variables[local].ty,
+                self.function.pending_array == Some(local),
+            ),
+            Expression::GlobalVariable(global) => (self.module.global_variables[global].ty, false),
+            _ => unreachable!(),
+        };
+        let mut count = if is_pending {
+            None
+        } else {
+            match self.module.types[array_ty].inner {
+                TypeInner::Array {
+                    size: ArraySize::Constant(count),
+                    ..
+                } => Some(count),
+                _ => None,
+            }
+        };
+        let mut is_discardable = self.pointer_constant(base).is_discardable;
+        loop {
+            self.lexer.expect_span(Token::Paren('['))?;
+            let index = self.expression(0)?;
+            let index = self.rvalue(index)?;
+            let scalar = self.require_scalar_type(&index.ty, index.span)?;
+            if !matches!(scalar.kind, ScalarKind::Sint | ScalarKind::Uint) {
+                return Err(ParseError {
+                    message: String::from("array index must be an integer"),
+                    span: index.span,
+                });
+            }
+            let end = self.lexer.expect_span(Token::Paren(']'))?;
+            is_discardable = Self::constant_array_address(is_discardable, count, index.constant);
+            base = self.append(
+                Expression::Access {
+                    base,
+                    index: index.handle,
+                },
+                span.until(&end),
+            )?;
+            match *element_ty.inner_with(&self.module.types) {
+                TypeInner::Array {
+                    base: nested_element,
+                    size: ArraySize::Constant(nested_count),
+                    ..
+                } => {
+                    if self.lexer.peek()?.0 != Token::Paren('[') {
+                        return self.fail("array values require complete indexing");
+                    }
+                    element_ty = TypeResolution::Handle(nested_element);
+                    count = Some(nested_count);
+                }
+                _ => return Ok((base, element_ty, is_discardable)),
+            }
         }
-        let end = self.lexer.expect_span(Token::Paren(']'))?;
-        let is_discardable = self.constant_array_address(base, index.constant.literal);
-        let pointer = self.append(
-            Expression::Access {
-                base,
-                index: index.handle,
-            },
-            span.until(&end),
-        )?;
-        Ok((pointer, is_discardable))
     }
 
     fn builtin(&mut self, name: &str, start: Span) -> Result<Value, ParseError> {

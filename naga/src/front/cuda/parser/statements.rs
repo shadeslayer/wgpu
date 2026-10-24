@@ -2,6 +2,12 @@ use super::*;
 
 use core::num::NonZeroU32;
 
+struct ArrayDeclaration {
+    ty: Handle<Type>,
+    element_ty: Handle<Type>,
+    count: Option<NonZeroU32>,
+}
+
 impl<'a> Parser<'a> {
     pub(super) fn block_contents(&mut self) -> Result<bool, ParseError> {
         let mut terminated = false;
@@ -196,27 +202,13 @@ impl<'a> Parser<'a> {
             if is_constexpr && is_array {
                 return self.fail("constexpr arrays are unsupported");
             }
-            let (ty, array_count) = if is_array {
-                let explicit_extent = if self.lexer.next_if(Token::Paren(']'))? {
-                    None
-                } else {
-                    let extent = self.array_size()?;
-                    self.lexer.expect_span(Token::Paren(']'))?;
-                    Some(extent)
-                };
-                if self.lexer.peek()?.0 == Token::Paren('[') {
-                    return self.fail("multidimensional local arrays are unsupported");
-                }
-                match explicit_extent {
-                    Some((size, extent_span)) => (
-                        self.array_type(base, ArraySize::Constant(size), extent_span, span)?,
-                        Some(size),
-                    ),
-                    None => (base, None),
-                }
+            let array = if is_array {
+                Some(self.array_declaration(base, true, span)?)
             } else {
-                (base, None)
+                None
             };
+            let ty = array.as_ref().map_or(base, |array| array.ty);
+            let array_count = array.as_ref().and_then(|array| array.count);
             let local = self.function.ir.local_variables.append(
                 LocalVariable {
                     name: Some(String::from(name)),
@@ -229,7 +221,7 @@ impl<'a> Parser<'a> {
             let symbol = if is_array {
                 Symbol::Array {
                     pointer,
-                    ty: declared_ty.clone(),
+                    ty: TypeResolution::Handle(array.as_ref().unwrap().element_ty),
                     writable: !is_const,
                 }
             } else {
@@ -242,8 +234,9 @@ impl<'a> Parser<'a> {
             self.insert_symbol(name, symbol, span)?;
             let initializer = if is_array && array_count.is_none() {
                 self.function.pending_array = Some(local);
-                let count = self.inferred_array_initializer(pointer, specifier, base)?;
-                let ty = self.array_type(base, ArraySize::Constant(count), span, span)?;
+                let element_ty = array.as_ref().unwrap().element_ty;
+                let count = self.inferred_array_initializer(pointer, specifier, element_ty)?;
+                let ty = self.array_type(element_ty, ArraySize::Constant(count), span, span)?;
                 self.function.ir.local_variables[local].ty = ty;
                 self.function.pending_array = None;
                 None
@@ -319,16 +312,12 @@ impl<'a> Parser<'a> {
         let declared_ty = self.lower_type(specifier, span);
         let base = self.type_handle(&declared_ty, span);
         let is_array = self.lexer.next_if(Token::Paren('['))?;
-        let ty = if is_array {
-            let (size, extent_span) = self.array_size()?;
-            self.lexer.expect_span(Token::Paren(']'))?;
-            self.array_type(base, ArraySize::Constant(size), extent_span, span)?
+        let array = if is_array {
+            Some(self.array_declaration(base, false, span)?)
         } else {
-            base
+            None
         };
-        if self.lexer.peek()?.0 == Token::Paren('[') {
-            return self.fail("multidimensional shared arrays are unsupported");
-        }
+        let ty = array.as_ref().map_or(base, |array| array.ty);
         if self.lexer.peek()?.0 == Token::Operation('=') {
             return self.fail("shared variables cannot have initializers");
         }
@@ -348,7 +337,7 @@ impl<'a> Parser<'a> {
         let symbol = if is_array {
             Symbol::Array {
                 pointer,
-                ty: declared_ty,
+                ty: TypeResolution::Handle(array.as_ref().unwrap().element_ty),
                 writable: true,
             }
         } else {
@@ -359,6 +348,55 @@ impl<'a> Parser<'a> {
             }
         };
         self.insert_symbol(name, symbol, span)
+    }
+
+    fn array_declaration(
+        &mut self,
+        base: Handle<Type>,
+        allow_inferred: bool,
+        span: Span,
+    ) -> Result<ArrayDeclaration, ParseError> {
+        let mut dimensions = Vec::new();
+        loop {
+            if dimensions.len() == 64 {
+                return self.fail("CUDA array rank limit exceeded");
+            }
+            let extent = if self.lexer.peek()?.0 == Token::Paren(']') {
+                if !allow_inferred || !dimensions.is_empty() {
+                    return self.fail("only the outermost local array bound may be inferred");
+                }
+                (None, self.lexer.next()?.1)
+            } else {
+                let (count, extent_span) = self.array_size()?;
+                self.lexer.expect_span(Token::Paren(']'))?;
+                (Some(count), extent_span)
+            };
+            dimensions.push(extent);
+            if !self.lexer.next_if(Token::Paren('['))? {
+                break;
+            }
+        }
+        let mut element_ty = base;
+        for &(count, extent_span) in dimensions[1..].iter().rev() {
+            element_ty = self.array_type(
+                element_ty,
+                ArraySize::Constant(count.unwrap()),
+                extent_span,
+                span,
+            )?;
+        }
+        let (count, extent_span) = dimensions[0];
+        let ty = match count {
+            Some(count) => {
+                self.array_type(element_ty, ArraySize::Constant(count), extent_span, span)?
+            }
+            None => element_ty,
+        };
+        Ok(ArrayDeclaration {
+            ty,
+            element_ty,
+            count,
+        })
     }
 
     fn array_size(&mut self) -> Result<(NonZeroU32, Span), ParseError> {

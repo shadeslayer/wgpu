@@ -273,7 +273,7 @@ fn cuda_inferred_arrays_still_require_nonempty_lists_and_supported_local_element
         "int values[] = {};",
         "int values[] = 1;",
         "int values[0]{1};",
-        "int values[][2]{{1, 2}};",
+        "int values[][]{{1, 2}};",
         "int *values[]{0};",
         "constexpr int values[]{1};",
         "__shared__ int values[]{1};",

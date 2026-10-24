@@ -391,7 +391,7 @@ Local declarations can list comma-separated names, as in
 `int first = 1, next = first + 1;`. Each initializer finishes before the next
 declarator, and all names share the declared type and qualification.
 
-Fixed one-dimensional local arrays support the scalar and vector types above
+Fixed local arrays support the scalar and vector types above
 and their aliases, in both kernels and device helpers. Written extents
 must be positive integral constant expressions. Each invocation owns its array storage;
 elements use the same indexing, assignments, and updates as buffer elements.
@@ -403,8 +403,8 @@ Const arrays require an initializer and their elements cannot be modified.
 Bare mutable arrays must be assigned before reading. These rules follow C++
 [array declarations](https://eel.is/c++draft/dcl.array) and
 [aggregate initialization](https://eel.is/c++draft/dcl.init.aggr).
-Local array bounds may be omitted when a nonempty initializer list determines
-the element count, following C++ [array declarations](https://timsong-cpp.github.io/cppwp/n4861/dcl.array#7).
+The outermost local array bound may be omitted when a nonempty initializer list
+determines the element count, following C++ [array declarations](https://timsong-cpp.github.io/cppwp/n4861/dcl.array#7).
 For example, `int values[]{1, 2, 3};` declares three elements.
 Vector arrays count complete vector elements after brace elision and copies:
 `int3 values[]{1, 2, 3, 4};` declares two elements, `(1, 2, 3)` and `(4, 0, 0)`.
@@ -418,7 +418,13 @@ constant value there, even when the eventual bound contains them, following the
 [unknown-bound clarification](https://cplusplus.github.io/CWG/issues/3004.html).
 Ordinary expressions can still read earlier initialized elements at nonzero
 indices. After the declaration, constant-address checks use the completed bound.
-Multidimensional local arrays and array-to-pointer conversions remain unsupported.
+Multidimensional arrays use nested array types and row-major layout. Every inner
+bound must be explicit. Initializers accept nested lists and brace elision;
+`int matrix[][2]{{1}, 2, 3, 4};` has three rows: `(1, 0)`, `(2, 3)`, and `(4, 0)`.
+Each row's omitted elements become zero before the next row's initializer runs.
+Index every dimension to access a scalar or vector element, as in
+`matrix[1][0]`. Array-to-pointer conversions and whole-array or row copies remain
+unsupported. Constant-address checks require each index to fit its own dimension.
 
 Local scalars, vectors, and fixed arrays accept direct-list and copy-list
 initialization, including partial lists and a trailing comma:
@@ -532,13 +538,14 @@ operand before its left operand. Logical short-circuiting also applies to assign
 the right operand.
 
 Static `__shared__` declarations support `float`, `int`, and `unsigned int`
-scalars, the numeric vector types above, and fixed one-dimensional arrays of
+scalars, the numeric vector types above, and fixed arrays of
 those types inside the kernel. Their aliases are also accepted; const-qualified
 shared types remain unsupported. Vector elements use the sizes, alignments, and
 array strides listed in the kernel interface, including packed three-component
 structures. Whole-value copies and scalar component updates use the same rules
 as local vectors. Array extents must
-be positive integral constant expressions using the scalar rules above.
+be positive integral constant expressions using the scalar rules above, including
+every dimension of a multidimensional array such as `__shared__ float tile[16][17];`.
 Shared variables become workgroup storage without resource bindings; names obey
 the surrounding block scope, and each workgroup has its own storage. Declarations
 cannot contain initializers, following NVIDIA's

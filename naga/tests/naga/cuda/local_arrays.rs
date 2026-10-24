@@ -346,7 +346,7 @@ fn cuda_local_arrays_reject_unsupported_declarators_and_initializers() {
     for declaration in [
         "int values[];",
         "int values[]{};",
-        "int values[2][2];",
+        "int values[2][];",
         "int *values[2];",
         "double values[2];",
         "void values[2];",

@@ -194,7 +194,7 @@ fn cuda_shared_vectors_reject_initializers_and_unsupported_declarations() {
         "__shared__ float3 value = {};",
         "__shared__ float3 values[2]{};",
         "__shared__ float3 values[2] = {};",
-        "__shared__ float3 values[2][2];",
+        "__shared__ float3 values[2][];",
         "__shared__ float3 values[];",
         "extern __shared__ float3 values[];",
         "__shared__ float3 first, second;",

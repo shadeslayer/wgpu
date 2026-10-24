@@ -27,6 +27,7 @@ mod literals;
 mod local_arrays;
 mod local_declarators;
 mod loops;
+mod multidimensional_arrays;
 mod operator_addition;
 mod overloads;
 mod parameters;

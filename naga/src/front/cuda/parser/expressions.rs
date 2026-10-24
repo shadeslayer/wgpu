@@ -326,7 +326,8 @@ impl Parser<'_> {
                         ty,
                         writable,
                     } => {
-                        let (pointer, is_discardable) = self.array_element(pointer, token.1)?;
+                        let (pointer, ty, is_discardable) =
+                            self.array_element(pointer, ty, token.1)?;
                         (
                             pointer,
                             ty,
