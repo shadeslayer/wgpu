@@ -200,7 +200,7 @@ fn cuda_preprocessing_already_selected_groups_skip_all_elif_expression_forms() {
 }
 
 #[test]
-fn cuda_preprocessing_rejects_only_eligible_active_if_and_elif_evaluation() {
+fn cuda_preprocessing_evaluates_only_eligible_if_and_elif_conditions() {
     for definitions in [
         "#if 0\n#endif",
         "#if 1\n#endif",
@@ -208,9 +208,14 @@ fn cuda_preprocessing_rejects_only_eligible_active_if_and_elif_evaluation() {
         "#ifdef ABSENT\n#elifdef PRESENT\n#endif",
         "#ifdef ABSENT\n#elifndef ABSENT\n#endif",
     ] {
-        let error = rejected(&kernel(definitions, ""));
-        assert!(error.message.contains("unsupported"), "{error}");
+        validate(&kernel(definitions, ""));
     }
+    rejected(&kernel("#if 0\n#elif 1 / 0\n#endif", ""));
+    rejected(&kernel("#if 0\n#elifdef malformed names\n#endif", ""));
+    validate(&kernel(
+        "#if 1\n#elif 1 / 0\n#elifdef malformed names\n#endif",
+        "",
+    ));
 }
 
 #[test]

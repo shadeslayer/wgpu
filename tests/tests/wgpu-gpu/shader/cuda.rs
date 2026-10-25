@@ -34,6 +34,7 @@ mod multidimensional_arrays;
 mod operator_addition;
 mod operator_functions;
 mod preprocessing;
+mod preprocessing_conditions;
 mod prototypes;
 mod reference_categories;
 mod shared_vectors;
@@ -77,6 +78,7 @@ pub fn all_tests(tests: &mut Vec<GpuTestInitializer>) {
         CUDA_OPERATOR_ADDITION,
         CUDA_OPERATOR_FUNCTIONS,
         CUDA_PREPROCESSING,
+        CUDA_PREPROCESSING_CONDITIONS,
         CUDA_PROTOTYPES,
         CUDA_REFERENCE_CATEGORIES,
         CUDA_SHARED_VECTORS,
@@ -275,6 +277,9 @@ static CUDA_OPERATOR_ADDITION: GpuTestConfiguration = configuration(operator_add
 static CUDA_OPERATOR_FUNCTIONS: GpuTestConfiguration = configuration(operator_functions::cases);
 #[apply(gpu_test!)]
 static CUDA_PREPROCESSING: GpuTestConfiguration = configuration(preprocessing::cases);
+#[apply(gpu_test!)]
+static CUDA_PREPROCESSING_CONDITIONS: GpuTestConfiguration =
+    configuration(preprocessing_conditions::cases);
 #[apply(gpu_test!)]
 static CUDA_PROTOTYPES: GpuTestConfiguration = configuration(prototypes::cases);
 #[apply(gpu_test!)]

@@ -34,6 +34,7 @@ mod operator_functions;
 mod overloads;
 mod parameters;
 mod preprocessing;
+mod preprocessing_conditions;
 mod prototypes;
 mod reference_categories;
 mod shared;

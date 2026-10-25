@@ -624,34 +624,55 @@ guaranteed jump are still checked for source errors and then omitted.
 Line and block comments are accepted. Expression nesting, conditional reference
 nesting, and generated expression depth are bounded. Trigraphs are unsupported.
 
-Source preprocessing supports object-like `#define`, `#undef`, `#ifdef`,
-`#ifndef`, `#else`, and `#endif`. Macro names use ASCII identifiers. Definitions
-follow source order, and replacement tokens are expanded when used. Empty
+Source preprocessing supports object-like `#define`, `#undef`, and conditional
+groups using `#if`, `#elif`, `#ifdef`, `#ifndef`, `#elifdef`, `#elifndef`, `#else`,
+and `#endif`. Macro names use ASCII identifiers; `defined` and alternative
+operator spellings cannot be macro names. Definitions follow source order, and
+replacement tokens are expanded when used. Empty
 replacements and nested conditional groups are accepted. Redefinitions must
-preserve token spelling and internal whitespace
-separation. Expansion preserves token boundaries and reports language errors at
-the original invocation.
+preserve token spelling and internal whitespace separation. Expansion preserves
+token boundaries and reports language errors at the original invocation.
 
 An initial UTF-8 BOM and LF, CRLF, or CR line endings are accepted. Backslash
 line continuations are joined before recognizing comments and tokens, including
 optional whitespace before the newline. Quoted and raw literals are opaque
-during preprocessing. String and character values remain unsupported.
+during preprocessing. String and character values remain unsupported in kernel
+expressions.
 Raw literal bodies preserve backslash-newline pairs, following C++23
 [translation phases](https://eel.is/c++draft/lex.phases).
 
-Inactive groups skip ordinary directives and conditional expressions while
-checking conditional structure. An eligible active `#if` or `#elif` expression
-is unsupported. Function-like macros, token pasting, includes, predefined macro
-providers, universal character names, and digraphs are also unsupported. No host
+Conditions use signed and unsigned 64-bit preprocessing integers, following
+C++23 [conditional inclusion](https://timsong-cpp.github.io/cppwp/n4950/cpp.cond).
+Integer bases, separators, and `u`, `l`, `ll`, and `z` suffixes are accepted.
+These values select source branches; kernel value types retain the limits below.
+Conditions accept arithmetic, shifts, comparisons, bitwise and logical
+operators, `?:`, and alternative spellings such as `and` and `not`. Left shifts
+wrap, and signed right shifts are arithmetic. Comma expressions are accepted
+only inside parentheses and the middle `?:` operand.
+Signed arithmetic overflow, zero divisors, and invalid shift counts produce
+diagnostics when evaluated. Logical operators and `?:` skip unselected value
+operations while still checking their syntax and literal types.
+
+`defined(NAME)` and `defined NAME` query a macro name without expanding its
+replacement. Other remaining names become zero, except `true` and `false`.
+Ordinary single ASCII character constants and simple, octal, or hexadecimal
+escapes with values in `0..=127` are accepted in conditions. Other character
+forms, floating constants, casts, calls, and assignments remain unsupported.
+Only the first selected group is processed. Inactive groups skip ordinary
+directives and unevaluated conditions while checking conditional structure.
+
+Function-like macros, token pasting, includes, predefined macro providers,
+universal character names, and digraphs remain unsupported. No host
 or device macros are supplied implicitly; source may explicitly define
 compiler-specific names such as `__CUDACC__`. Active use, query, definition, or
-removal of standard predefined names such as `__LINE__` and `__cplusplus`
-produces a diagnostic. Preparation bounds source size,
-conditional and expansion depth, stored and emitted tokens, and expansion work.
+removal of standard predefined names such as `__LINE__`, `__cplusplus`,
+`__has_include`, and `__has_cpp_attribute` produces a diagnostic, including
+inside a short-circuited expression. Preparation bounds source size, condition
+nesting, expansion depth, stored and emitted tokens, and expansion work.
 
-Integer literals support decimal, leading-zero octal, `0x`/`0X` hexadecimal, and
-`0b`/`0B` binary notation. Apostrophes may separate digits, as in `1'000` or
-`0xffff'ffff`. Unsuffixed decimal literals must fit `int`; unsuffixed nondecimal
+Kernel integer literals support decimal, leading-zero octal, `0x`/`0X`
+hexadecimal, and `0b`/`0B` binary notation. Apostrophes may separate digits, as in
+`1'000` or `0xffff'ffff`. Unsuffixed decimal literals must fit `int`; unsuffixed nondecimal
 literals use `int` when they fit and otherwise `unsigned int`. The `u`/`U` suffix
 selects `unsigned int`. Values requiring more than 32 bits and long or size
 suffixes remain unsupported. Decimal floating literals require the `f`/`F` suffix,

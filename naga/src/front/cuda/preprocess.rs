@@ -5,7 +5,9 @@ use crate::{FastHashMap, Span};
 
 use super::ParseError;
 
+mod conditions;
 mod lex;
+mod literal;
 
 use lex::{Kind, RawLexer, RawToken};
 
@@ -15,7 +17,7 @@ const MAX_TOKENS: usize = 1_048_576;
 const MAX_STEPS: usize = 4_194_304;
 const MAX_BYTES: usize = 67_108_864;
 
-const PREDEFINED_NAMES: [&str; 9] = [
+const PREDEFINED_NAMES: [&str; 11] = [
     "__LINE__",
     "__FILE__",
     "__DATE__",
@@ -25,6 +27,8 @@ const PREDEFINED_NAMES: [&str; 9] = [
     "__STDC_HOSTED__",
     "__STDCPP_DEFAULT_NEW_ALIGNMENT__",
     "__STDCPP_THREADS__",
+    "__has_include",
+    "__has_cpp_attribute",
 ];
 
 pub(super) struct PreparedToken {
@@ -44,6 +48,7 @@ struct Budget {
     owned_bytes: usize,
     visited_bytes: usize,
     replacement_tokens: usize,
+    emitted_tokens: usize,
 }
 
 fn error(message: &str, span: Span) -> ParseError {
@@ -77,6 +82,17 @@ impl Budget {
     fn visit(&mut self, bytes: usize, span: Span) -> Result<(), ParseError> {
         charge(&mut self.visited_bytes, bytes, MAX_BYTES, span)
     }
+
+    fn emit(&mut self, span: Span) -> Result<(), ParseError> {
+        charge(&mut self.emitted_tokens, 1, MAX_TOKENS, span)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ExpandedToken<'a> {
+    kind: Kind,
+    spelling: &'a str,
+    span: Span,
 }
 
 struct Definition {
@@ -157,11 +173,12 @@ pub(super) fn prepare(source: &str) -> Result<Option<PreparedSource>, ParseError
         if token.line_start && token.spelling == "#" {
             preprocessor.directive(token.span)?;
         } else if preprocessor.active() {
+            let output = &mut preprocessor.output;
             expand(
                 &token,
                 &preprocessor.definitions,
                 &mut preprocessor.budget,
-                &mut preprocessor.output,
+                &mut |token| output.push(token),
             )?;
         }
     }
@@ -208,10 +225,12 @@ impl Preprocessor<'_> {
                 let selected = if !parent_active {
                     false
                 } else if name == "if" {
-                    return Err(error(
-                        "CUDA preprocessing #if expressions are unsupported",
+                    conditions::evaluate(
+                        payload,
+                        &self.definitions,
+                        &mut self.budget,
                         directive.span,
-                    ));
+                    )?
                 } else {
                     let operand = Self::operand(payload, directive.span)?;
                     self.budget.visit(operand.spelling.len(), operand.span)?;
@@ -229,18 +248,30 @@ impl Preprocessor<'_> {
             "elif" | "elifdef" | "elifndef" => {
                 let conditional = self
                     .conditionals
-                    .last_mut()
+                    .last()
                     .ok_or_else(|| error("unmatched CUDA preprocessing alternative", span))?;
                 if conditional.seen_else {
                     return Err(error("CUDA preprocessing alternative after #else", span));
                 }
-                if conditional.parent_active && !conditional.branch_taken {
-                    return Err(error(
-                        "CUDA preprocessing #elif evaluation is unsupported",
+                let needed = conditional.parent_active && !conditional.branch_taken;
+                let selected = if !needed {
+                    false
+                } else if name == "elif" {
+                    conditions::evaluate(
+                        payload,
+                        &self.definitions,
+                        &mut self.budget,
                         directive.span,
-                    ));
-                }
-                conditional.active = false;
+                    )?
+                } else {
+                    let operand = Self::operand(payload, directive.span)?;
+                    self.budget.visit(operand.spelling.len(), operand.span)?;
+                    check_predefined(&operand.spelling, operand.span)?;
+                    self.definitions.contains_key(operand.spelling.as_str()) == (name == "elifdef")
+                };
+                let conditional = self.conditionals.last_mut().unwrap();
+                conditional.active = selected;
+                conditional.branch_taken |= selected;
             }
             "else" => {
                 let conditional = self
@@ -279,6 +310,9 @@ impl Preprocessor<'_> {
                 let operand = Self::operand(payload, directive.span)?;
                 self.budget.visit(operand.spelling.len(), operand.span)?;
                 check_predefined(&operand.spelling, operand.span)?;
+                if operand.spelling == "defined" {
+                    return Err(error("defined cannot be a CUDA macro name", operand.span));
+                }
                 self.definitions.remove(operand.spelling.as_str());
             }
             _ => {
@@ -293,7 +327,11 @@ impl Preprocessor<'_> {
 
     fn operand(payload: &[RawToken], span: Span) -> Result<&RawToken, ParseError> {
         match payload {
-            &[ref operand] if operand.kind == Kind::Word => Ok(operand),
+            &[ref operand]
+                if operand.kind == Kind::Word && !conditions::is_alternative(&operand.spelling) =>
+            {
+                Ok(operand)
+            }
             _ => Err(error("expected one CUDA preprocessing macro name", span)),
         }
     }
@@ -305,6 +343,12 @@ impl Preprocessor<'_> {
         if name.kind != Kind::Word {
             return Err(error(
                 "expected ASCII CUDA preprocessing macro name",
+                name.span,
+            ));
+        }
+        if name.spelling == "defined" || conditions::is_alternative(&name.spelling) {
+            return Err(error(
+                "reserved word cannot be a CUDA macro name",
                 name.span,
             ));
         }
@@ -382,11 +426,11 @@ struct Expansion<'a> {
     disabled: Option<usize>,
 }
 
-fn expand(
-    token: &RawToken,
-    definitions: &FastHashMap<String, Definition>,
+fn expand<'a>(
+    token: &'a RawToken,
+    definitions: &'a FastHashMap<String, Definition>,
     budget: &mut Budget,
-    output: &mut PreparedSource,
+    emit: &mut impl FnMut(ExpandedToken<'a>) -> Result<(), ParseError>,
 ) -> Result<(), ParseError> {
     let mut pending = Vec::new();
     pending.push(Expansion {
@@ -426,15 +470,21 @@ fn expand(
                 }
             }
         }
-        if output.tokens.len() == MAX_TOKENS {
-            return Err(error(
-                "CUDA preprocessing output token limit exceeded",
-                token.span,
-            ));
-        }
-        let start = output.spelling.len();
+        budget.emit(token.span)?;
+        emit(ExpandedToken {
+            kind: current.kind,
+            spelling: &current.spelling,
+            span: token.span,
+        })?;
+    }
+    Ok(())
+}
+
+impl PreparedSource {
+    fn push(&mut self, token: ExpandedToken<'_>) -> Result<(), ParseError> {
+        let start = self.spelling.len();
         let end = start
-            .checked_add(current.spelling.len())
+            .checked_add(token.spelling.len())
             .filter(|&end| end <= MAX_BYTES)
             .ok_or_else(|| {
                 error(
@@ -442,11 +492,11 @@ fn expand(
                     token.span,
                 )
             })?;
-        output.spelling.push_str(&current.spelling);
-        output.tokens.push(PreparedToken {
+        self.spelling.push_str(token.spelling);
+        self.tokens.push(PreparedToken {
             spelling: start..end,
             span: token.span,
         });
+        Ok(())
     }
-    Ok(())
 }
