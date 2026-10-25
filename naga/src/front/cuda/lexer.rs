@@ -2,7 +2,7 @@ use alloc::{format, string::String};
 
 use crate::{front::consume_any, Span};
 
-use super::ParseError;
+use super::{preprocess::PreparedSource, ParseError};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Token<'a> {
@@ -23,12 +23,22 @@ pub(super) enum Token<'a> {
 
 pub(super) type TokenSpan<'a> = (Token<'a>, Span);
 
+#[derive(Clone, Copy)]
+struct ScannedToken<'a> {
+    token: TokenSpan<'a>,
+    input: &'a str,
+    prepared_index: usize,
+    end_offset: usize,
+}
+
 #[derive(Clone)]
 pub(super) struct Lexer<'a> {
     source: &'a str,
     input: &'a str,
+    prepared: Option<&'a PreparedSource>,
+    prepared_index: usize,
     last_end_offset: usize,
-    lookahead: Option<(TokenSpan<'a>, &'a str)>,
+    lookahead: Option<ScannedToken<'a>>,
 }
 
 impl<'a> Lexer<'a> {
@@ -37,22 +47,63 @@ impl<'a> Lexer<'a> {
         Ok(Self {
             source,
             input: source,
+            prepared: None,
+            prepared_index: 0,
             last_end_offset: 0,
             lookahead: None,
         })
     }
 
+    pub(super) const fn from_prepared(source: &'a str, prepared: &'a PreparedSource) -> Self {
+        Self {
+            source,
+            input: source,
+            prepared: Some(prepared),
+            prepared_index: 0,
+            last_end_offset: 0,
+            lookahead: None,
+        }
+    }
+
     pub(super) fn next(&mut self) -> Result<TokenSpan<'a>, ParseError> {
-        let (token, rest) = match self.lookahead.take() {
+        let scanned = match self.lookahead.take() {
             Some(next) => next,
             None => self.scan()?,
         };
-        self.input = rest;
-        self.last_end_offset = self.source.len() - rest.len();
-        Ok(token)
+        self.input = scanned.input;
+        self.prepared_index = scanned.prepared_index;
+        self.last_end_offset = scanned.end_offset;
+        Ok(scanned.token)
     }
 
-    fn scan(&self) -> Result<(TokenSpan<'a>, &'a str), ParseError> {
+    fn scan(&self) -> Result<ScannedToken<'a>, ParseError> {
+        if let Some(prepared) = self.prepared {
+            let Some(raw) = prepared.tokens.get(self.prepared_index) else {
+                return Ok(ScannedToken {
+                    token: (Token::End, Span::from(self.source.len()..self.source.len())),
+                    input: self.input,
+                    prepared_index: self.prepared_index,
+                    end_offset: self.source.len(),
+                });
+            };
+            let spelling = &prepared.spelling[raw.spelling.clone()];
+            let (token, rest) = consume_token(spelling).map_err(|mut error| {
+                error.span = raw.span;
+                error
+            })?;
+            if !rest.is_empty() || matches!(token, Token::Trivia | Token::End) {
+                return Err(ParseError {
+                    message: String::from("unsupported CUDA preprocessing token"),
+                    span: raw.span,
+                });
+            }
+            return Ok(ScannedToken {
+                token: (token, raw.span),
+                input: self.input,
+                prepared_index: self.prepared_index + 1,
+                end_offset: raw.span.to_range().unwrap().end,
+            });
+        }
         let mut input = self.input;
         loop {
             let offset = self.source.len() - input.len();
@@ -65,19 +116,29 @@ impl<'a> Lexer<'a> {
                 input = rest;
                 continue;
             }
-            return Ok((
-                (token, Span::from(offset..self.source.len() - rest.len())),
-                rest,
-            ));
+            let end_offset = self.source.len() - rest.len();
+            return Ok(ScannedToken {
+                token: (token, Span::from(offset..end_offset)),
+                input: rest,
+                prepared_index: self.prepared_index,
+                end_offset,
+            });
         }
     }
 
     pub(super) fn peek(&mut self) -> Result<TokenSpan<'a>, ParseError> {
         let input = self.input;
+        let prepared_index = self.prepared_index;
         let last_end_offset = self.last_end_offset;
         let token = self.next()?;
-        self.lookahead = Some((token, self.input));
+        self.lookahead = Some(ScannedToken {
+            token,
+            input: self.input,
+            prepared_index: self.prepared_index,
+            end_offset: self.last_end_offset,
+        });
         self.input = input;
+        self.prepared_index = prepared_index;
         self.last_end_offset = last_end_offset;
         Ok(token)
     }

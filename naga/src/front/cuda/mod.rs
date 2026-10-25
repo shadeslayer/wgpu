@@ -5,6 +5,7 @@ use alloc::string::String;
 mod lexer;
 mod number;
 mod parser;
+mod preprocess;
 
 /// Options supplied by the CUDA kernel's launch configuration.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -50,5 +51,10 @@ pub fn parse_str(source: &str, options: &Options) -> Result<crate::Module, Parse
             span: crate::Span::UNDEFINED,
         });
     }
-    parser::Parser::new(lexer::Lexer::new(source)?, options).parse()
+    let prepared = preprocess::prepare(source)?;
+    let lexer = match prepared.as_ref() {
+        Some(prepared) => lexer::Lexer::from_prepared(source, prepared),
+        None => lexer::Lexer::new(source)?,
+    };
+    parser::Parser::new(lexer, options).parse()
 }

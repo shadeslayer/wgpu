@@ -622,8 +622,32 @@ and checks a `do`/`while` condition before the next iteration. A `for` initializ
 is scoped to the loop. Nested blocks support local shadowing. Statements after a
 guaranteed jump are still checked for source errors and then omitted.
 Line and block comments are accepted. Expression nesting, conditional reference
-nesting, and generated expression depth are bounded; line continuations and
-trigraphs are unsupported.
+nesting, and generated expression depth are bounded. Trigraphs are unsupported.
+
+Source preprocessing supports object-like `#define`, `#undef`, `#ifdef`,
+`#ifndef`, `#else`, and `#endif`. Macro names use ASCII identifiers. Definitions
+follow source order, and replacement tokens are expanded when used. Empty
+replacements and nested conditional groups are accepted. Redefinitions must
+preserve token spelling and internal whitespace
+separation. Expansion preserves token boundaries and reports language errors at
+the original invocation.
+
+An initial UTF-8 BOM and LF, CRLF, or CR line endings are accepted. Backslash
+line continuations are joined before recognizing comments and tokens, including
+optional whitespace before the newline. Quoted and raw literals are opaque
+during preprocessing. String and character values remain unsupported.
+Raw literal bodies preserve backslash-newline pairs, following C++23
+[translation phases](https://eel.is/c++draft/lex.phases).
+
+Inactive groups skip ordinary directives and conditional expressions while
+checking conditional structure. An eligible active `#if` or `#elif` expression
+is unsupported. Function-like macros, token pasting, includes, predefined macro
+providers, universal character names, and digraphs are also unsupported. No host
+or device macros are supplied implicitly; source may explicitly define
+compiler-specific names such as `__CUDACC__`. Active use, query, definition, or
+removal of standard predefined names such as `__LINE__` and `__cplusplus`
+produces a diagnostic. Preparation bounds source size,
+conditional and expansion depth, stored and emitted tokens, and expansion work.
 
 Integer literals support decimal, leading-zero octal, `0x`/`0X` hexadecimal, and
 `0b`/`0B` binary notation. Apostrophes may separate digits, as in `1'000` or
@@ -687,7 +711,7 @@ without returns may precede a barrier; returns after the last barrier are
 allowed. Synchronization does not extend across workgroups.
 
 Unsupported syntax produces a parse error with a source span. This includes
-preprocessor directives and includes, host code and launch syntax,
+includes and other preprocessing forms outside the subset above, host code and launch syntax,
 general pointer operations,
 dynamic shared memory, atomics, other synchronization primitives, templates,
 double precision, and inline PTX. No CUDA runtime ABI or NVIDIA device code is

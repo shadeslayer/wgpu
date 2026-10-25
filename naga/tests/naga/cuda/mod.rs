@@ -33,6 +33,7 @@ mod operator_addition;
 mod operator_functions;
 mod overloads;
 mod parameters;
+mod preprocessing;
 mod prototypes;
 mod reference_categories;
 mod shared;

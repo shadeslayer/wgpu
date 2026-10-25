@@ -21,7 +21,7 @@ fn cuda_reports_the_first_encountered_syntax_error() {
 #[test]
 fn cuda_source_phase_checks_precede_scanning() {
     for (source, expected) in [
-        ("__global__ int wrong() {} // hidden \\\n", "\\\n"),
+        ("__global__ int wrong() {} // hidden \\\n", "int"),
         ("__global__ int wrong() {} /* ??/ */", "??/"),
     ] {
         let error = parse_str(source, &Options::default()).unwrap_err();

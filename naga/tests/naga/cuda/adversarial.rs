@@ -60,14 +60,20 @@ fn cuda_unrecognized_utf8_has_a_valid_source_span() {
 }
 
 #[test]
-fn cuda_rejects_line_splices_before_comment_handling() {
+fn cuda_applies_line_splices_before_comment_handling_and_rejects_trigraphs() {
     for ending in ["\n", "\r\n"] {
-        for continuation in ["\\", "??/"] {
-            let source = format!(
-                "__global__ void hidden(int *out) {{ // hidden {continuation}{ending} out[0] = 1;\n }}"
-            );
-            assert!(parse_str(&source, &Options::default()).is_err());
-        }
+        let source = format!(
+            "__global__ void hidden(int *out) {{ // hidden \\{ending} out[0] = missing;\n }}"
+        );
+        let module = super::helpers::validate(&source).0;
+        assert!(!module.entry_points[0]
+            .function
+            .body
+            .iter()
+            .any(|statement| matches!(statement, naga::Statement::Store { .. })));
+        let source =
+            format!("__global__ void hidden(int *out) {{ // hidden ??/{ending} out[0] = 1;\n }}");
+        assert!(parse_str(&source, &Options::default()).is_err());
     }
 }
 
