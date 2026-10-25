@@ -6,6 +6,7 @@ use crate::{FastHashMap, Span};
 use super::ParseError;
 
 mod conditions;
+mod expansion;
 mod lex;
 mod literal;
 
@@ -86,6 +87,15 @@ impl Budget {
     fn emit(&mut self, span: Span) -> Result<(), ParseError> {
         charge(&mut self.emitted_tokens, 1, MAX_TOKENS, span)
     }
+
+    fn push<T>(&mut self, tokens: &mut Vec<T>, token: T, span: Span) -> Result<(), ParseError> {
+        if tokens.len() == MAX_TOKENS {
+            return Err(error("CUDA preprocessing token limit exceeded", span));
+        }
+        self.step(span)?;
+        tokens.push(token);
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -97,7 +107,52 @@ struct ExpandedToken<'a> {
 
 struct Definition {
     identifier: usize,
+    parameters: Option<Vec<String>>,
     replacement: Vec<RawToken>,
+    parameter_slots: Vec<Option<usize>>,
+}
+
+impl Definition {
+    fn compatible(
+        &self,
+        parameters: &Option<Vec<&str>>,
+        replacement: &[RawToken],
+        budget: &mut Budget,
+        span: Span,
+    ) -> Result<bool, ParseError> {
+        match (&self.parameters, parameters) {
+            (&None, &None) => {}
+            (&Some(ref previous), &Some(ref current)) => {
+                if previous.len() != current.len() {
+                    return Ok(false);
+                }
+                for (left, right) in previous.iter().zip(current) {
+                    budget.step(span)?;
+                    budget.visit(left.len(), span)?;
+                    budget.visit(right.len(), span)?;
+                    if left.as_str() != *right {
+                        return Ok(false);
+                    }
+                }
+            }
+            (&None, &Some(_)) | (&Some(_), &None) => return Ok(false),
+        }
+        if self.replacement.len() != replacement.len() {
+            return Ok(false);
+        }
+        for (index, (left, right)) in self.replacement.iter().zip(replacement).enumerate() {
+            budget.step(span)?;
+            budget.visit(left.spelling.len(), span)?;
+            budget.visit(right.spelling.len(), span)?;
+            if left.kind != right.kind
+                || left.spelling != right.spelling
+                || (index != 0 && left.separated != right.separated)
+            {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
 }
 
 struct Conditional {
@@ -113,6 +168,7 @@ struct Preprocessor<'a> {
     definitions: FastHashMap<String, Definition>,
     next_identifier: usize,
     conditionals: Vec<Conditional>,
+    text: Vec<RawToken>,
     budget: Budget,
     output: PreparedSource,
 }
@@ -163,6 +219,7 @@ pub(super) fn prepare(source: &str) -> Result<Option<PreparedSource>, ParseError
         definitions: FastHashMap::default(),
         next_identifier: 0,
         conditionals: Vec::new(),
+        text: Vec::new(),
         budget: Budget::default(),
         output: PreparedSource::default(),
     };
@@ -171,17 +228,16 @@ pub(super) fn prepare(source: &str) -> Result<Option<PreparedSource>, ParseError
             continue;
         }
         if token.line_start && token.spelling == "#" {
+            preprocessor.flush(true)?;
             preprocessor.directive(token.span)?;
         } else if preprocessor.active() {
-            let output = &mut preprocessor.output;
-            expand(
-                &token,
-                &preprocessor.definitions,
-                &mut preprocessor.budget,
-                &mut |token| output.push(token),
-            )?;
+            let span = token.span;
+            preprocessor
+                .budget
+                .push(&mut preprocessor.text, token, span)?;
         }
     }
+    preprocessor.flush(false)?;
     if let Some(conditional) = preprocessor.conditionals.last() {
         return Err(error(
             "unterminated CUDA preprocessing conditional",
@@ -192,6 +248,20 @@ pub(super) fn prepare(source: &str) -> Result<Option<PreparedSource>, ParseError
 }
 
 impl Preprocessor<'_> {
+    fn flush(&mut self, directive: bool) -> Result<(), ParseError> {
+        let output = &mut self.output;
+        expansion::expand(
+            &self.text,
+            &self.definitions,
+            &mut self.budget,
+            expansion::Mode::Shader,
+            directive,
+            &mut |token| output.push(token),
+        )?;
+        self.text.clear();
+        Ok(())
+    }
+
     fn active(&self) -> bool {
         self.conditionals
             .last()
@@ -354,17 +424,66 @@ impl Preprocessor<'_> {
         }
         self.budget.visit(name.spelling.len(), name.span)?;
         check_predefined(&name.spelling, name.span)?;
-        if let Some(first) = replacement.first() {
-            if !first.separated {
+        let mut parameters = None;
+        let mut parameter_indices = FastHashMap::default();
+        let mut replacement = replacement;
+        if let Some(first) = replacement.first().filter(|first| !first.separated) {
+            if first.spelling != "(" {
                 return Err(error(
-                    if first.spelling == "(" {
-                        "CUDA function-like macros are unsupported"
-                    } else {
-                        "expected whitespace before CUDA macro replacement"
-                    },
+                    "expected whitespace before CUDA macro replacement",
                     first.span,
                 ));
             }
+            let mut names = Vec::new();
+            let mut index = 1;
+            if replacement
+                .get(index)
+                .is_some_and(|token| token.spelling == ")")
+            {
+                index += 1;
+            } else {
+                loop {
+                    let parameter = replacement.get(index).ok_or_else(|| {
+                        error("unterminated CUDA macro parameter list", name.span)
+                    })?;
+                    self.budget.step(parameter.span)?;
+                    self.budget
+                        .visit(parameter.spelling.len(), parameter.span)?;
+                    if parameter.kind != Kind::Word
+                        || conditions::is_alternative(&parameter.spelling)
+                        || matches!(parameter.spelling.as_str(), "__VA_ARGS__" | "__VA_OPT__")
+                    {
+                        return Err(error("unsupported CUDA macro parameter", parameter.span));
+                    }
+                    if parameter_indices
+                        .insert(parameter.spelling.as_str(), names.len())
+                        .is_some()
+                    {
+                        return Err(error("duplicate CUDA macro parameter", parameter.span));
+                    }
+                    self.budget
+                        .push(&mut names, parameter.spelling.as_str(), parameter.span)?;
+                    index += 1;
+                    match replacement.get(index) {
+                        Some(token) if token.spelling == ")" => {
+                            index += 1;
+                            break;
+                        }
+                        Some(token) if token.spelling == "," => index += 1,
+                        Some(token) => {
+                            return Err(error(
+                                "expected comma or closing CUDA macro parenthesis",
+                                token.span,
+                            ))
+                        }
+                        None => {
+                            return Err(error("unterminated CUDA macro parameter list", name.span))
+                        }
+                    }
+                }
+            }
+            parameters = Some(names);
+            replacement = &replacement[index..];
         }
         if let Some(token) = replacement.iter().find(|token| token.spelling == "##") {
             return Err(error(
@@ -372,22 +491,30 @@ impl Preprocessor<'_> {
                 token.span,
             ));
         }
+        if parameters.is_some() {
+            if let Some(token) = replacement.iter().find(|token| {
+                token.spelling == "#"
+                    || (token.kind == Kind::Word
+                        && matches!(token.spelling.as_str(), "__VA_ARGS__" | "__VA_OPT__"))
+            }) {
+                return Err(error(
+                    "CUDA macro stringization and variadics are unsupported",
+                    token.span,
+                ));
+            }
+        }
+        let mut parameter_slots = Vec::new();
         for token in replacement {
             self.budget.visit(token.spelling.len(), token.span)?;
+            let slot = if token.kind == Kind::Word {
+                parameter_indices.get(token.spelling.as_str()).copied()
+            } else {
+                None
+            };
+            self.budget.push(&mut parameter_slots, slot, token.span)?;
         }
         if let Some(previous) = self.definitions.get(name.spelling.as_str()) {
-            let compatible = previous.replacement.len() == replacement.len()
-                && previous
-                    .replacement
-                    .iter()
-                    .zip(replacement)
-                    .enumerate()
-                    .all(|(index, (left, right))| {
-                        left.kind == right.kind
-                            && left.spelling == right.spelling
-                            && (index == 0 || left.separated == right.separated)
-                    });
-            if !compatible {
+            if !previous.compatible(&parameters, replacement, &mut self.budget, name.span)? {
                 return Err(error("conflicting CUDA macro redefinition", name.span));
             }
             return Ok(());
@@ -400,84 +527,40 @@ impl Preprocessor<'_> {
         }
         charge(
             &mut self.budget.replacement_tokens,
-            replacement.len(),
+            replacement.len() + parameters.as_ref().map_or(0, Vec::len),
             MAX_TOKENS,
             name.span,
         )?;
         self.budget.own(name.spelling.len(), name.span)?;
         for token in replacement {
+            self.budget.visit(token.spelling.len(), token.span)?;
             self.budget.own(token.spelling.len(), token.span)?;
         }
+        let parameters = if let Some(names) = parameters {
+            let mut owned = Vec::new();
+            for parameter in names {
+                self.budget.visit(parameter.len(), name.span)?;
+                self.budget.own(parameter.len(), name.span)?;
+                self.budget
+                    .push(&mut owned, String::from(parameter), name.span)?;
+            }
+            Some(owned)
+        } else {
+            None
+        };
+        self.budget.visit(name.spelling.len(), name.span)?;
         self.definitions.insert(
             name.spelling.clone(),
             Definition {
                 identifier: self.next_identifier,
+                parameters,
                 replacement: replacement.to_vec(),
+                parameter_slots,
             },
         );
         self.next_identifier += 1;
         Ok(())
     }
-}
-
-struct Expansion<'a> {
-    tokens: &'a [RawToken],
-    next: usize,
-    disabled: Option<usize>,
-}
-
-fn expand<'a>(
-    token: &'a RawToken,
-    definitions: &'a FastHashMap<String, Definition>,
-    budget: &mut Budget,
-    emit: &mut impl FnMut(ExpandedToken<'a>) -> Result<(), ParseError>,
-) -> Result<(), ParseError> {
-    let mut pending = Vec::new();
-    pending.push(Expansion {
-        tokens: core::slice::from_ref(token),
-        next: 0,
-        disabled: None,
-    });
-    while let Some(expansion) = pending.last_mut() {
-        budget.step(token.span)?;
-        let tokens = expansion.tokens;
-        let next = expansion.next;
-        expansion.next += 1;
-        let Some(current) = tokens.get(next) else {
-            pending.pop();
-            continue;
-        };
-        budget.visit(current.spelling.len(), token.span)?;
-        if current.kind == Kind::Word {
-            check_predefined(&current.spelling, token.span)?;
-            if let Some(definition) = definitions.get(current.spelling.as_str()) {
-                if !pending
-                    .iter()
-                    .any(|frame| frame.disabled == Some(definition.identifier))
-                {
-                    if pending.len() > MAX_DEPTH {
-                        return Err(error(
-                            "CUDA macro expansion depth limit exceeded",
-                            token.span,
-                        ));
-                    }
-                    pending.push(Expansion {
-                        tokens: &definition.replacement,
-                        next: 0,
-                        disabled: Some(definition.identifier),
-                    });
-                    continue;
-                }
-            }
-        }
-        budget.emit(token.span)?;
-        emit(ExpandedToken {
-            kind: current.kind,
-            spelling: &current.spelling,
-            span: token.span,
-        })?;
-    }
-    Ok(())
 }
 
 impl PreparedSource {

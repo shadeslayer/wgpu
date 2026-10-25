@@ -624,14 +624,27 @@ guaranteed jump are still checked for source errors and then omitted.
 Line and block comments are accepted. Expression nesting, conditional reference
 nesting, and generated expression depth are bounded. Trigraphs are unsupported.
 
-Source preprocessing supports object-like `#define`, `#undef`, and conditional
-groups using `#if`, `#elif`, `#ifdef`, `#ifndef`, `#elifdef`, `#elifndef`, `#else`,
-and `#endif`. Macro names use ASCII identifiers; `defined` and alternative
-operator spellings cannot be macro names. Definitions follow source order, and
-replacement tokens are expanded when used. Empty
-replacements and nested conditional groups are accepted. Redefinitions must
-preserve token spelling and internal whitespace separation. Expansion preserves
-token boundaries and reports language errors at the original invocation.
+Source preprocessing supports object-like and fixed-arity function-like
+`#define`, `#undef`, and conditional groups using `#if`, `#elif`, `#ifdef`,
+`#ifndef`, `#elifdef`, `#elifndef`, `#else`, and `#endif`. Macro names use ASCII
+identifiers; `defined` and alternative operator spellings cannot be macro names.
+Definitions follow source order, and replacement tokens are expanded when used.
+Empty replacements and nested conditional groups are accepted. Redefinitions
+must preserve the macro kind, ordered parameter names, replacement token spelling,
+and internal replacement whitespace separation. Expansion preserves token
+boundaries and reports language errors at the original invocation.
+
+Function-like macros follow C++23
+[macro replacement](https://timsong-cpp.github.io/cppwp/n4950/cpp.replace).
+Their definitions require an adjacent `(` after the name and accept zero or more
+unique parameters. Invocations may have whitespace, comments, or ordinary
+newlines before `(`. Arguments are collected before expansion; only parentheses
+protect commas within an argument. Parameters substitute expanded tokens
+textually, so repeated parameters can duplicate evaluation and unused parameters
+discard their arguments. Replacement does not add parentheses. Replacement tails
+can form further invocations with following source tokens. A directive between
+the name and `(` leaves the name unexpanded; directives inside an open invocation
+are unsupported.
 
 An initial UTF-8 BOM and LF, CRLF, or CR line endings are accepted. Backslash
 line continuations are joined before recognizing comments and tokens, including
@@ -654,18 +667,20 @@ diagnostics when evaluated. Logical operators and `?:` skip unselected value
 operations while still checking their syntax and literal types.
 
 `defined(NAME)` and `defined NAME` query a macro name without expanding its
-replacement. Other remaining names become zero, except `true` and `false`.
+replacement. A `defined` token returned by macro expansion is unsupported.
+Unused function-macro arguments are not expanded or interpreted as conditions.
+Other remaining names become zero, except `true` and `false`.
 Ordinary single ASCII character constants and simple, octal, or hexadecimal
 escapes with values in `0..=127` are accepted in conditions. Other character
 forms, floating constants, casts, calls, and assignments remain unsupported.
 Only the first selected group is processed. Inactive groups skip ordinary
 directives and unevaluated conditions while checking conditional structure.
 
-Function-like macros, token pasting, includes, predefined macro providers,
-universal character names, and digraphs remain unsupported. No host
+Variadic macros, stringization, token pasting, includes, predefined macro
+providers, universal character names, and digraphs remain unsupported. No host
 or device macros are supplied implicitly; source may explicitly define
-compiler-specific names such as `__CUDACC__`. Active use, query, definition, or
-removal of standard predefined names such as `__LINE__`, `__cplusplus`,
+compiler-specific names such as `__CUDACC__`. Needed provider use, query,
+definition, or removal of standard predefined names such as `__LINE__`, `__cplusplus`,
 `__has_include`, and `__has_cpp_attribute` produces a diagnostic, including
 inside a short-circuited expression. Preparation bounds source size, condition
 nesting, expansion depth, stored and emitted tokens, and expansion work.

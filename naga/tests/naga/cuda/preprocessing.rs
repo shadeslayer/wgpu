@@ -220,8 +220,11 @@ fn cuda_preprocessing_evaluates_only_eligible_if_and_elif_conditions() {
 
 #[test]
 fn cuda_preprocessing_reports_active_deferred_directives_and_macro_features() {
-    for directive in [
+    validate(&kernel(
         "#define FUNCTION(value) value",
+        "out[0] = FUNCTION(7u);",
+    ));
+    for directive in [
         "#define FUNCTION(...) __VA_ARGS__",
         "#define PASTE left ## right",
         "#include <cuda_runtime.h>",

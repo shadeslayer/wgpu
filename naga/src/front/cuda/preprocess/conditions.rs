@@ -3,7 +3,7 @@ use alloc::{string::String, vec::Vec};
 use crate::{BinaryOperator, FastHashMap, Span, UnaryOperator};
 
 use super::{
-    check_predefined, error, expand,
+    error, expansion,
     lex::{Kind, RawToken},
     literal::{self, Value},
     Budget, Definition, ExpandedToken, ParseError, MAX_DEPTH,
@@ -26,101 +26,24 @@ pub(super) fn is_alternative(name: &str) -> bool {
     )
 }
 
-struct Query {
-    start: usize,
-    end: usize,
-    value: bool,
-    span: Span,
-}
-
-fn queries(
-    tokens: &[RawToken],
-    definitions: &FastHashMap<String, Definition>,
-    budget: &mut Budget,
-) -> Result<Vec<Query>, ParseError> {
-    let mut queries = Vec::new();
-    let mut index = 0;
-    while let Some(token) = tokens.get(index) {
-        budget.step(token.span)?;
-        if token.kind != Kind::Word || token.spelling != "defined" {
-            index += 1;
-            continue;
-        }
-        let parenthesized = tokens
-            .get(index + 1)
-            .is_some_and(|next| next.spelling == "(");
-        let operand_index = index + if parenthesized { 2 } else { 1 };
-        let operand = tokens.get(operand_index).ok_or_else(|| {
-            error(
-                "expected preprocessing macro name after defined",
-                token.span,
-            )
-        })?;
-        if operand.kind != Kind::Word || is_alternative(&operand.spelling) {
-            return Err(error(
-                "expected preprocessing macro name after defined",
-                operand.span,
-            ));
-        }
-        let end = operand_index + if parenthesized { 2 } else { 1 };
-        let last = if parenthesized {
-            tokens
-                .get(operand_index + 1)
-                .filter(|next| next.spelling == ")")
-                .ok_or_else(|| error("expected closing parenthesis after defined", token.span))?
-        } else {
-            operand
-        };
-        budget.visit(operand.spelling.len(), operand.span)?;
-        check_predefined(&operand.spelling, operand.span)?;
-        queries.push(Query {
-            start: index,
-            end,
-            value: definitions.contains_key(operand.spelling.as_str()),
-            span: token.span.until(&last.span),
-        });
-        index = end;
-    }
-    Ok(queries)
-}
-
 pub(super) fn evaluate<'a>(
     tokens: &'a [RawToken],
     definitions: &'a FastHashMap<String, Definition>,
     budget: &mut Budget,
     span: Span,
 ) -> Result<bool, ParseError> {
-    let queries = queries(tokens, definitions, budget)?;
     let mut expanded = Vec::new();
-    let mut query_index = 0;
-    let mut index = 0;
-    while let Some(token) = tokens.get(index) {
-        if let Some(query) = queries
-            .get(query_index)
-            .filter(|query| query.start == index)
-        {
-            budget.emit(query.span)?;
-            expanded.push(ExpandedToken {
-                kind: Kind::Number,
-                spelling: if query.value { "1" } else { "0" },
-                span: query.span,
-            });
-            index = query.end;
-            query_index += 1;
-        } else {
-            expand(token, definitions, budget, &mut |token| {
-                if token.kind == Kind::Word && token.spelling == "defined" {
-                    return Err(error(
-                        "macro expansion producing defined is unsupported",
-                        token.span,
-                    ));
-                }
-                expanded.push(token);
-                Ok(())
-            })?;
-            index += 1;
-        }
-    }
+    expansion::expand(
+        tokens,
+        definitions,
+        budget,
+        expansion::Mode::Condition,
+        false,
+        &mut |token| {
+            expanded.push(token);
+            Ok(())
+        },
+    )?;
     let mut parser = Parser {
         tokens: &expanded,
         next: 0,
