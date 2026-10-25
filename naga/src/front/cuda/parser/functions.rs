@@ -1,5 +1,6 @@
 use super::*;
 
+use super::function_declarations::Inlining;
 use super::types::VECTOR_TYPES;
 use crate::MathFunction;
 
@@ -140,6 +141,9 @@ struct FunctionHeader<'a> {
     result_span: Span,
     name: &'a str,
     name_span: Span,
+    has_host: bool,
+    is_static: bool,
+    inlining: Option<Inlining>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -237,7 +241,7 @@ impl<'a> Parser<'a> {
         let mut host_span = None;
         let mut result = None;
         let mut result_span = None;
-        let mut inline = false;
+        let mut inlining = None;
         let mut seen_static = false;
         let mut cuda_inline_span = None;
         let mut explicit_const = false;
@@ -247,13 +251,13 @@ impl<'a> Parser<'a> {
             let token = self.lexer.peek()?;
             match token.0 {
                 Token::Word("inline") => {
-                    if inline {
+                    if inlining == Some(Inlining::Inline) {
                         return self.fail("duplicate inline specifier");
                     }
                     if cuda_inline_span.is_some() {
                         return self.fail("incompatible inlining specifiers");
                     }
-                    inline = true;
+                    inlining = Some(Inlining::Inline);
                 }
                 Token::Word("static") => {
                     if extern_c {
@@ -265,10 +269,15 @@ impl<'a> Parser<'a> {
                     seen_static = true;
                 }
                 Token::Word("__forceinline__" | "__noinline__") => {
-                    if inline || cuda_inline_span.is_some() {
+                    if inlining.is_some() {
                         return self.fail("duplicate or incompatible inlining specifiers");
                     }
                     cuda_inline_span = Some(token.1);
+                    inlining = Some(if token.0 == Token::Word("__forceinline__") {
+                        Inlining::ForceInline
+                    } else {
+                        Inlining::NoInline
+                    });
                 }
                 Token::Word("__host__") => {
                     if host_span.is_some() || kind == Some(FunctionKind::Kernel) {
@@ -381,6 +390,9 @@ impl<'a> Parser<'a> {
             result_span: result_span.unwrap(),
             name,
             name_span,
+            has_host: host_span.is_some(),
+            is_static: seen_static,
+            inlining,
         })
     }
 
@@ -413,6 +425,12 @@ impl<'a> Parser<'a> {
     }
 
     fn kernel(&mut self, header: FunctionHeader<'a>) -> Result<(), ParseError> {
+        if self.kernel_context.is_some() {
+            return Err(ParseError {
+                message: String::from("only one CUDA kernel is supported"),
+                span: header.name_span,
+            });
+        }
         if !matches!(header.result, ReturnType::Void) {
             return Err(ParseError {
                 message: String::from("CUDA kernels must return void"),
@@ -423,10 +441,7 @@ impl<'a> Parser<'a> {
         self.lexer.expect_span(Token::Paren('{'))?;
         self.initialize_helper_builtins()?;
         self.block_contents()?;
-        self.function
-            .ir
-            .body
-            .extend(self.function.emitter.finish(&self.function.ir.expressions));
+        self.flush_emitter();
         barriers::check_control_flow(&self.function.ir.body, false, false)?;
         let function = core::mem::replace(
             &mut self.function,
@@ -438,11 +453,12 @@ impl<'a> Parser<'a> {
             early_depth_test: None,
             workgroup_size: self.workgroup_size,
             workgroup_size_overrides: None,
-            function: function.ir,
+            function: Function::default(),
             mesh_info: None,
             task_payload: None,
             incoming_ray_payload: None,
         });
+        self.kernel_context = Some(function);
         self.global_declarations
             .insert(header.name, GlobalDeclaration::Kernel);
         Ok(())
@@ -474,50 +490,145 @@ impl<'a> Parser<'a> {
                 span: header.name_span,
             });
         }
-        if self
-            .function_candidates(header.name)
-            .filter(|candidate| {
-                matches!(
-                    candidate,
-                    FunctionCandidate::Builtin(_)
-                        | FunctionCandidate::Bitcast { .. }
-                        | FunctionCandidate::Unary { .. }
-                        | FunctionCandidate::Sqrt
-                        | FunctionCandidate::Constructor { .. }
-                )
-            })
-            .any(|candidate| {
-                self.function.ir.arguments.len() == self.candidate_arity(candidate)
-                    && (0..self.candidate_arity(candidate)).all(|index| {
-                        self.module.compare_types(
-                            &self.candidate_type(FunctionCandidate::Current, index),
-                            &self.candidate_type(candidate, index),
-                        )
-                    })
-            })
-        {
-            return Err(ParseError {
-                message: format!("duplicate builtin definition `{}`", header.name),
-                span: header.name_span,
-            });
+        let is_prototype = self.lexer.peek()?.0 == Token::Separator(';');
+        let intrinsic = self.function_candidates(header.name).find(|&candidate| {
+            matches!(
+                candidate,
+                FunctionCandidate::Builtin(_)
+                    | FunctionCandidate::Bitcast { .. }
+                    | FunctionCandidate::Unary { .. }
+                    | FunctionCandidate::Sqrt
+                    | FunctionCandidate::Constructor { .. }
+            ) && self.function.ir.arguments.len() == self.candidate_arity(candidate)
+                && (0..self.candidate_arity(candidate)).all(|index| {
+                    self.module.compare_types(
+                        &self.candidate_type(FunctionCandidate::Current, index),
+                        &self.candidate_type(candidate, index),
+                    )
+                })
+        });
+        if let Some(candidate) = intrinsic {
+            if !is_prototype {
+                return Err(ParseError {
+                    message: format!("duplicate builtin definition `{}`", header.name),
+                    span: header.name_span,
+                });
+            }
+            let result = self.candidate_result(candidate, header.result_span);
+            if self.function.ir.result.as_ref().map(|result| result.ty) != result {
+                return Err(ParseError {
+                    message: format!("incompatible builtin result type `{}`", header.name),
+                    span: header.name_span,
+                });
+            }
+            let parameters: Vec<_> = self
+                .function
+                .ir
+                .arguments
+                .iter()
+                .map(|argument| argument.ty)
+                .collect();
+            if let Some(previous) = self
+                .intrinsic_declarations
+                .iter_mut()
+                .find(|previous| previous.name == header.name && previous.parameters == parameters)
+            {
+                function_declarations::check_redeclaration(
+                    previous.has_host,
+                    previous.is_static,
+                    previous.inlining,
+                    header.has_host,
+                    header.is_static,
+                    header.inlining,
+                    header.name_span,
+                )?;
+                previous.inlining = previous.inlining.or(header.inlining);
+            } else {
+                self.intrinsic_declarations.push(IntrinsicDeclaration {
+                    name: header.name,
+                    parameters,
+                    has_host: header.has_host,
+                    is_static: header.is_static,
+                    inlining: header.inlining,
+                });
+            }
+            self.lexer.expect_span(Token::Separator(';'))?;
+            self.function = FunctionContext::new(FunctionKind::Kernel);
+            return Ok(());
         }
-        if let Some(&GlobalDeclaration::Functions(ref functions)) =
-            self.global_declarations.get(header.name)
-        {
-            let parameters = &self.function.ir.arguments;
-            if functions.iter().any(|&function| {
-                self.module.functions[function]
-                    .arguments
-                    .iter()
-                    .map(|argument| argument.ty)
-                    .eq(parameters.iter().map(|argument| argument.ty))
-            }) {
+        let previous = match self.global_declarations.get(header.name) {
+            Some(&GlobalDeclaration::Functions(ref functions)) => {
+                functions.iter().copied().find(|&function| {
+                    self.module.functions[function]
+                        .arguments
+                        .iter()
+                        .map(|argument| argument.ty)
+                        .eq(self
+                            .function
+                            .ir
+                            .arguments
+                            .iter()
+                            .map(|argument| argument.ty))
+                })
+            }
+            _ => None,
+        };
+        if let Some(previous) = previous {
+            let declaration = self.function_declarations.get_mut(&previous).unwrap();
+            function_declarations::check_redeclaration(
+                declaration.has_host,
+                declaration.is_static,
+                declaration.inlining,
+                header.has_host,
+                header.is_static,
+                header.inlining,
+                header.name_span,
+            )?;
+            if !is_prototype && declaration.is_defined {
                 return Err(ParseError {
                     message: format!("duplicate device helper definition `{}`", header.name),
                     span: header.name_span,
                 });
             }
+            if self.module.functions[previous]
+                .result
+                .as_ref()
+                .map(|result| result.ty)
+                != self.function.ir.result.as_ref().map(|result| result.ty)
+            {
+                return Err(ParseError {
+                    message: format!("incompatible device helper result type `{}`", header.name),
+                    span: header.name_span,
+                });
+            }
+            declaration.inlining = declaration.inlining.or(header.inlining);
         }
+        if is_prototype {
+            if previous.is_none() {
+                let function = Function {
+                    name: self.function.ir.name.clone(),
+                    arguments: self.function.ir.arguments.clone(),
+                    result: self.function.ir.result.clone(),
+                    ..Function::default()
+                };
+                let handle = self.module.functions.append(function, header.name_span);
+                self.register_function(header.name, handle);
+                self.function_declarations.insert(
+                    handle,
+                    FunctionDeclaration {
+                        has_host: header.has_host,
+                        is_static: header.is_static,
+                        inlining: header.inlining,
+                        is_defined: false,
+                        calls: Vec::new(),
+                    },
+                );
+            }
+            self.lexer.expect_span(Token::Separator(';'))?;
+            self.function = FunctionContext::new(FunctionKind::Kernel);
+            return Ok(());
+        }
+        self.function.current_declaration = previous;
         self.lexer.expect_span(Token::Paren('{'))?;
         let terminated = self.block_contents()?;
         if self.function.ir.result.is_some() && !terminated {
@@ -534,16 +645,66 @@ impl<'a> Parser<'a> {
             &mut self.function,
             FunctionContext::new(FunctionKind::Kernel),
         );
-        let handle = self.module.functions.append(function.ir, header.name_span);
+        if let Some(previous) = previous {
+            self.module.functions[previous] = function.ir;
+            let declaration = self.function_declarations.get_mut(&previous).unwrap();
+            declaration.is_defined = true;
+            declaration.calls = function.calls;
+        } else {
+            let handle = self.module.functions.append(function.ir, header.name_span);
+            self.register_function(header.name, handle);
+            self.function_declarations.insert(
+                handle,
+                FunctionDeclaration {
+                    has_host: header.has_host,
+                    is_static: header.is_static,
+                    inlining: header.inlining,
+                    is_defined: true,
+                    calls: function.calls,
+                },
+            );
+        }
+        Ok(())
+    }
+
+    fn register_function(&mut self, name: &'a str, handle: Handle<Function>) {
         match *self
             .global_declarations
-            .entry(header.name)
+            .entry(name)
             .or_insert_with(|| GlobalDeclaration::Functions(Vec::new()))
         {
             GlobalDeclaration::Functions(ref mut functions) => functions.push(handle),
             _ => unreachable!(),
         }
-        Ok(())
+    }
+
+    fn candidate_result(
+        &mut self,
+        candidate: FunctionCandidate,
+        span: Span,
+    ) -> Option<Handle<Type>> {
+        let ty = match candidate {
+            FunctionCandidate::Defined(function) => {
+                return self.module.functions[function]
+                    .result
+                    .as_ref()
+                    .map(|result| result.ty)
+            }
+            FunctionCandidate::Current => {
+                return self.function.ir.result.as_ref().map(|result| result.ty)
+            }
+            FunctionCandidate::Builtin(builtin) => TypeSpecifier::Scalar(builtin.result),
+            FunctionCandidate::Bitcast { result, .. } | FunctionCandidate::Unary { result, .. } => {
+                TypeSpecifier::Scalar(result)
+            }
+            FunctionCandidate::IntegralFabs(_) => unreachable!(),
+            FunctionCandidate::Sqrt => TypeSpecifier::Scalar(Scalar::F32),
+            FunctionCandidate::Constructor { size, scalar } => {
+                TypeSpecifier::Vector { size, scalar }
+            }
+        };
+        let ty = self.lower_type(ty, span);
+        Some(self.type_handle(&ty, span))
     }
 
     pub(super) fn device_parameter(
@@ -573,7 +734,7 @@ impl<'a> Parser<'a> {
         }
         if self.function_candidates(name).next().is_none() {
             return Err(ParseError {
-                message: format!("unknown or not previously defined device helper `{name}`"),
+                message: format!("unknown or not previously declared device helper `{name}`"),
                 span,
             });
         }
@@ -778,6 +939,7 @@ impl<'a> Parser<'a> {
         let FunctionCandidate::Defined(function) = candidate else {
             unreachable!()
         };
+        self.function.calls.push(FunctionCall { function, span });
         let mut converted = Vec::with_capacity(arguments.len());
         for (index, value) in arguments.into_iter().enumerate() {
             let parameter = &self.module.functions[function].arguments[index];
@@ -966,6 +1128,7 @@ impl<'a> Parser<'a> {
         functions
             .iter()
             .copied()
+            .filter(move |&function| self.function.current_declaration != Some(function))
             .map(FunctionCandidate::Defined)
             .chain(current)
             .chain(

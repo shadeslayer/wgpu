@@ -31,6 +31,7 @@ mod multidimensional_arrays;
 mod operator_addition;
 mod overloads;
 mod parameters;
+mod prototypes;
 mod reference_categories;
 mod shared;
 mod shared_vectors;

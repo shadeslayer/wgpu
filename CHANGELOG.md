@@ -154,6 +154,7 @@ By @sagudev in [#10307](https://github.com/gfx-rs/wgpu/pull/10307).
 - Support multidimensional CUDA local and shared arrays, nested initialization, and inferred outer local bounds.
 - Support CUDA `__syncthreads()` in straight-line kernel control flow.
 - Support previously defined CUDA `__device__` helpers with scalar parameters and return values.
+- Support CUDA device helper prototypes and forward calls, including definitions after the kernel.
 - Support void CUDA device helpers, including implicit returns and discarded calls.
 - Support lazy CUDA conditional expressions, including scalar lvalue assignments and updates.
 - Reject parenthesized CUDA declarations that were incorrectly parsed as scalar casts.

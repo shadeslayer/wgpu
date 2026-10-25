@@ -30,7 +30,8 @@ Device and backend resource limits still apply.
 ## Kernel interface
 
 Each source contains one `__global__ void` kernel, optionally preceded by
-`extern "C"`, after any device helper definitions. Parameter types are `float`,
+`extern "C"`. Device helper declarations and definitions can surround the kernel.
+Parameter types are `float`,
 `int`, or `unsigned int` (`unsigned` is also accepted), either by value or as
 flat pointers. Pointer parameters also accept `float2`, `float3`, `float4`,
 `int2`, `int3`, `int4`, `uint2`, `uint3`, and `uint4`. Aliases and pointee
@@ -99,12 +100,19 @@ HLSL constants binding. Helper builtin reads do not add kernel buffer bindings.
 
 ## Device helpers
 
-`__device__` functions defined before the kernel can take `float`, `int`,
+`__device__` functions can take `float`, `int`,
 `unsigned int`, or `bool` scalars, or the vector and struct value types described below,
 and return a supported value or `void`. Helpers can use
-local declarations, arithmetic, control flow, and calls to earlier helpers:
+local declarations, arithmetic, control flow, and calls to previously declared helpers:
 
 ```cuda
+__device__ unsigned global_index();
+__device__ float scale(float, float);
+
+__global__ void apply(float *out, const float *input) {
+    unsigned i = global_index();
+    out[i] = scale(input[i], 2.0f);
+}
 __device__ unsigned global_index() {
     return blockIdx.x * blockDim.x + threadIdx.x;
 }
@@ -112,11 +120,19 @@ __device__ float scale(float value, float factor) {
     value *= factor;
     return value;
 }
-__global__ void apply(float *out, const float *input) {
-    unsigned i = global_index();
-    out[i] = scale(input[i], 2.0f);
-}
 ```
+
+Prototypes end with `;` and can omit parameter names. Compatible declarations
+can repeat before or after a definition; parameter names, aliases, and top-level
+parameter `const` do not distinguish signatures. The definition determines its
+parameter names and constness. Conflicting result types and duplicate definitions
+produce errors. These rules follow C++ [function declarations](https://eel.is/c++draft/dcl.fct).
+
+Each called helper needs a definition in the same source. An unused prototype
+does not emit a function. Missing definitions and direct or indirect recursion
+are rejected even in unused helpers or discarded source statements. A prototype
+for an existing intrinsic preserves its builtin implementation; a conflicting
+result or a source definition of the builtin signature produces an error.
 
 Helpers can read `.x`, `.y`, and `.z` of `threadIdx`, `blockIdx`, `blockDim`,
 and `gridDim`. Each component is a read-only 32-bit unsigned integer and has
@@ -125,8 +141,9 @@ comes from `Options::workgroup_size`; none of these reads is a C++ constant
 expression, including `blockDim`.
 
 Helpers may also carry `__host__`. Translation checks and emits their device
-implementation, including calls to earlier device-only helpers; the host
+implementation, including calls to previously declared device-only helpers; the host
 implementation is not checked or emitted. Host-only definitions remain unsupported.
+Repeated source declarations must agree on whether the helper also has `__host__`.
 
 The frontend evaluates arguments left to right, converts them to the parameter
 types, and copies them into per-call locals. Assignments affect only those copies;
@@ -144,19 +161,23 @@ Calls prefer exact argument types, then promotion from `bool` to `int`, then
 other scalar conversions. The selected overload must be no worse for every
 argument and better for at least one; otherwise the call is ambiguous.
 Return types, aliases, and top-level parameter `const` do not distinguish
-signatures. Calls use the overloads visible at their definition point, and a
-call selecting the current helper is rejected as recursion. These rules follow
+signatures. Each call uses only the overloads visible at that point in the source;
+later declarations do not change its selection. These rules follow
 C++ [conversion ranking](https://eel.is/c++draft/over.ics.rank) and
 [overload selection](https://eel.is/c++draft/over.match.best.general).
 
-Helpers have no resource bindings. Prototypes, recursion, forward
-calls, pointers, references, shared storage, and barriers remain unsupported.
+Helpers have no resource bindings. Pointer and reference parameters, shared
+storage, and barriers in helper bodies remain unsupported. Kernel prototypes
+remain unsupported.
 
 Both helpers and kernels accept `static` and standard `inline` in the function
 header. `static` cannot be combined with the direct `extern "C"` prefix.
+A helper first declared `static` retains that linkage when later declarations
+omit the specifier. Adding `static` after an external declaration is rejected.
 Device helpers, including dual-qualified helpers, also accept `__forceinline__`
 or `__noinline__`. These CUDA specifiers cannot be combined with each other or
-with standard `inline`, and cannot be applied to kernels. Their optimization
+with standard `inline`, including across compatible helper redeclarations,
+and cannot be applied to kernels. Their optimization
 behavior depends on the target backend and compiler; forced inlining or preserved
 calls are not guaranteed. Functions and calls use the existing Naga lowering.
 These constraints follow NVIDIA's [inlining rules](https://docs.nvidia.com/cuda/archive/13.0.0/cuda-c-programming-guide/index.html#noinline-and-forceinline)
@@ -380,7 +401,7 @@ __device__ float2 operator+(float2 left, float2 right) {
 }
 ```
 
-Both `first + second` and `operator+(first, second)` select from definitions
+Both `first + second` and `operator+(first, second)` select from declarations
 visible before the call, using the existing helper overload and conversion
 rules. Scalar-only `+` expressions retain built-in arithmetic. Operators can
 return a supported scalar, vector, or struct value, or `void`; void results can only

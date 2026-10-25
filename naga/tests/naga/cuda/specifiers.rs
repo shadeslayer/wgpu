@@ -357,7 +357,6 @@ fn cuda_function_specifiers_preserve_unsupported_signatures_and_bodies() {
     for source in [
         "static __host__ int helper() { return 1; } __global__ void kernel() {}",
         "__host__ __forceinline__ int helper() { return 1; } __global__ void kernel() {}",
-        "static __device__ int helper(int value); __global__ void kernel() {}",
         "static __device__ int helper(int *value) { return value[0]; } __global__ void kernel() {}",
         "static __device__ int *helper(int value) { return value; } __global__ void kernel() {}",
         "__device__ __forceinline__ int helper(int value) { return helper(value); } __global__ void kernel() {}",
@@ -368,6 +367,7 @@ fn cuda_function_specifiers_preserve_unsupported_signatures_and_bodies() {
     ] {
         rejected(source);
     }
+    validate("static __device__ int helper(int value); __global__ void kernel() {}");
     rejected_at(
         "/* λ */ static __host__ int helper() { return 1; } __global__ void kernel() {}",
         "__host__",
@@ -380,12 +380,12 @@ fn cuda_function_specifiers_keep_sole_kernel_and_complete_source_checks() {
     for source in [
         "static __device__ int helper() { return 1; }",
         "static __global__ void first() {} static __global__ void second() {}",
-        "static __global__ void kernel() {} static __device__ int helper() { return 1; }",
     ] {
         rejected(source);
     }
     rejected_at("static __global__ void kernel() {} /* 漢 */ @", "@", 0);
     validate("static __device__ __noinline__ int helper() { return 1; } __global__ void kernel() { return; { helper(); } }");
+    validate("static __global__ void kernel() {} static __device__ int helper() { return 1; }");
 }
 
 #[test]

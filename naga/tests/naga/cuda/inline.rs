@@ -378,7 +378,6 @@ fn cuda_inline_does_not_enable_other_function_directives_or_signatures() {
     for source in [
         "__device__ inline __forceinline__ int helper() { return 1; } __global__ void kernel() {}",
         "__device__ __inline__ int helper() { return 1; } __global__ void kernel() {}",
-        "__device__ inline int helper(int value); __global__ void kernel() {}",
         "__device__ inline int first() { return later(); } __device__ inline int later() { return 1; } __global__ void kernel() {}",
         "__device__ inline int helper(int value) { return helper(value); } __global__ void kernel() {}",
         "__device__ inline int helper(int value) { return value; } __device__ inline int helper(int other) { return other; } __global__ void kernel() {}",
@@ -387,6 +386,7 @@ fn cuda_inline_does_not_enable_other_function_directives_or_signatures() {
         "__device__ inline int helper() { return threadIdx.w; } __global__ void kernel() {}",
         "__device__ inline void helper() { __shared__ int value; } __global__ void kernel() {}",
     ] { rejected(source); }
+    validate("__device__ inline int helper(int value); __global__ void kernel() {}");
 }
 
 #[test]
@@ -394,11 +394,11 @@ fn cuda_inline_preserves_the_required_sole_kernel_and_complete_source_checks() {
     for source in [
         "__device__ inline int helper() { return 1; }",
         "inline __global__ void first() {} __global__ inline void second() {}",
-        "__global__ void kernel() {} __device__ inline int later() { return 1; }",
         "inline __global__ void kernel() {} /* 漢 */ @",
     ] {
         rejected(source);
     }
+    validate("__global__ void kernel() {} __device__ inline int later() { return 1; }");
 }
 
 #[test]

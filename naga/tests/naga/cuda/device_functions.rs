@@ -376,15 +376,15 @@ fn cuda_device_functions_reject_recursion_forward_calls_and_redefinitions() {
     for source in [
         "__device__ int recurse(int value) { return recurse(value); } __global__ void kernel() {}",
         "__device__ int first(int value) { return second(value); } __device__ int second(int value) { return value; } __global__ void kernel() {}",
-        "__device__ int helper(int value); __device__ int helper(int value) { return value; } __global__ void kernel() {}",
         "__device__ int helper(int value) { return value; } __device__ int helper(int other) { return other; } __global__ void kernel() {}",
         "__device__ int helper(int value) { return value; } __global__ void helper() {}",
         "__device__ int helper(int value) { return value; } __global__ void first() {} __global__ void second() {}",
         "__device__ int helper(int value) { return value; }",
-        "__global__ void kernel() {} __device__ int helper() { return 1; }",
     ] {
         assert_rejected(source);
     }
+    validate("__device__ int helper(int value); __device__ int helper(int value) { return value; } __global__ void kernel() {}");
+    validate("__global__ void kernel() {} __device__ int helper() { return 1; }");
 }
 
 #[test]

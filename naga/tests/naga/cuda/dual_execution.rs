@@ -401,7 +401,6 @@ fn cuda_dual_execution_accepts_static_and_cuda_inlining_specifiers() {
 fn cuda_dual_execution_keeps_existing_helper_body_and_signature_restrictions() {
     for source in [
         "extern \"C\" __host__ __device__ int helper() { return 1; } __global__ void kernel() {}",
-        "__host__ __device__ int helper(int value); __global__ void kernel() {}",
         "__host__ __device__ int first() { return later(); } __host__ __device__ int later() { return 1; } __global__ void kernel() {}",
         "__host__ __device__ int helper(int value) { return helper(value); } __global__ void kernel() {}",
         "__host__ __device__ int helper(int value) { return value; } __host__ __device__ int helper(int other) { return other; } __global__ void kernel() {}",
@@ -415,6 +414,7 @@ fn cuda_dual_execution_keeps_existing_helper_body_and_signature_restrictions() {
         "__host__ __device__ void helper() { return 1; } __global__ void kernel() {}",
         "__host__ __device__ void helper() {} __global__ void kernel() { int value = helper(); }",
     ] { rejected(source); }
+    validate("__host__ __device__ int helper(int value); __global__ void kernel() {}");
 }
 
 #[test]
@@ -422,11 +422,11 @@ fn cuda_dual_execution_keeps_sole_kernel_and_complete_source_requirements() {
     for source in [
         "__host__ __device__ int helper() { return 1; }",
         "__host__ __device__ int helper() { return 1; } __global__ void first() {} __global__ void second() {}",
-        "__global__ void kernel() {} __host__ __device__ int later() { return 1; }",
         "__host__ __device__ int helper() { return 1; } __global__ void kernel() {} /* 漢 */ @",
         "__host__ __device__ int helper() { return 1; @ } __global__ void kernel() {}",
     ] { rejected(source); }
     validate("__host__ __device__ int helper() { return 1; } __global__ void kernel() { return; { helper(); } }");
+    validate("__global__ void kernel() {} __host__ __device__ int later() { return 1; }");
 }
 
 #[test]

@@ -2,6 +2,7 @@ use alloc::{format, string::String, vec::Vec};
 
 mod absolute_value;
 mod barriers;
+mod call_graph;
 mod conditionals;
 mod constant_evaluation;
 mod constants;
@@ -10,6 +11,7 @@ mod conversions;
 mod declarations;
 mod expressions;
 mod floorf;
+mod function_declarations;
 mod functions;
 mod initializers;
 mod loops;
@@ -25,6 +27,7 @@ mod updates;
 
 use crate::proc::TypeResolution;
 use context::{FunctionContext, FunctionKind};
+use function_declarations::{FunctionCall, FunctionDeclaration, IntrinsicDeclaration};
 use types::scalar_resolution;
 use types::{GlobalDeclaration, QualifiedType, TypeSpecifier};
 
@@ -208,6 +211,10 @@ pub(super) struct Parser<'a> {
     layouter: crate::proc::Layouter,
     global_declarations: FastHashMap<&'a str, GlobalDeclaration>,
     function: FunctionContext<'a>,
+    function_declarations: FastHashMap<Handle<Function>, FunctionDeclaration>,
+    intrinsic_declarations: Vec<IntrinsicDeclaration<'a>>,
+    kernel_context: Option<FunctionContext<'a>>,
+    kernel_calls: Vec<FunctionCall>,
     sqrtf_function: Option<Handle<Function>>,
     trigonometry_function: Option<Handle<Function>>,
     structures: FastHashMap<Handle<Type>, structures::Structure>,
@@ -224,6 +231,10 @@ impl<'a> Parser<'a> {
             layouter: crate::proc::Layouter::default(),
             global_declarations: functions::builtin_declarations(),
             function: FunctionContext::new(FunctionKind::Kernel),
+            function_declarations: FastHashMap::default(),
+            intrinsic_declarations: Vec::new(),
+            kernel_context: None,
+            kernel_calls: Vec::new(),
             sqrtf_function: None,
             trigonometry_function: None,
             structures: FastHashMap::default(),
@@ -234,18 +245,7 @@ impl<'a> Parser<'a> {
     }
 
     pub fn parse(mut self) -> Result<Module, ParseError> {
-        loop {
-            if self.lexer.peek()?.0 == Token::Word("struct") {
-                self.structure_declaration(true)?;
-            } else if self.starts_alias()? {
-                self.alias_declaration(true)?;
-            } else if self.starts_constexpr_declaration()? {
-                self.global_constant_declaration()?;
-            } else if self.function_definition()? == FunctionKind::Kernel {
-                break;
-            }
-        }
-        loop {
+        while self.lexer.peek()?.0 != Token::End {
             if self.lexer.peek()?.0 == Token::Word("struct") {
                 self.structure_declaration(true)?;
             } else if self.starts_alias()? {
@@ -253,12 +253,14 @@ impl<'a> Parser<'a> {
             } else if self.starts_constexpr_declaration()? {
                 self.global_constant_declaration()?;
             } else {
-                break;
+                self.function_definition()?;
             }
         }
-        if self.lexer.peek()?.0 != Token::End {
-            return self.fail("only one CUDA kernel is supported");
+        if self.kernel_context.is_none() {
+            return self.fail("expected one CUDA kernel definition");
         }
+        self.finish_kernel()?;
+        self.finish_functions()?;
         // Remove call results from source statements discarded after a jump.
         crate::compact::compact(&mut self.module, crate::compact::KeepUnused::Yes);
         Ok(self.module)
@@ -298,6 +300,20 @@ impl<'a> Parser<'a> {
                 message: String::from("device helper pointer parameters are unsupported"),
                 span: pointer_span,
             });
+        }
+        if self.function.kind == FunctionKind::Device
+            && matches!(
+                self.lexer.peek()?.0,
+                Token::Separator(',') | Token::Paren(')')
+            )
+        {
+            let ty = self.type_handle(&ty, type_span);
+            self.function.ir.arguments.push(FunctionArgument {
+                name: None,
+                ty,
+                binding: None,
+            });
+            return Ok(());
         }
         let (name, span) = self.identifier()?;
         self.check_name(name, span)?;
@@ -582,11 +598,33 @@ impl<'a> Parser<'a> {
             let Some(global_handle) = global_handle else {
                 continue;
             };
+            if self.function.initialized_helper_builtins[slot] {
+                continue;
+            }
             let span = self.module.global_variables.get_span(global_handle);
             let value = self.builtin_input(slot, span)?;
             let pointer = self.append(Expression::GlobalVariable(global_handle), span)?;
             self.push_statement(Statement::Store { pointer, value }, span);
+            self.function.initialized_helper_builtins[slot] = true;
         }
+        Ok(())
+    }
+
+    fn finish_kernel(&mut self) -> Result<(), ParseError> {
+        self.function = self.kernel_context.take().unwrap();
+        if self
+            .helper_builtin_globals
+            .iter()
+            .enumerate()
+            .any(|(slot, global)| {
+                global.is_some() && !self.function.initialized_helper_builtins[slot]
+            })
+        {
+            let (_, initializers) = self.capture_block(Self::initialize_helper_builtins)?;
+            self.prepend_block(initializers);
+        }
+        self.kernel_calls = core::mem::take(&mut self.function.calls);
+        self.module.entry_points[0].function = core::mem::take(&mut self.function.ir);
         Ok(())
     }
 
