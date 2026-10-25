@@ -84,7 +84,7 @@ impl Parser<'_> {
                 operator,
                 BinaryOperator::LogicalAnd | BinaryOperator::LogicalOr
             ) {
-                left = self.logical(left_value, operator, precedence)?.into();
+                left = self.logical(left_value, operator, precedence, operator_span)?;
                 continue;
             }
             if operators::Operator::from_binary(operator).is_some() {
@@ -440,6 +440,35 @@ impl Parser<'_> {
         left: ExpressionValue,
         operator: BinaryOperator,
         precedence: u8,
+        operator_span: Span,
+    ) -> Result<ExpressionResult, ParseError> {
+        let name = operators::Operator::from_binary(operator).unwrap().name();
+        if !self.is_source_class(left.ty()) && !self.has_function_candidate(name) {
+            return self
+                .builtin_logical(left, operator, |parser| parser.expression(precedence + 1))
+                .map(Into::into);
+        }
+        let left = self.rvalue(left)?;
+        let (right, right_body) = self.capture_block(|parser| parser.expression(precedence + 1))?;
+        if self.is_source_class(&left.ty) || self.is_source_class(right.ty()) {
+            self.append_block(right_body);
+            let right = self.rvalue(right)?;
+            let span = left.span.until(&right.span);
+            self.call_with_arguments(name, alloc::vec![left, right], operator_span, span)
+        } else {
+            self.builtin_logical(left.into(), operator, |parser| {
+                parser.append_block(right_body);
+                Ok(right)
+            })
+            .map(Into::into)
+        }
+    }
+
+    fn builtin_logical(
+        &mut self,
+        left: ExpressionValue,
+        operator: BinaryOperator,
+        right: impl FnOnce(&mut Self) -> Result<ExpressionValue, ParseError>,
     ) -> Result<Value, ParseError> {
         let left = self.truthy(left)?;
         let ty = self.scalar_handle(Scalar::BOOL, left.span);
@@ -460,7 +489,7 @@ impl Parser<'_> {
             left.span,
         );
         let (right, right_body) = self.capture_block(|parser| {
-            let right = parser.expression(precedence + 1)?;
+            let right = right(parser)?;
             let right = parser.truthy(right)?;
             parser.push_statement(
                 Statement::Store {

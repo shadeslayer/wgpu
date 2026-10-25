@@ -187,6 +187,7 @@ By @sagudev in [#10307](https://github.com/gfx-rs/wgpu/pull/10307).
 - Support CUDA compute builtin component reads inside device helpers.
 - Support source-defined CUDA nonmember binary `operator+` for vector values.
 - Support source-defined CUDA arithmetic, bitwise, shift, and prefix unary operators for vector and struct values.
+- Support source-defined CUDA logical operators with eager operands while preserving scalar short-circuit evaluation.
 - Add `@builtin(hit_barycentrics)`, a `vec2<f32>` readable in `@any_hit` and `@closest_hit` ray tracing pipeline shaders, holding two of the barycentric coordinates of the hit point on the triangle (the third is `1.0 - x - y`). Currently only supported with the SPIR-V backend. By @JMS55 in [#10193](https://github.com/gfx-rs/wgpu/pull/10193).
 
 #### Hal

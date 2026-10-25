@@ -12,6 +12,8 @@ pub(super) enum Operator {
     ExclusiveOr,
     ShiftLeft,
     ShiftRight,
+    LogicalAnd,
+    LogicalOr,
     BitwiseNot,
     LogicalNot,
 }
@@ -29,6 +31,8 @@ impl Operator {
             Self::ExclusiveOr => "operator^",
             Self::ShiftLeft => "operator<<",
             Self::ShiftRight => "operator>>",
+            Self::LogicalAnd => "operator&&",
+            Self::LogicalOr => "operator||",
             Self::BitwiseNot => "operator~",
             Self::LogicalNot => "operator!",
         }
@@ -46,6 +50,8 @@ impl Operator {
             Token::Operation('^') => Self::ExclusiveOr,
             Token::ShiftOperation('<') => Self::ShiftLeft,
             Token::ShiftOperation('>') => Self::ShiftRight,
+            Token::LogicalOperation('&') => Self::LogicalAnd,
+            Token::LogicalOperation('|') => Self::LogicalOr,
             Token::Operation('~') => Self::BitwiseNot,
             Token::Operation('!') => Self::LogicalNot,
             _ => return None,
@@ -64,6 +70,8 @@ impl Operator {
             BinaryOperator::ExclusiveOr => Self::ExclusiveOr,
             BinaryOperator::ShiftLeft => Self::ShiftLeft,
             BinaryOperator::ShiftRight => Self::ShiftRight,
+            BinaryOperator::LogicalAnd => Self::LogicalAnd,
+            BinaryOperator::LogicalOr => Self::LogicalOr,
             _ => return None,
         })
     }

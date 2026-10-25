@@ -186,12 +186,15 @@ fn cuda_operator_functions_preserve_complete_operator_id_diagnostic_spans() {
 }
 
 #[test]
-fn cuda_operator_functions_leave_mutating_logical_and_comparison_operators_unsupported() {
+fn cuda_operator_functions_leave_mutating_and_comparison_operators_unsupported() {
     for symbol in [
         "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", "==", "!=", "<", "<=", ">",
-        ">=", "&&", "||", ",", "=",
+        ">=", ",", "=",
     ] {
         rejected(&format!("{BOX} __device__ Box operator{symbol}(Box left, Box right) {{ return left; }} __global__ void kernel() {{}}"));
+    }
+    for symbol in ["&&", "||"] {
+        validate(&format!("{BOX} __device__ Box operator{symbol}(Box left, Box right) {{ return left; }} __global__ void kernel() {{}}"));
     }
     for symbol in ["++", "--"] {
         rejected(&format!("{BOX} __device__ Box operator{symbol}(Box value) {{ return value; }} __global__ void kernel() {{}}"));
@@ -201,6 +204,7 @@ fn cuda_operator_functions_leave_mutating_logical_and_comparison_operators_unsup
         "value++",
         "++value",
         "value && value",
+        "value || value",
         "value == value",
     ] {
         rejected(&format!("{BOX} __device__ Box operator+(Box left, Box right) {{ return left; }} __global__ void kernel() {{ Box value{{1}}; {expression}; }}"));

@@ -1098,6 +1098,10 @@ impl<'a> Parser<'a> {
         )
     }
 
+    pub(super) fn has_function_candidate(&self, name: &str) -> bool {
+        self.function_candidates(name).next().is_some()
+    }
+
     fn function_candidates<'b>(
         &'b self,
         name: &str,

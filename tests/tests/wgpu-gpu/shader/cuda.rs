@@ -29,6 +29,7 @@ mod list_initialization;
 mod literals;
 mod local_arrays;
 mod local_declarators;
+mod logical_operators;
 mod multidimensional_arrays;
 mod operator_addition;
 mod operator_functions;
@@ -68,6 +69,7 @@ pub fn all_tests(tests: &mut Vec<GpuTestInitializer>) {
         CUDA_INTEGER_MATH,
         CUDA_LIST_INITIALIZATION,
         CUDA_LITERALS,
+        CUDA_LOGICAL_OPERATORS,
         CUDA_LOCAL_ARRAYS,
         CUDA_LOCAL_DECLARATORS,
         CUDA_MULTIDIMENSIONAL_ARRAYS,
@@ -256,6 +258,8 @@ static CUDA_INTEGER_MATH: GpuTestConfiguration = configuration(integer_math::cas
 static CUDA_LIST_INITIALIZATION: GpuTestConfiguration = configuration(list_initialization::cases);
 #[apply(gpu_test!)]
 static CUDA_LITERALS: GpuTestConfiguration = configuration(literals::cases);
+#[apply(gpu_test!)]
+static CUDA_LOGICAL_OPERATORS: GpuTestConfiguration = configuration(logical_operators::cases);
 #[apply(gpu_test!)]
 static CUDA_LOCAL_ARRAYS: GpuTestConfiguration = configuration(local_arrays::cases);
 #[apply(gpu_test!)]

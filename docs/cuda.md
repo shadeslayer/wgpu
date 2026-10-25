@@ -417,11 +417,21 @@ guarantee: C++ distinguishes
 from [explicit function calls](https://timsong-cpp.github.io/cppwp/n4861/expr.call#8).
 Shift expressions evaluate and copy the left operand before evaluating the right.
 Source expressions must still obey the C++ rules for unsequenced side effects.
+Source-defined binary `operator&&` and `operator||` also take two parameters,
+with at least one supported vector or struct parameter. Both operands are
+evaluated once, from left to right, before the helper call; the left value is
+copied before right-hand side effects. These calls preserve the original operand
+types for overload selection and can return any supported helper result, including
+`void`. Scalar-only `&&` and `||` retain Boolean results and short-circuiting,
+including when unrelated class overloads are visible. This follows the C++ rules
+for [operator calls](https://eel.is/c++draft/over.match.oper),
+[logical AND](https://eel.is/c++draft/expr.log.and), and
+[logical OR](https://eel.is/c++draft/expr.log.or).
 Overloaded unary `*` and `&` accept class values, including temporaries, and call
 the declared helper; they do not require or produce a pointer. Actual pointer
 dereference and address operations remain unsupported outside the existing
 buffer interface.
-Overloaded comparisons, logical operators, assignments, and updates remain
+Overloaded comparisons, assignments, and updates remain
 unsupported, as do member operators, references, and templates.
 
 Standalone named struct definitions are accepted at file and block scope:
@@ -552,8 +562,8 @@ unsupported.
 
 Supported expressions include indexed buffer reads, scalar locals,
 parentheses, arithmetic and comparisons with scalar conversions, and the logical operators
-`!`, `&&`, and `||`. Logical operators preserve short-circuit evaluation. Numeric
-conditions are false when equal to zero; boolean locals and `true`/`false`
+`!`, `&&`, and `||`. Built-in scalar `&&` and `||` preserve short-circuit evaluation.
+Numeric conditions are false when equal to zero; boolean locals and `true`/`false`
 literals are supported.
 
 Conditional expressions `condition ? accept : reject` evaluate the condition
@@ -644,8 +654,8 @@ Assignments are expressions and associate right to left. Compound assignments
 `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, and `>>=` evaluate the
 indexed destination once; both prefix and postfix `++`/`--` are supported on
 mutable numeric scalars, including vector fields. Assignment evaluates its right
-operand before its left operand. Logical short-circuiting also applies to assignments and updates inside
-the right operand.
+operand before its left operand. Built-in scalar logical short-circuiting also
+applies to assignments and updates inside the right operand.
 
 Static `__shared__` declarations support `float`, `int`, and `unsigned int`
 scalars, the numeric vector and struct types above, and fixed arrays of
