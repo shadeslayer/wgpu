@@ -53,6 +53,9 @@ impl Parser<'_> {
         }
 
         let Some(array_count) = array_count else {
+            if matches!(specifier, TypeSpecifier::Structure(_)) {
+                return self.record_aggregate_initializer(pointer, actual_ty, true, span, None);
+            }
             return self.vector_list_initializer(pointer, specifier, actual_ty, true, span);
         };
         let element_ty = match self.module.types[actual_ty].inner {
@@ -216,9 +219,182 @@ impl Parser<'_> {
                         pointer, specifier, actual_ty, has_braces, opening,
                     )?;
                 }
+                TypeSpecifier::Structure(_) => {
+                    let opening = self.lexer.peek()?.1;
+                    let has_braces = self.lexer.next_if(Token::Paren('{'))?;
+                    self.record_aggregate_initializer(
+                        pointer, actual_ty, has_braces, opening, None,
+                    )?;
+                }
             }
         }
         Ok(())
+    }
+
+    fn record_aggregate_initializer(
+        &mut self,
+        pointer: Handle<Expression>,
+        ty: Handle<Type>,
+        has_braces: bool,
+        span: Span,
+        pending_value: Option<Value>,
+    ) -> Result<(), ParseError> {
+        self.function.expression_depth += 1;
+        let result = if self.function.expression_depth > 64 {
+            self.fail("CUDA initializer nesting limit exceeded")
+        } else {
+            self.record_aggregate_initializer_inner(pointer, ty, has_braces, span, pending_value)
+        };
+        self.function.expression_depth -= 1;
+        result
+    }
+
+    fn record_aggregate_initializer_inner(
+        &mut self,
+        pointer: Handle<Expression>,
+        ty: Handle<Type>,
+        has_braces: bool,
+        span: Span,
+        pending_value: Option<Value>,
+    ) -> Result<(), ParseError> {
+        if has_braces && self.lexer.next_if(Token::Paren('}'))? {
+            let value = self.append(Expression::ZeroValue(ty), span)?;
+            self.push_statement(Statement::Store { pointer, value }, span);
+            return Ok(());
+        }
+        let mut pending_value =
+            if pending_value.is_some() || self.lexer.peek()?.0 == Token::Paren('{') {
+                pending_value
+            } else {
+                let expression = self.expression(0)?;
+                Some(self.rvalue(expression)?)
+            };
+        if let Some(ref value) = pending_value {
+            if !matches!(self.module.types[ty].inner, TypeInner::Array { .. })
+                && self
+                    .module
+                    .compare_types(&value.ty, &TypeResolution::Handle(ty))
+            {
+                self.push_statement(
+                    Statement::Store {
+                        pointer,
+                        value: value.handle,
+                    },
+                    value.span,
+                );
+                if has_braces {
+                    self.lexer.next_if(Token::Separator(','))?;
+                    self.lexer.expect_span(Token::Paren('}'))?;
+                }
+                return Ok(());
+            }
+        }
+        let count = match self.module.types[ty].inner {
+            TypeInner::Struct { ref members, .. } => members.len() as u32,
+            TypeInner::Array {
+                size: ArraySize::Constant(count),
+                ..
+            } => count.get(),
+            TypeInner::Vector { size, .. } => size as u32,
+            _ => return self.fail("expected an aggregate initializer"),
+        };
+        let mut initialized_count = 0;
+        loop {
+            let member_ty = self.record_initializer_member(ty, initialized_count, span);
+            let member = self.append(
+                Expression::AccessIndex {
+                    base: pointer,
+                    index: initialized_count,
+                },
+                span,
+            )?;
+            self.record_initializer_clause(member, member_ty, pending_value.take())?;
+            initialized_count += 1;
+            if initialized_count == count {
+                break;
+            }
+            if !self.lexer.next_if(Token::Separator(','))?
+                || self.lexer.peek()?.0 == Token::Paren('}')
+            {
+                break;
+            }
+        }
+        if has_braces {
+            if initialized_count == count {
+                self.lexer.next_if(Token::Separator(','))?;
+            }
+            self.lexer.expect_span(Token::Paren('}'))?;
+        }
+        if let TypeInner::Array {
+            base,
+            size: ArraySize::Constant(count),
+            ..
+        } = self.module.types[ty].inner
+        {
+            if initialized_count < count.get() {
+                self.zero_array_tail(pointer, base, initialized_count, count, span)?;
+            }
+        } else {
+            for index in initialized_count..count {
+                let member_ty = self.record_initializer_member(ty, index, span);
+                let member = self.append(
+                    Expression::AccessIndex {
+                        base: pointer,
+                        index,
+                    },
+                    span,
+                )?;
+                let value = self.append(Expression::ZeroValue(member_ty), span)?;
+                self.push_statement(
+                    Statement::Store {
+                        pointer: member,
+                        value,
+                    },
+                    span,
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn record_initializer_member(
+        &mut self,
+        ty: Handle<Type>,
+        index: u32,
+        span: Span,
+    ) -> Handle<Type> {
+        match self.module.types[ty].inner {
+            TypeInner::Struct { ref members, .. } => members[index as usize].ty,
+            TypeInner::Array { base, .. } => base,
+            TypeInner::Vector { scalar, .. } => self.scalar_handle(scalar, span),
+            _ => unreachable!(),
+        }
+    }
+
+    fn record_initializer_clause(
+        &mut self,
+        pointer: Handle<Expression>,
+        ty: Handle<Type>,
+        pending_value: Option<Value>,
+    ) -> Result<(), ParseError> {
+        if let TypeInner::Scalar(scalar) = self.module.types[ty].inner {
+            let value = match pending_value {
+                Some(value) => self.list_convert_scalar(value, scalar)?,
+                None => self.scalar_initializer_clause(scalar)?,
+            };
+            self.push_statement(
+                Statement::Store {
+                    pointer,
+                    value: value.handle,
+                },
+                value.span,
+            );
+            Ok(())
+        } else {
+            let opening = self.lexer.peek()?.1;
+            let has_braces = pending_value.is_none() && self.lexer.next_if(Token::Paren('{'))?;
+            self.record_aggregate_initializer(pointer, ty, has_braces, opening, pending_value)
+        }
     }
 
     fn scalar_initializer_clause(&mut self, scalar: Scalar) -> Result<Value, ParseError> {

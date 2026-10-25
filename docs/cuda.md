@@ -35,6 +35,7 @@ Each source contains one `__global__ void` kernel, optionally preceded by
 flat pointers. Pointer parameters also accept `float2`, `float3`, `float4`,
 `int2`, `int3`, `int4`, `uint2`, `uint3`, and `uint4`. Aliases and pointee
 `const` qualification preserve the underlying element type.
+Pointer parameters also accept completed named structs described below.
 Parameter number `i` uses group 0, binding `i`, preserving source
 order across both parameter kinds.
 The caller supplies these buffers and dispatches the resulting compute entry
@@ -50,6 +51,11 @@ reads and writes. Element layouts are:
 | Two-component vector | 8 bytes | 8 bytes | 8 bytes |
 | Three-component vector | 12 bytes | 4 bytes | 12 bytes |
 | Four-component vector | 16 bytes | 16 bytes | 16 bytes |
+
+Struct fields use their element alignment, with padding before a field when
+needed. The struct's alignment is its greatest field alignment, and its size
+rounds up to that alignment. Arrays of structs use that rounded size as their
+stride. Copies preserve field values; padding bytes are unspecified.
 
 Vector elements support whole-value copies and scalar field access, including
 assignments and updates to writable fields. Vector parameters require pointers.
@@ -94,7 +100,7 @@ HLSL constants binding. Helper builtin reads do not add kernel buffer bindings.
 ## Device helpers
 
 `__device__` functions defined before the kernel can take `float`, `int`,
-`unsigned int`, or `bool` scalars, or the vector value types described below,
+`unsigned int`, or `bool` scalars, or the vector and struct value types described below,
 and return a supported value or `void`. Helpers can use
 local declarations, arithmetic, control flow, and calls to earlier helpers:
 
@@ -326,12 +332,12 @@ Reading parameters or buffers, modifying variables, and
 calling the supported functions cannot supply constant values. Compute
 builtins, including `blockDim`, are not C++ constant expressions.
 
-`constexpr` arrays, vectors, and functions remain unsupported.
+`constexpr` arrays, vectors, structs, and functions remain unsupported.
 
 ## Source subset
 
 Aliases support `typedef` and `using` for `bool`, `int`, `unsigned int`,
-`float`, and the vector types below, including alias chains and `const` qualification. For example,
+`float`, and the vector and struct types below, including alias chains and `const` qualification. For example,
 `typedef unsigned int Count, Index;` and `using Sample = const float;` preserve
 the underlying type and its layout. Repeating an alias declaration
 with the same type and qualification is allowed. Explicit duplicate `const`
@@ -366,7 +372,7 @@ parenthesized aggregate initialization remain unsupported. By-value kernel
 parameters require the scalar types described in the kernel interface.
 
 Nonmember binary `operator+` definitions take two parameters by value, with at
-least one parameter of a supported vector type. For example:
+least one parameter of a supported vector or struct type. For example:
 
 ```cuda
 __device__ float2 operator+(float2 left, float2 right) {
@@ -377,7 +383,7 @@ __device__ float2 operator+(float2 left, float2 right) {
 Both `first + second` and `operator+(first, second)` select from definitions
 visible before the call, using the existing helper overload and conversion
 rules. Scalar-only `+` expressions retain built-in arithmetic. Operators can
-return a supported scalar or vector value, or `void`; void results can only
+return a supported scalar, vector, or struct value, or `void`; void results can only
 appear where an ordinary void helper call is accepted. Calls remain runtime
 expressions and obey the existing helper recursion restrictions.
 
@@ -391,6 +397,49 @@ Defining `operator+` does not enable vector `+=`, vector unary `+`, or other
 overloaded operators.
 Member operators, references, and templates remain unsupported.
 
+Standalone named struct definitions are accepted at file and block scope:
+
+```cuda
+struct Sample {
+    unsigned tag;
+    float3 position;
+    float weights[2];
+};
+
+__device__ Sample shift_sample(Sample value) {
+    value.position.x += value.weights[0];
+    return value;
+}
+```
+
+Fields can use `float`, `int`, `unsigned int`, the supported vector types,
+previously completed structs, and fixed arrays of these types. Field-array
+bounds use the existing integral constant-expression rules. Aliases of a struct
+preserve its type; separate definitions remain different types even when their
+fields match. Local definitions can hide outer type names.
+
+Locals support same-type copies, assignments, and braced initialization,
+including partial initialization and brace elision for nested aggregates.
+Omitted fields are zero-initialized. Typed expressions such as `Sample{}` can
+be passed to helpers, returned, or read through their fields. Copying a struct
+also copies its fixed-array fields. Standalone arrays still cannot be copied
+or passed by value. These rules follow C++
+[aggregate initialization](https://eel.is/c++draft/dcl.init.aggr).
+
+Arbitrary field names and indexed fields use the existing value/reference
+rules, including `samples[index].weights[element]`. Const objects and
+`const Sample*` buffers prevent writes to every nested field. Conditional
+struct references support field access; subscripting an array selected through
+a conditional reference remains unsupported.
+
+The initial record subset rejects empty definitions, `bool` fields, const data
+members, pointer/reference members, default member initializers, methods,
+inheritance, nested type definitions, unions, and explicit alignment or packing.
+Forward declarations and elaborated type spellings such as `struct Sample value`
+remain unsupported; use the completed bare type name `Sample`. Struct kernel
+parameters require pointers. Aggregate constant expressions and untyped braced
+call arguments or returns remain unsupported.
+
 Empty local vector initialization, such as `float3 value{};` or
 `const float4 value = {};`, zeroes every field each time execution reaches the
 declaration, including inside loops.
@@ -402,7 +451,7 @@ Local declarations can list comma-separated names, as in
 `int first = 1, next = first + 1;`. Each initializer finishes before the next
 declarator, and all names share the declared type and qualification.
 
-Fixed local arrays support the scalar and vector types above
+Fixed local arrays support the scalar, vector, and struct types above
 and their aliases, in both kernels and device helpers. Written extents
 must be positive integral constant expressions. Each invocation owns its array storage;
 elements use the same indexing, assignments, and updates as buffer elements.
@@ -571,7 +620,7 @@ operand before its left operand. Logical short-circuiting also applies to assign
 the right operand.
 
 Static `__shared__` declarations support `float`, `int`, and `unsigned int`
-scalars, the numeric vector types above, and fixed arrays of
+scalars, the numeric vector and struct types above, and fixed arrays of
 those types inside the kernel. Their aliases are also accepted; const-qualified
 shared types remain unsupported. Vector elements use the sizes, alignments, and
 array strides listed in the kernel interface, including packed three-component

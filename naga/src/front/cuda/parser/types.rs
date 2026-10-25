@@ -4,6 +4,7 @@ use super::*;
 pub(super) enum TypeSpecifier {
     Scalar(Scalar),
     Vector { size: VectorSize, scalar: Scalar },
+    Structure(Handle<Type>),
 }
 
 pub(super) const VECTOR_TYPES: [(&str, &str, VectorSize, Scalar); 9] = [
@@ -89,6 +90,9 @@ fn declaration_type(
             span: token.1,
         };
         match token.0 {
+            Token::Word("struct") => {
+                return Err(invalid("elaborated struct type spellings are unsupported"));
+            }
             Token::Word("const") => {
                 if explicit_const {
                     return Err(invalid("duplicate const qualifier"));
@@ -147,6 +151,7 @@ impl<'a> Parser<'a> {
     pub(super) fn lower_type(&mut self, ty: TypeSpecifier, span: Span) -> TypeResolution {
         let (size, scalar) = match ty {
             TypeSpecifier::Scalar(scalar) => return scalar_resolution(scalar),
+            TypeSpecifier::Structure(handle) => return TypeResolution::Handle(handle),
             TypeSpecifier::Vector { size, scalar } => (size, scalar),
         };
         if size != VectorSize::Tri {
@@ -296,7 +301,7 @@ impl<'a> Parser<'a> {
         self.insert_type(name, ty, span, global)
     }
 
-    fn insert_type(
+    pub(super) fn insert_type(
         &mut self,
         name: &'a str,
         ty: QualifiedType,

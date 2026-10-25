@@ -2,8 +2,8 @@ use super::*;
 
 use core::num::NonZeroU32;
 
-struct ArrayDeclaration {
-    ty: Handle<Type>,
+pub(super) struct ArrayDeclaration {
+    pub(super) ty: Handle<Type>,
     element_ty: Handle<Type>,
     count: Option<NonZeroU32>,
 }
@@ -170,7 +170,9 @@ impl<'a> Parser<'a> {
     }
 
     pub(super) fn starts_declaration(&mut self) -> Result<bool, ParseError> {
-        if self.starts_alias()? || self.lexer.peek()?.0 == Token::Word("__shared__") {
+        if self.starts_alias()?
+            || matches!(self.lexer.peek()?.0, Token::Word("__shared__" | "struct"))
+        {
             return Ok(true);
         }
         if !self.starts_type()? {
@@ -192,6 +194,9 @@ impl<'a> Parser<'a> {
     }
 
     pub(super) fn local_declaration(&mut self) -> Result<(), ParseError> {
+        if self.lexer.peek()?.0 == Token::Word("struct") {
+            return self.structure_declaration(false);
+        }
         if self.starts_alias()? {
             return self.alias_declaration(false);
         }
@@ -263,8 +268,10 @@ impl<'a> Parser<'a> {
             } else if !is_const && matches!(self.lexer.peek()?.0, Token::Separator(',' | ';')) {
                 None
             } else if is_array
-                || (matches!(specifier, TypeSpecifier::Vector { .. })
-                    && self.starts_list_initializer()?)
+                || (matches!(
+                    specifier,
+                    TypeSpecifier::Vector { .. } | TypeSpecifier::Structure(_)
+                ) && self.starts_list_initializer()?)
             {
                 self.aggregate_initializer(pointer, specifier, ty, array_count)?;
                 None
@@ -369,7 +376,7 @@ impl<'a> Parser<'a> {
         self.insert_symbol(name, symbol, span)
     }
 
-    fn array_declaration(
+    pub(super) fn array_declaration(
         &mut self,
         base: Handle<Type>,
         allow_inferred: bool,

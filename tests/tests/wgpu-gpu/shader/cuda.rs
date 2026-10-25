@@ -35,6 +35,7 @@ mod reference_categories;
 mod shared_vectors;
 mod specifiers;
 mod sqrtf;
+mod structures;
 mod switches;
 mod trigonometry;
 mod type_aliases;
@@ -73,6 +74,7 @@ pub fn all_tests(tests: &mut Vec<GpuTestInitializer>) {
         CUDA_SHARED_VECTORS,
         CUDA_SPECIFIERS,
         CUDA_SQRTF,
+        CUDA_STRUCTURES,
         CUDA_SWITCHES,
         CUDA_TRIGONOMETRY,
         CUDA_TYPE_ALIASES,
@@ -267,6 +269,8 @@ static CUDA_SHARED_VECTORS: GpuTestConfiguration = configuration(shared_vectors:
 static CUDA_SPECIFIERS: GpuTestConfiguration = configuration(specifiers::cases);
 #[apply(gpu_test!)]
 static CUDA_SQRTF: GpuTestConfiguration = configuration(sqrtf::cases);
+#[apply(gpu_test!)]
+static CUDA_STRUCTURES: GpuTestConfiguration = configuration(structures::cases);
 #[apply(gpu_test!)]
 static CUDA_SWITCHES: GpuTestConfiguration = configuration(switches::cases);
 #[apply(gpu_test!)]

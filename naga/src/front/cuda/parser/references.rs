@@ -11,21 +11,26 @@ impl Parser<'_> {
             message: format!("unknown or unsupported field `{field}`"),
             span: field_span,
         };
-        let index = match field {
-            "x" => 0,
-            "y" => 1,
-            "z" => 2,
-            "w" => 3,
-            _ => return Err(invalid()),
-        };
-        let ty = match *value.ty().inner_with(&self.module.types) {
-            TypeInner::Vector { size, scalar } if index < size as u32 => scalar_resolution(scalar),
-            TypeInner::Struct { ref members, .. }
-                if members
-                    .get(index as usize)
-                    .is_some_and(|member| member.name.as_deref() == Some(field)) =>
-            {
-                TypeResolution::Handle(members[index as usize].ty)
+        let (index, ty) = match *value.ty().inner_with(&self.module.types) {
+            TypeInner::Vector { size, scalar } => {
+                let index = match field {
+                    "x" => 0,
+                    "y" => 1,
+                    "z" => 2,
+                    "w" => 3,
+                    _ => return Err(invalid()),
+                };
+                if index >= size as u32 {
+                    return Err(invalid());
+                }
+                (index, scalar_resolution(scalar))
+            }
+            TypeInner::Struct { ref members, .. } => {
+                let index = members
+                    .iter()
+                    .position(|member| member.name.as_deref() == Some(field))
+                    .ok_or_else(invalid)?;
+                (index as u32, TypeResolution::Handle(members[index].ty))
             }
             _ => return Err(invalid()),
         };
@@ -50,6 +55,80 @@ impl Parser<'_> {
             ExpressionValue::Reference(reference) => self
                 .project_reference(reference, index, &ty, span)
                 .map(ExpressionValue::Reference),
+        }
+    }
+
+    pub(super) fn array_index(
+        &mut self,
+        value: ExpressionValue,
+    ) -> Result<ExpressionValue, ParseError> {
+        let (element_ty, count) = match *value.ty().inner_with(&self.module.types) {
+            TypeInner::Array { base, size, .. } => (
+                TypeResolution::Handle(base),
+                match size {
+                    ArraySize::Constant(count) => Some(count),
+                    _ => None,
+                },
+            ),
+            _ => return self.fail("subscript requires an array"),
+        };
+        if matches!(&value, ExpressionValue::Reference(reference) if matches!(reference.reference, Reference::Conditional(_)))
+        {
+            return self.fail("conditional array subscripts are unsupported");
+        }
+        self.lexer.expect_span(Token::Paren('['))?;
+        let index = self.expression(0)?;
+        let index = self.rvalue(index)?;
+        let scalar = self.require_scalar_type(&index.ty, index.span)?;
+        if !matches!(scalar.kind, ScalarKind::Sint | ScalarKind::Uint) {
+            return Err(ParseError {
+                message: String::from("array index must be an integer"),
+                span: index.span,
+            });
+        }
+        let end = self.lexer.expect_span(Token::Paren(']'))?;
+        let span = value.span().until(&end);
+        let discardable =
+            Self::constant_array_address(value.constant().is_discardable, count, index.constant);
+        match value {
+            ExpressionValue::Plain(value) => {
+                let handle = self.append(
+                    Expression::Access {
+                        base: value.handle,
+                        index: index.handle,
+                    },
+                    span,
+                )?;
+                Ok(Value {
+                    handle,
+                    ty: element_ty,
+                    span,
+                    constant: ConstantValue {
+                        literal: None,
+                        is_discardable: discardable,
+                    },
+                }
+                .into())
+            }
+            ExpressionValue::Reference(mut reference) => {
+                let Reference::Pointer(base) = reference.reference else {
+                    return self.fail("unsupported array reference");
+                };
+                reference.reference = Reference::Pointer(self.append(
+                    Expression::Access {
+                        base,
+                        index: index.handle,
+                    },
+                    span,
+                )?);
+                reference.ty = element_ty;
+                reference.span = span;
+                reference.constant = ConstantValue {
+                    literal: None,
+                    is_discardable: discardable,
+                };
+                Ok(ExpressionValue::Reference(reference))
+            }
         }
     }
 
@@ -131,6 +210,15 @@ impl Parser<'_> {
     }
 
     pub(super) fn rvalue(&mut self, expression: ExpressionValue) -> Result<Value, ParseError> {
+        if matches!(
+            *expression.ty().inner_with(&self.module.types),
+            TypeInner::Array { .. }
+        ) {
+            return Err(ParseError {
+                message: String::from("standalone array values and pointer decay are unsupported"),
+                span: expression.span(),
+            });
+        }
         let reference = match expression {
             ExpressionValue::Plain(value) => return Ok(value),
             ExpressionValue::Reference(reference) => reference,

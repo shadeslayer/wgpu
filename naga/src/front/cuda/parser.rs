@@ -17,6 +17,7 @@ mod operators;
 mod references;
 mod sqrtf;
 mod statements;
+mod structures;
 mod switches;
 mod trigonometry;
 mod types;
@@ -48,6 +49,7 @@ const BUILTIN_INPUTS: [(&str, BuiltIn); 3] = [
 #[derive(Clone, Debug)]
 enum Symbol {
     Type(QualifiedType),
+    Member,
     Array {
         pointer: Handle<Expression>,
         ty: TypeResolution,
@@ -208,6 +210,8 @@ pub(super) struct Parser<'a> {
     function: FunctionContext<'a>,
     sqrtf_function: Option<Handle<Function>>,
     trigonometry_function: Option<Handle<Function>>,
+    structures: FastHashMap<Handle<Type>, structures::Structure>,
+    next_structure_id: u32,
     helper_builtin_globals: [Option<Handle<GlobalVariable>>; 3],
     workgroup_size: [u32; 3],
 }
@@ -222,6 +226,8 @@ impl<'a> Parser<'a> {
             function: FunctionContext::new(FunctionKind::Kernel),
             sqrtf_function: None,
             trigonometry_function: None,
+            structures: FastHashMap::default(),
+            next_structure_id: 0,
             helper_builtin_globals: [None; 3],
             workgroup_size: options.workgroup_size,
         }
@@ -229,7 +235,9 @@ impl<'a> Parser<'a> {
 
     pub fn parse(mut self) -> Result<Module, ParseError> {
         loop {
-            if self.starts_alias()? {
+            if self.lexer.peek()?.0 == Token::Word("struct") {
+                self.structure_declaration(true)?;
+            } else if self.starts_alias()? {
                 self.alias_declaration(true)?;
             } else if self.starts_constexpr_declaration()? {
                 self.global_constant_declaration()?;
@@ -238,7 +246,9 @@ impl<'a> Parser<'a> {
             }
         }
         loop {
-            if self.starts_alias()? {
+            if self.lexer.peek()?.0 == Token::Word("struct") {
+                self.structure_declaration(true)?;
+            } else if self.starts_alias()? {
                 self.alias_declaration(true)?;
             } else if self.starts_constexpr_declaration()? {
                 self.global_constant_declaration()?;
@@ -275,7 +285,11 @@ impl<'a> Parser<'a> {
             && !matches!(specifier, TypeSpecifier::Scalar(_))
         {
             return Err(ParseError {
-                message: String::from("vector kernel parameters are unsupported"),
+                message: String::from(if matches!(specifier, TypeSpecifier::Structure(_)) {
+                    "structure kernel value parameters are unsupported"
+                } else {
+                    "vector kernel parameters are unsupported"
+                }),
                 span: type_span,
             });
         }

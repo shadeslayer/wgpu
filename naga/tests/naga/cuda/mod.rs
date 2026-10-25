@@ -37,6 +37,7 @@ mod shared_vectors;
 mod specifiers;
 mod sqrtf;
 mod streaming;
+mod structures;
 mod switches;
 mod trigonometry;
 mod type_aliases;

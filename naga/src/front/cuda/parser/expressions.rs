@@ -136,6 +136,8 @@ impl Parser<'_> {
             if self.lexer.next_if(Token::Separator('.'))? {
                 let (field, span) = self.identifier()?;
                 value = ExpressionResult::Value(self.field(value.require_value()?, field, span)?);
+            } else if self.lexer.peek()?.0 == Token::Paren('[') {
+                value = ExpressionResult::Value(self.array_index(value.require_value()?)?);
             } else if let operator @ (Token::IncrementOperation | Token::DecrementOperation) =
                 self.lexer.peek()?.0
             {
@@ -263,6 +265,12 @@ impl Parser<'_> {
             }
             Token::Word(name) => {
                 self.lexer.next()?;
+                if matches!(self.lookup_symbol(name), Some(Symbol::Member)) {
+                    return Err(ParseError {
+                        message: String::from("non-static structure member requires an object"),
+                        span: token.1,
+                    });
+                }
                 if name == "operator" {
                     let span = self.operator_addition_name(token.1)?;
                     return self.call(operators::ADDITION_NAME, span);
@@ -279,6 +287,12 @@ impl Parser<'_> {
                     return Ok(value.into());
                 }
                 if let Some(target) = self.type_name(name) {
+                    if let TypeSpecifier::Structure(ty) = target.ty {
+                        if self.lexer.peek()?.0 != Token::Paren('{') {
+                            return self.fail("structure values require a typed initializer list");
+                        }
+                        return self.structure_value(ty, token.1).map(Into::into);
+                    }
                     self.lexer.expect_span(Token::Paren('('))?;
                     let value = self.expression(0)?;
                     let end = self.lexer.expect_span(Token::Paren(')'))?;
@@ -315,6 +329,12 @@ impl Parser<'_> {
                     span: token.1,
                 })?;
                 let (pointer, ty, writable, span, constant) = match symbol {
+                    Symbol::Member => {
+                        return Err(ParseError {
+                            message: String::from("non-static structure member requires an object"),
+                            span: token.1,
+                        });
+                    }
                     Symbol::Type(_) => {
                         return Err(ParseError {
                             message: format!("type `{name}` cannot be used as a value"),
