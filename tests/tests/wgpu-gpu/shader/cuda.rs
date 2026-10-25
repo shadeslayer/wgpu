@@ -38,6 +38,7 @@ mod operator_functions;
 mod preprocessing;
 mod preprocessing_conditions;
 mod prototypes;
+mod reference_bindings;
 mod reference_categories;
 mod shared_vectors;
 mod specifiers;
@@ -84,6 +85,7 @@ pub fn all_tests(tests: &mut Vec<GpuTestInitializer>) {
         CUDA_PREPROCESSING,
         CUDA_PREPROCESSING_CONDITIONS,
         CUDA_PROTOTYPES,
+        CUDA_REFERENCE_BINDINGS,
         CUDA_REFERENCE_CATEGORIES,
         CUDA_SHARED_VECTORS,
         CUDA_SPECIFIERS,
@@ -290,6 +292,8 @@ static CUDA_PREPROCESSING_CONDITIONS: GpuTestConfiguration =
     configuration(preprocessing_conditions::cases);
 #[apply(gpu_test!)]
 static CUDA_PROTOTYPES: GpuTestConfiguration = configuration(prototypes::cases);
+#[apply(gpu_test!)]
+static CUDA_REFERENCE_BINDINGS: GpuTestConfiguration = configuration(reference_bindings::cases);
 #[apply(gpu_test!)]
 static CUDA_REFERENCE_CATEGORIES: GpuTestConfiguration = configuration(reference_categories::cases);
 #[apply(gpu_test!)]

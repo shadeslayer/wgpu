@@ -173,6 +173,7 @@ By @sagudev in [#10307](https://github.com/gfx-rs/wgpu/pull/10307).
 - Support fixed-size CUDA local scalar arrays, including empty initialization, aliases, and indexed updates.
 - Support CUDA numeric vector values, component updates, constructors, local arrays, and helper parameters and results.
 - Support named CUDA structs with nested fields, fixed arrays, value copies, device helpers, and storage-buffer pointers.
+- Support CUDA local reference declarations with live aliases, const views, and temporary initialization.
 - Support CUDA vector buffer parameters with packed three-component layouts and const access.
 - Support CUDA shared numeric vectors and fixed vector arrays.
 - Support CUDA scalar bit reinterpretation intrinsics.

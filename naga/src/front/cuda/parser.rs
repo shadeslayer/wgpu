@@ -16,6 +16,7 @@ mod functions;
 mod initializers;
 mod loops;
 mod operators;
+mod reference_bindings;
 mod references;
 mod sqrtf;
 mod statements;
@@ -28,6 +29,7 @@ mod updates;
 use crate::proc::TypeResolution;
 use context::{FunctionContext, FunctionKind};
 use function_declarations::{FunctionCall, FunctionDeclaration, IntrinsicDeclaration};
+use reference_bindings::{BoundAddress, BoundReference};
 use types::scalar_resolution;
 use types::{GlobalDeclaration, QualifiedType, TypeSpecifier};
 
@@ -53,6 +55,13 @@ const BUILTIN_INPUTS: [(&str, BuiltIn); 3] = [
 enum Symbol {
     Type(QualifiedType),
     Member,
+    PendingReference,
+    Reference {
+        binding: Handle<BoundReference>,
+        ty: TypeResolution,
+        writable: bool,
+        constant: ConstantValue,
+    },
     Array {
         pointer: Handle<Expression>,
         ty: TypeResolution,
@@ -100,7 +109,7 @@ impl ConstantValue {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct ReferenceValue {
     reference: Reference,
     writable: bool,
@@ -109,9 +118,10 @@ struct ReferenceValue {
     constant: ConstantValue,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 enum Reference {
     Pointer(Handle<Expression>),
+    Bound(Handle<BoundReference>),
     Conditional(Handle<Option<ConditionalReference>>),
     Constant(Option<Handle<crate::Constant>>),
 }
@@ -126,6 +136,7 @@ struct ReferenceBranch {
 struct ConditionalReference {
     // Keep branch-local addresses in their blocks until the reference is consumed.
     condition: Handle<Expression>,
+    constant_condition: Option<bool>,
     accept: ReferenceBranch,
     reject: ReferenceBranch,
     depth: u32,

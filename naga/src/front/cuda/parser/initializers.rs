@@ -231,7 +231,7 @@ impl Parser<'_> {
         Ok(())
     }
 
-    fn record_aggregate_initializer(
+    pub(super) fn record_aggregate_initializer(
         &mut self,
         pointer: Handle<Expression>,
         ty: Handle<Type>,
@@ -257,7 +257,7 @@ impl Parser<'_> {
         span: Span,
         pending_value: Option<Value>,
     ) -> Result<(), ParseError> {
-        if has_braces && self.lexer.next_if(Token::Paren('}'))? {
+        if pending_value.is_none() && has_braces && self.lexer.next_if(Token::Paren('}'))? {
             let value = self.append(Expression::ZeroValue(ty), span)?;
             self.push_statement(Statement::Store { pointer, value }, span);
             return Ok(());
@@ -438,7 +438,11 @@ impl Parser<'_> {
         Ok(value)
     }
 
-    fn list_convert_scalar(&mut self, value: Value, target: Scalar) -> Result<Value, ParseError> {
+    pub(super) fn list_convert_scalar(
+        &mut self,
+        value: Value,
+        target: Scalar,
+    ) -> Result<Value, ParseError> {
         let source = self.require_scalar_type(&value.ty, value.span)?;
         let is_representable = source == target
             || match target {

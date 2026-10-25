@@ -38,6 +38,7 @@ mod parameters;
 mod preprocessing;
 mod preprocessing_conditions;
 mod prototypes;
+mod reference_bindings;
 mod reference_categories;
 mod shared;
 mod shared_vectors;

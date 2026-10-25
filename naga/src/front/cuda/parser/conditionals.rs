@@ -47,6 +47,10 @@ impl Parser<'_> {
                 let handle = self.function.conditional_references.append(
                     Some(ConditionalReference {
                         condition: condition.handle,
+                        constant_condition: match condition.constant.literal {
+                            Some(Literal::Bool(value)) => Some(value),
+                            _ => None,
+                        },
                         accept: ReferenceBranch {
                             body: accept_body,
                             reference: accept,

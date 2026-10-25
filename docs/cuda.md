@@ -356,7 +356,7 @@ overflow to infinity produces an unsupported-constant diagnostic.
 Only evaluated operands contribute to constant-expression eligibility, so
 `true ? 3 : runtime_value` and `false && helper()` can be constant expressions.
 Every operand is still parsed and type-checked. Discarding a nonvolatile local
-reference, as in `(runtime_value, 3)`, does not load its value. Address
+variable, as in `(runtime_value, 3)`, does not load its value. Address
 computations must still be valid; discarded array elements require an index
 within the array, following the
 [indirection clarification](https://cplusplus.github.io/CWG/issues/2823.html).
@@ -364,7 +364,21 @@ Reading parameters or buffers, modifying variables, and
 calling the supported functions cannot supply constant values. Compute
 builtins, including `blockDim`, are not C++ constant expressions.
 
-`constexpr` arrays, vectors, structs, and functions remain unsupported.
+`constexpr` arrays, vectors, structs, functions, and reference declarations remain unsupported.
+
+A declared reference has separate constant-expression restrictions. References
+to automatic objects or temporaries cannot supply constant values or be discarded
+in a required constant expression. A reference bound to a fixed shared-memory
+location can be discarded, as in `(alias, 3)`, when its address selection uses only
+constant, in-bounds indices. Reading the shared value remains a runtime operation.
+Runtime address choices, indices, and initializer side effects prevent this
+discardability. The existing lazy rules still apply to unevaluated operands.
+File-scope `constexpr` scalars can supply device values but cannot be bound
+directly to references, following CUDA's
+[host-object address restrictions](https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/cpp-language-support.html#constexpr-variables).
+An arithmetic expression or conversion to a different scalar type can instead
+initialize a const reference's temporary, as in `const int &value = Width + 0;`
+or `const float &converted = Width;`.
 
 ## Source subset
 
@@ -443,7 +457,7 @@ the declared helper; they do not require or produce a pointer. Actual pointer
 dereference and address operations remain unsupported outside the existing
 buffer interface.
 Overloaded comparisons, assignments, and updates remain
-unsupported, as do member operators, references, and templates.
+unsupported, as do member operators, reference parameters and results, and templates.
 
 Standalone named struct definitions are accepted at file and block scope:
 
@@ -478,8 +492,9 @@ or passed by value. These rules follow C++
 Arbitrary field names and indexed fields use the existing value/reference
 rules, including `samples[index].weights[element]`. Const objects and
 `const Sample*` buffers prevent writes to every nested field. Conditional
-struct references support field access; subscripting an array selected through
-a conditional reference remains unsupported.
+struct lvalues support field access. Subscripting an array directly selected by
+a conditional expression remains unsupported; first binding the selected struct
+to a local reference supports indexing its array members.
 
 The initial record subset rejects empty definitions, `bool` fields, const data
 members, pointer/reference members, default member initializers, methods,
@@ -499,6 +514,32 @@ Const locals, including const-qualified aliases, require an initializer.
 Local declarations can list comma-separated names, as in
 `int first = 1, next = first + 1;`. Each initializer finishes before the next
 declarator, and all names share the declared type and qualification.
+
+Local `T&` and `const T&` declarations support the scalar, vector, and struct
+types above in kernels and device helpers. A mutable reference requires a writable
+lvalue of the same type. A const reference keeps a live view of a compatible
+lvalue; it can also retain a temporary value, using existing scalar conversion
+and aggregate initialization rules. Assignment through a reference changes the
+bound object. The address is selected once when the declaration executes,
+including conditional branches and array-index side effects:
+
+```cuda
+int values[2]{3, 5};
+int index = 0;
+int &element = values[index++];
+const int &view = element;
+element += 2;
+```
+
+Both `element` and `view` subsequently observe `values[0]`, whose value is `5`.
+References require initializers and use the existing block and loop scopes.
+Equals, direct-list, and copy-list initializers are accepted; a singleton list
+with a matching lvalue binds that object, while const temporary lists apply the
+existing narrowing checks. Each comma declarator needs its own `&`, as in
+`int &alias = value, copy = alias;`. Reference parameters, results, type aliases,
+array references, and reference members remain unsupported. Binding an unresolved
+reference to itself is also unsupported. Reference lowering has a per-function
+work limit of 65,536 units to bound generated address dispatch and projections.
 
 Fixed local arrays support the scalar, vector, and struct types above
 and their aliases, in both kernels and device helpers. Written extents
@@ -611,7 +652,7 @@ A switch can have a compound body or a single statement, including a leading
 case/default label chain. An unlabeled body is checked but never executed.
 Declarations share the switch body's scope, so bare locals and aliases can be
 used by later cases. Entering a label that bypasses an active local initializer,
-including a `constexpr` or array initializer, is rejected. Initializers inside
+including a `constexpr`, array, or reference initializer, is rejected. Initializers inside
 closed nested scopes do not block later labels, following C++
 [declaration statements](https://timsong-cpp.github.io/cppwp/n4861/stmt.dcl#3).
 Nested switches are supported. Switch initialization statements, declaration

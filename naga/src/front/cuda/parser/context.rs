@@ -22,6 +22,10 @@ pub(super) struct FunctionContext<'a> {
     pub(super) expression_depth: u32,
     pub(super) expression_graph_depths: Vec<u32>,
     pub(super) conditional_references: Arena<Option<ConditionalReference>>,
+    pub(super) bound_addresses: Arena<BoundAddress>,
+    pub(super) bound_address_indices: FastHashMap<BoundAddress, Handle<BoundAddress>>,
+    pub(super) bound_references: Arena<BoundReference>,
+    pub(super) reference_binding_work: u32,
     pub(super) pending_array: Option<Handle<LocalVariable>>,
     pub(super) constant_locals: FastHashMap<Handle<LocalVariable>, Literal>,
 }
@@ -57,6 +61,10 @@ impl FunctionContext<'_> {
             expression_depth: 0,
             expression_graph_depths: Vec::new(),
             conditional_references: Arena::new(),
+            bound_addresses: Arena::new(),
+            bound_address_indices: FastHashMap::default(),
+            bound_references: Arena::new(),
+            reference_binding_work: 0,
             pending_array: None,
             constant_locals: FastHashMap::default(),
         }

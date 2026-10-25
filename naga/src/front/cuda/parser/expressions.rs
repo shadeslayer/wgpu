@@ -330,6 +330,30 @@ impl Parser<'_> {
                     span: token.1,
                 })?;
                 let (pointer, ty, writable, span, constant) = match symbol {
+                    Symbol::PendingReference => {
+                        return Err(ParseError {
+                            message: String::from(
+                                "reference initializer cannot use its own binding",
+                            ),
+                            span: token.1,
+                        });
+                    }
+                    Symbol::Reference {
+                        binding,
+                        ty,
+                        writable,
+                        constant,
+                    } => {
+                        return Ok(ExpressionResult::Value(ExpressionValue::Reference(
+                            ReferenceValue {
+                                reference: Reference::Bound(binding),
+                                writable,
+                                ty,
+                                span: token.1,
+                                constant,
+                            },
+                        )));
+                    }
                     Symbol::Member => {
                         return Err(ParseError {
                             message: String::from("non-static structure member requires an object"),
