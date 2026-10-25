@@ -19,6 +19,9 @@ const MATH_SIGNATURES: [([Scalar; 2], Scalar); 5] = [
     ([Scalar::F32, Scalar::F32], Scalar::F32),
 ];
 
+const MULTIPLY24_BUILTINS: [(&str, Scalar); 2] =
+    [("__mul24", Scalar::I32), ("__umul24", Scalar::U32)];
+
 const BITCAST_BUILTINS: [(&str, Scalar, Scalar); 4] = [
     ("__float_as_int", Scalar::F32, Scalar::I32),
     ("__float_as_uint", Scalar::F32, Scalar::U32),
@@ -97,6 +100,11 @@ pub(super) fn builtin_declarations<'a>() -> FastHashMap<&'a str, GlobalDeclarati
         .into_iter()
         .map(|(name, _)| (name, GlobalDeclaration::Functions(Vec::new())))
         .chain(
+            MULTIPLY24_BUILTINS
+                .into_iter()
+                .map(|(name, _)| (name, GlobalDeclaration::Functions(Vec::new()))),
+        )
+        .chain(
             BITCAST_BUILTINS
                 .into_iter()
                 .map(|(name, _, _)| (name, GlobalDeclaration::Functions(Vec::new()))),
@@ -152,6 +160,7 @@ enum FunctionCandidate {
     Defined(Handle<Function>),
     Current,
     Builtin(MathBuiltin),
+    Multiply24(Scalar),
     Bitcast {
         source: Scalar,
         result: Scalar,
@@ -483,6 +492,7 @@ impl<'a> Parser<'a> {
             matches!(
                 candidate,
                 FunctionCandidate::Builtin(_)
+                    | FunctionCandidate::Multiply24(_)
                     | FunctionCandidate::Bitcast { .. }
                     | FunctionCandidate::Unary { .. }
                     | FunctionCandidate::Sqrt
@@ -682,9 +692,9 @@ impl<'a> Parser<'a> {
                 return self.function.ir.result.as_ref().map(|result| result.ty)
             }
             FunctionCandidate::Builtin(builtin) => TypeSpecifier::Scalar(builtin.result),
-            FunctionCandidate::Bitcast { result, .. } | FunctionCandidate::Unary { result, .. } => {
-                TypeSpecifier::Scalar(result)
-            }
+            FunctionCandidate::Multiply24(result)
+            | FunctionCandidate::Bitcast { result, .. }
+            | FunctionCandidate::Unary { result, .. } => TypeSpecifier::Scalar(result),
             FunctionCandidate::IntegralFabs(_) => unreachable!(),
             FunctionCandidate::Sqrt => TypeSpecifier::Scalar(Scalar::F32),
             FunctionCandidate::Constructor { size, scalar } => {
@@ -897,6 +907,66 @@ impl<'a> Parser<'a> {
                 )?;
             }
             return Ok(self.convert_scalar(value.into(), result)?.into());
+        }
+        if let FunctionCandidate::Multiply24(scalar) = candidate {
+            let mut arguments = arguments.into_iter();
+            let left = self.convert_scalar(arguments.next().unwrap().into(), scalar)?;
+            let right = self.convert_scalar(arguments.next().unwrap().into(), scalar)?;
+            let offset = self.append(Expression::Literal(Literal::U32(0)), span)?;
+            let count = self.append(Expression::Literal(Literal::U32(24)), span)?;
+            let mut operands = [left.handle, right.handle];
+            for operand in &mut operands {
+                let extracted = self.append(
+                    Expression::Math {
+                        fun: MathFunction::ExtractBits,
+                        arg: *operand,
+                        arg1: Some(offset),
+                        arg2: Some(count),
+                        arg3: None,
+                    },
+                    span,
+                )?;
+                *operand = if scalar == Scalar::I32 {
+                    self.append(
+                        Expression::As {
+                            expr: extracted,
+                            kind: ScalarKind::Uint,
+                            convert: None,
+                        },
+                        span,
+                    )?
+                } else {
+                    extracted
+                };
+            }
+            let [left, right] = operands;
+            let product = self.append(
+                Expression::Binary {
+                    op: BinaryOperator::Multiply,
+                    left,
+                    right,
+                },
+                span,
+            )?;
+            let handle = if scalar == Scalar::I32 {
+                self.append(
+                    Expression::As {
+                        expr: product,
+                        kind: ScalarKind::Sint,
+                        convert: None,
+                    },
+                    span,
+                )?
+            } else {
+                product
+            };
+            return Ok(Value {
+                constant: ConstantValue::default(),
+                handle,
+                ty: scalar_resolution(scalar),
+                span,
+            }
+            .into());
         }
         if let FunctionCandidate::Builtin(builtin) = candidate {
             let mut arguments = arguments.into_iter();
@@ -1129,6 +1199,13 @@ impl<'a> Parser<'a> {
                     .map(FunctionCandidate::Builtin),
             )
             .chain(
+                MULTIPLY24_BUILTINS
+                    .into_iter()
+                    .find(|&(candidate, _)| candidate == name)
+                    .filter(move |_| builtin_visible)
+                    .map(|(_, scalar)| FunctionCandidate::Multiply24(scalar)),
+            )
+            .chain(
                 BITCAST_BUILTINS
                     .into_iter()
                     .find(|&(candidate, _, _)| candidate == name)
@@ -1159,6 +1236,7 @@ impl<'a> Parser<'a> {
             FunctionCandidate::Defined(handle) => self.module.functions[handle].arguments.len(),
             FunctionCandidate::Current => self.function.ir.arguments.len(),
             FunctionCandidate::Builtin(builtin) => builtin.parameters.len(),
+            FunctionCandidate::Multiply24(_) => 2,
             FunctionCandidate::Bitcast { .. }
             | FunctionCandidate::Unary { .. }
             | FunctionCandidate::IntegralFabs(_)
@@ -1176,6 +1254,7 @@ impl<'a> Parser<'a> {
             }
             FunctionCandidate::Bitcast { source, .. }
             | FunctionCandidate::Unary { source, .. }
+            | FunctionCandidate::Multiply24(source)
             | FunctionCandidate::IntegralFabs(source) => return scalar_resolution(source),
             FunctionCandidate::Sqrt => return scalar_resolution(Scalar::F32),
             FunctionCandidate::Constructor { scalar, .. } => return scalar_resolution(scalar),
@@ -1257,6 +1336,7 @@ impl<'a> Parser<'a> {
         match best_candidate {
             FunctionCandidate::Defined(_)
             | FunctionCandidate::Builtin(_)
+            | FunctionCandidate::Multiply24(_)
             | FunctionCandidate::Bitcast { .. }
             | FunctionCandidate::Unary { .. }
             | FunctionCandidate::Sqrt

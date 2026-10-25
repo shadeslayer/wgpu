@@ -30,6 +30,7 @@ mod local_declarators;
 mod logical_operators;
 mod loops;
 mod multidimensional_arrays;
+mod multiply24;
 mod operator_addition;
 mod operator_functions;
 mod overloads;

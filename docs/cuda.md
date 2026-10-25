@@ -301,12 +301,14 @@ so exceptional bit patterns are not guaranteed to survive every target.
 
 These predefined functions operate on 32-bit integer representations:
 
-| Function | Parameter | Result | Operation |
+| Function | Parameters | Result | Operation |
 | --- | --- | --- | --- |
 | `__clz` | `int` | `int` | Count leading zero bits; zero returns 32. |
 | `__ffs` | `int` | `int` | Return the first set bit's position, starting at 1; zero returns 0. |
 | `__popc` | `unsigned int` | `int` | Count set bits. |
 | `__brev` | `unsigned int` | `unsigned int` | Reverse all 32 bits. |
+| `__mul24` | `int, int` | `int` | Multiply signed 24-bit operands and return the low 32 product bits. |
+| `__umul24` | `unsigned int, unsigned int` | `unsigned int` | Multiply unsigned 24-bit operands and return the low 32 product bits. |
 
 Negative `int` arguments use their two's-complement representation. For example,
 `__clz(-1)` is 0, `__ffs(-2)` is 2, and `__brev(1u)` is `0x80000000u`.
@@ -314,6 +316,15 @@ Arguments convert to the declared parameter type before the operation, so
 `__popc(3.75f)` is 2. The signed result of `__popc` is preserved: `__popc(3u) - 3`
 is -1. These signatures and results follow NVIDIA's
 [integer intrinsics](https://docs.nvidia.com/cuda/archive/13.0.0/cuda-math-api/cuda_math_api/group__CUDA__MATH__INTRINSIC__INT.html).
+
+The multiply functions ignore the upper eight bits of each converted argument.
+`__mul24` interprets bit 23 as the sign bit; `__umul24` treats the low 24 bits as
+unsigned. Results retain all 32 low product bits, including when the mathematical
+product exceeds 32 bits. For example, `__mul24(0x00800000, 1)` is -8388608, while
+`__umul24(0x00ffffffu, 0x00ffffffu)` is `0xfe000001u`. This follows NVIDIA's
+[24-bit multiply intrinsics](https://docs.nvidia.com/cuda/cuda-math-api/cuda_math_api/group__CUDA__MATH__INTRINSIC__INT.html).
+Calls do not provide source constant expressions, including calls with literal
+arguments.
 
 These names use the same argument evaluation, overload selection, name hiding,
 and predefined-signature restrictions as the bit reinterpretation functions
