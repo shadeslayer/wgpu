@@ -181,6 +181,9 @@ impl<'a> Parser<'a> {
         let mut lookahead = self.lexer.clone();
         lookahead.next()?;
         let next = lookahead.peek()?;
+        if next.0 == Token::Paren('{') {
+            return Ok(false);
+        }
         if next.0 != Token::Paren('(') {
             return Ok(true);
         }

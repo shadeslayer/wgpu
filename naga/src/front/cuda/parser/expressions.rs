@@ -79,7 +79,7 @@ impl Parser<'_> {
                 break;
             }
             let operator_span = self.lexer.next()?.1;
-            let mut left_value = left.require_value()?;
+            let left_value = left.require_value()?;
             if matches!(
                 operator,
                 BinaryOperator::LogicalAnd | BinaryOperator::LogicalOr
@@ -87,15 +87,9 @@ impl Parser<'_> {
                 left = self.logical(left_value, operator, precedence)?.into();
                 continue;
             }
-            if operator == BinaryOperator::Add {
-                left = self.addition(left_value, precedence, operator_span)?;
+            if operators::Operator::from_binary(operator).is_some() {
+                left = self.binary_operator(left_value, operator, precedence, operator_span)?;
                 continue;
-            }
-            if matches!(
-                operator,
-                BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight
-            ) {
-                left_value = self.rvalue(left_value)?.into();
             }
             let right = self.expression(precedence + 1)?;
             left = self.binary_value(operator, left_value, right)?.into();
@@ -168,27 +162,34 @@ impl Parser<'_> {
                 .map(ExpressionResult::Value);
         }
         if self.lexer.next_if(Token::Paren('('))? {
-            let checkpoint = self.lexer.clone();
             if self.starts_type()? {
-                let target = self.cast_type()?;
-                if self.lexer.next_if(Token::Paren(')'))? {
+                let mut lookahead = self.lexer.clone();
+                self.parse_type_from(&mut lookahead)?;
+                if lookahead.next_if(Token::Paren(')'))? {
+                    let target = self.cast_type()?;
+                    self.lexer.expect_span(Token::Paren(')'))?;
                     let value = self.expression(UNARY_PRECEDENCE)?;
                     let mut value = self.cast_value(value, &target)?;
                     value.span = token.1.until(&value.span);
                     return Ok(value.into());
                 }
-                self.lexer = checkpoint;
             }
             let value = self.comma_expression_result()?;
             self.lexer.expect_span(Token::Paren(')'))?;
             return Ok(value);
         }
-        if self.lexer.next_if(Token::Operation('-'))?
-            || self.lexer.next_if(Token::Operation('+'))?
-            || self.lexer.next_if(Token::Operation('!'))?
-            || self.lexer.next_if(Token::Operation('~'))?
-        {
+        if matches!(token.0, Token::Operation('-' | '+' | '!' | '~' | '*' | '&')) {
+            self.lexer.next()?;
             let value = self.expression(UNARY_PRECEDENCE)?;
+            if self.is_source_class(value.ty()) {
+                return self.unary_operator(token.0, value, token.1);
+            }
+            if matches!(token.0, Token::Operation('*' | '&')) {
+                return Err(ParseError {
+                    message: String::from("builtin pointer operators are unsupported"),
+                    span: token.1,
+                });
+            }
             if token.0 == Token::Operation('!') {
                 let value = self.truthy(value)?;
                 let span = token.1.until(&value.span);
@@ -272,8 +273,8 @@ impl Parser<'_> {
                     });
                 }
                 if name == "operator" {
-                    let span = self.operator_addition_name(token.1)?;
-                    return self.call(operators::ADDITION_NAME, span);
+                    let (operator, span) = self.operator_name(token.1)?;
+                    return self.call(operator.name(), span);
                 }
                 if name == "static_cast" {
                     self.lexer.expect_span(Token::Paren('<'))?;

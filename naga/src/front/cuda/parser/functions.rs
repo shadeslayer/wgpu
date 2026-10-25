@@ -144,6 +144,7 @@ struct FunctionHeader<'a> {
     has_host: bool,
     is_static: bool,
     inlining: Option<Inlining>,
+    operator: Option<operators::Operator>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -369,15 +370,14 @@ impl<'a> Parser<'a> {
             });
         }
         let token = self.lexer.peek()?;
-        let (name, name_span) = if self.take_ident("operator")? {
-            (
-                operators::ADDITION_NAME,
-                self.operator_addition_name(token.1)?,
-            )
+        let (name, name_span, operator) = if self.take_ident("operator")? {
+            let (operator, span) = self.operator_name(token.1)?;
+            (operator.name(), span, Some(operator))
         } else {
-            self.identifier()?
+            let (name, span) = self.identifier()?;
+            (name, span, None)
         };
-        if name == operators::ADDITION_NAME && kind != FunctionKind::Device {
+        if operator.is_some() && kind != FunctionKind::Device {
             return Err(ParseError {
                 message: String::from("operator functions must be device helpers"),
                 span: name_span,
@@ -393,6 +393,7 @@ impl<'a> Parser<'a> {
             has_host: host_span.is_some(),
             is_static: seen_static,
             inlining,
+            operator,
         })
     }
 
@@ -474,21 +475,8 @@ impl<'a> Parser<'a> {
             });
         }
         self.parameters()?;
-        if header.name == operators::ADDITION_NAME
-            && (self.function.ir.arguments.len() != 2
-                || !self
-                    .function
-                    .ir
-                    .arguments
-                    .iter()
-                    .any(|argument| self.is_source_class(&TypeResolution::Handle(argument.ty))))
-        {
-            return Err(ParseError {
-                message: String::from(
-                    "binary operator+ requires two parameters and a vector class operand",
-                ),
-                span: header.name_span,
-            });
+        if let Some(operator) = header.operator {
+            self.check_operator_parameters(operator, header.name_span)?;
         }
         let is_prototype = self.lexer.peek()?.0 == Token::Separator(';');
         let intrinsic = self.function_candidates(header.name).find(|&candidate| {

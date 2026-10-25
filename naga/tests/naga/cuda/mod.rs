@@ -29,6 +29,7 @@ mod local_declarators;
 mod loops;
 mod multidimensional_arrays;
 mod operator_addition;
+mod operator_functions;
 mod overloads;
 mod parameters;
 mod prototypes;

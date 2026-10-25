@@ -85,7 +85,6 @@ fn cuda_operator_addition_accepts_aliases_and_existing_function_specifiers() {
 fn cuda_operator_addition_requires_two_parameters_and_a_source_vector_class() {
     for parameters in [
         "",
-        "int2 value",
         "int2 first, int2 second, int2 third",
         "int left, int right",
         "float left, unsigned right",
@@ -263,13 +262,18 @@ fn cuda_operator_addition_does_not_enable_neighboring_operator_syntax() {
         "__device__ int2 operator+(int2 *left, int2 right) { return right; }",
         "__device__ int2 operator+(int2 &left, int2 right) { return right; }",
         "__device__ int2 operator+(int2 left, int right = 2) { return left; }",
-        "__device__ int2 operator-(int2 left, int2 right) { return left; }",
         "__device__ int2 operator+=(int2 left, int2 right) { return left; }",
-        "__device__ int2 operator*(int2 left, int2 right) { return left; }",
     ] {
         rejected(&format!("{declaration} __global__ void kernel() {{}}"));
     }
     validate("__device__ int2 operator+(int2 left, int2 right); __global__ void kernel() {}");
+    for declaration in [
+        "__device__ int operator+(int2 value) { return 1; }",
+        "__device__ int2 operator-(int2 left, int2 right) { return left; }",
+        "__device__ int2 operator*(int2 left, int2 right) { return left; }",
+    ] {
+        validate(&format!("{declaration} __global__ void kernel() {{}}"));
+    }
 }
 
 #[test]

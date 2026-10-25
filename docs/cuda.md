@@ -387,13 +387,14 @@ in the same overload resolution as other helpers.
 These types follow CUDA's [built-in vector definitions](https://docs.nvidia.com/cuda/archive/13.0.0/cuda-c-programming-guide/index.html#built-in-vector-types).
 In particular, three-component arrays have a 12-byte element stride and
 4-byte alignment. Vector comparisons, truthiness, indexing, and swizzles remain
-unsupported. Vector addition requires a visible source-defined binary
-`operator+`; other vector arithmetic remains unsupported. Vector casts and
-parenthesized aggregate initialization remain unsupported. By-value kernel
+unsupported. Vector arithmetic requires a visible source-defined operator.
+Vector casts and parenthesized aggregate initialization remain unsupported. By-value kernel
 parameters require the scalar types described in the kernel interface.
 
-Nonmember binary `operator+` definitions take two parameters by value, with at
-least one parameter of a supported vector or struct type. For example:
+Nonmember binary operators `+`, `-`, `*`, `/`, `%`, `&`, `|`, `^`, `<<`, and `>>`
+take two parameters by value. Prefix unary operators `+`, `-`, `~`, `!`, `*`, and
+`&` take one. At least one parameter must have a supported vector or struct type.
+For example:
 
 ```cuda
 __device__ float2 operator+(float2 left, float2 right) {
@@ -403,8 +404,9 @@ __device__ float2 operator+(float2 left, float2 right) {
 
 Both `first + second` and `operator+(first, second)` select from declarations
 visible before the call, using the existing helper overload and conversion
-rules. Scalar-only `+` expressions retain built-in arithmetic. Operators can
-return a supported scalar, vector, or struct value, or `void`; void results can only
+rules, including prototypes with later definitions. Scalar-only expressions
+retain the existing built-in operators. Operators can return a supported scalar,
+vector, or struct value, or `void`; void results can only
 appear where an ordinary void helper call is accepted. Calls remain runtime
 expressions and obey the existing helper recursion restrictions.
 
@@ -413,10 +415,14 @@ from left to right. This is the frontend's chosen order, not a general CUDA
 guarantee: C++ distinguishes
 [operator-notation sequencing](https://timsong-cpp.github.io/cppwp/n4861/over.match.oper#2)
 from [explicit function calls](https://timsong-cpp.github.io/cppwp/n4861/expr.call#8).
+Shift expressions evaluate and copy the left operand before evaluating the right.
 Source expressions must still obey the C++ rules for unsequenced side effects.
-Defining `operator+` does not enable vector `+=`, vector unary `+`, or other
-overloaded operators.
-Member operators, references, and templates remain unsupported.
+Overloaded unary `*` and `&` accept class values, including temporaries, and call
+the declared helper; they do not require or produce a pointer. Actual pointer
+dereference and address operations remain unsupported outside the existing
+buffer interface.
+Overloaded comparisons, logical operators, assignments, and updates remain
+unsupported, as do member operators, references, and templates.
 
 Standalone named struct definitions are accepted at file and block scope:
 
@@ -442,7 +448,8 @@ fields match. Local definitions can hide outer type names.
 Locals support same-type copies, assignments, and braced initialization,
 including partial initialization and brace elision for nested aggregates.
 Omitted fields are zero-initialized. Typed expressions such as `Sample{}` can
-be passed to helpers, returned, or read through their fields. Copying a struct
+be passed to helpers, returned, grouped in parentheses, discarded as statements,
+or read through their fields. Copying a struct
 also copies its fixed-array fields. Standalone arrays still cannot be copied
 or passed by value. These rules follow C++
 [aggregate initialization](https://eel.is/c++draft/dcl.init.aggr).
