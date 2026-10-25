@@ -218,6 +218,17 @@ canonical quiet NaN `0x7fc00000`. These results follow NVIDIA's
 Calls execute at runtime and are not constant expressions. Double-precision
 `floor` remains unsupported.
 
+`sinf(float)` and `cosf(float)` return `float` and accept scalar arguments that
+convert to `float`. Integer range reduction and polynomial evaluation cover
+the full finite input range, with results within two ULP of the exact sine or
+cosine rounded to `float`. This matches the accuracy reported for NVIDIA's
+[single-precision functions](https://docs.nvidia.com/cuda/archive/13.1.0/cuda-programming-guide/05-appendices/mathematical-functions.html).
+The calculation uses the received input representation, including subnormals.
+`sinf` preserves signed zero, and `cosf` returns `1.0f` for both signed zeros.
+Infinities and NaNs produce the canonical quiet NaN `0x7fc00000`.
+Calls execute at runtime and are not constant expressions. Double-precision
+`sin` and `cos`, fast intrinsics, and `sincosf` remain unsupported.
+
 Target floating-point rules still apply. In particular, WGSL permits
 [finite-math assumptions, changes to zero signs, and flushing subnormals](https://gpuweb.github.io/gpuweb/wgsl/#floating-point-evaluation),
 so exceptional values are not guaranteed to retain these bits on every target.
@@ -228,7 +239,7 @@ Additional user-defined overloads participate alongside the predefined ones;
 definitions repeating a predefined parameter signature are rejected, including
 through aliases or top-level `const`. Local values and type names can hide these
 functions. Kernels and file-scope type aliases named `min`, `max`, `fminf`,
-`fmaxf`, `fabs`, `fabsf`, `sqrtf`, or `floorf` remain unsupported.
+`fmaxf`, `fabs`, `fabsf`, `sqrtf`, `floorf`, `sinf`, or `cosf` remain unsupported.
 
 ## Bit reinterpretation
 

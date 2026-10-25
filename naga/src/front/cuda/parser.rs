@@ -18,6 +18,7 @@ mod references;
 mod sqrtf;
 mod statements;
 mod switches;
+mod trigonometry;
 mod types;
 mod updates;
 
@@ -206,6 +207,7 @@ pub(super) struct Parser<'a> {
     global_declarations: FastHashMap<&'a str, GlobalDeclaration>,
     function: FunctionContext<'a>,
     sqrtf_function: Option<Handle<Function>>,
+    trigonometry_function: Option<Handle<Function>>,
     helper_builtin_globals: [Option<Handle<GlobalVariable>>; 3],
     workgroup_size: [u32; 3],
 }
@@ -219,6 +221,7 @@ impl<'a> Parser<'a> {
             global_declarations: functions::builtin_declarations(),
             function: FunctionContext::new(FunctionKind::Kernel),
             sqrtf_function: None,
+            trigonometry_function: None,
             helper_builtin_globals: [None; 3],
             workgroup_size: options.workgroup_size,
         }

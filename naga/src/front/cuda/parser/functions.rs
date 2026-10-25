@@ -25,7 +25,7 @@ const BITCAST_BUILTINS: [(&str, Scalar, Scalar); 4] = [
     ("__uint_as_float", Scalar::U32, Scalar::F32),
 ];
 
-const UNARY_BUILTINS: [(&str, MathFunction, Scalar, Scalar); 7] = [
+const UNARY_BUILTINS: [(&str, MathFunction, Scalar, Scalar); 9] = [
     (
         "__clz",
         MathFunction::CountLeadingZeros,
@@ -53,6 +53,8 @@ const UNARY_BUILTINS: [(&str, MathFunction, Scalar, Scalar); 7] = [
     ("floorf", MathFunction::Floor, Scalar::F32, Scalar::F32),
     ("fabsf", MathFunction::Abs, Scalar::F32, Scalar::F32),
     ("fabs", MathFunction::Abs, Scalar::F32, Scalar::F32),
+    ("sinf", MathFunction::Sin, Scalar::F32, Scalar::F32),
+    ("cosf", MathFunction::Cos, Scalar::F32, Scalar::F32),
 ];
 
 #[derive(Clone, Copy, PartialEq)]
@@ -713,6 +715,9 @@ impl<'a> Parser<'a> {
             let handle = match function {
                 MathFunction::Floor => self.floorf(argument.handle, span)?,
                 MathFunction::Abs => self.absolute_value(argument.handle, span)?,
+                MathFunction::Sin | MathFunction::Cos => {
+                    self.trigonometry(argument.handle, function == MathFunction::Cos, span)?
+                }
                 _ => self.append(
                     Expression::Math {
                         fun: function,

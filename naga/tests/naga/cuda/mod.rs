@@ -38,6 +38,7 @@ mod specifiers;
 mod sqrtf;
 mod streaming;
 mod switches;
+mod trigonometry;
 mod type_aliases;
 mod uninitialized;
 mod updates;
