@@ -397,7 +397,6 @@ fn cuda_lists_reject_empty_inferred_arrays_and_unsupported_initialization_contex
         "__shared__ int values[2]{1};",
         "__shared__ int3 point{1};",
         "int3 point{.x = 1};",
-        "int3 point = int3{1, 2, 3};",
         "int value = int{1};",
         "int value = 0; value = {1};",
         "constexpr int values[2]{1};",
@@ -407,6 +406,7 @@ fn cuda_lists_reject_empty_inferred_arrays_and_unsupported_initialization_contex
     }
     rejected("__device__ int helper() { return {1}; } __global__ void kernel() {}");
     rejected("__device__ void consume(int value) {} __global__ void kernel() { consume({1}); }");
+    validate("__global__ void kernel() { int3 point = int3{1, 2, 3}; }");
 }
 
 #[test]

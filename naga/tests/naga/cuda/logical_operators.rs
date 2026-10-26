@@ -225,8 +225,9 @@ fn cuda_logical_operators_reject_void_values_even_in_skipped_builtin_operands() 
 }
 
 #[test]
-fn cuda_logical_operators_require_two_value_parameters_and_a_source_class() {
+fn cuda_logical_operators_require_two_parameters_and_a_source_class() {
     for symbol in ["&&", "||"] {
+        validate(&format!("{BOX} __device__ int operator{symbol}(Box &first, Box second) {{ first.value += second.value; return first.value; }} __global__ void kernel(int *out) {{ Box value{{3}}; out[0] = value {symbol} value; }}"));
         for parameters in [
             "",
             "Box value",
@@ -238,7 +239,6 @@ fn cuda_logical_operators_require_two_value_parameters_and_a_source_class() {
         }
         for declaration in [
             format!("__device__ int operator{symbol}(Box *left, Box right) {{ return 1; }}"),
-            format!("__device__ int operator{symbol}(Box &left, Box right) {{ return 1; }}"),
             format!("__device__ int operator{symbol}(Box left, int right = 2) {{ return 1; }}"),
             format!("__global__ void operator{symbol}(Box left, Box right) {{}}"),
         ] {

@@ -660,9 +660,9 @@ fn cuda_local_references_reject_invalid_mutable_and_const_bindings() {
 
 #[test]
 fn cuda_local_references_retain_unsupported_reference_grammar_boundaries() {
+    validate("__device__ int helper(int &value) { return value; } __global__ void kernel() { int value = 3; helper(value); }");
+    validate("__device__ int helper(const int &value); __global__ void kernel() {}");
     for source in [
-        "__device__ int helper(int &value) { return value; } __global__ void kernel() {}",
-        "__device__ int helper(const int &value); __global__ void kernel() {}",
         "__global__ void kernel(int &value) {}",
         "__device__ int &helper(int value) { return value; } __global__ void kernel() {}",
         "using Reference = int&; __global__ void kernel() {}",

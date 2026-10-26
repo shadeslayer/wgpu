@@ -199,6 +199,11 @@ impl Parser<'_> {
         ty: &TypeResolution,
         span: Span,
     ) -> Result<Handle<Expression>, ParseError> {
+        if self.function.parameter_state_charged {
+            self.parameter_expansion_budget.charge_nodes(1, span)?;
+            self.parameter_expansion_budget
+                .charge_slice::<LocalVariable>(1, span)?;
+        }
         let ty = self.type_handle(ty, span);
         let local = self.function.ir.local_variables.append(
             LocalVariable {

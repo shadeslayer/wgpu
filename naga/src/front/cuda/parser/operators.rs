@@ -115,10 +115,9 @@ impl Parser<'_> {
         }
         if !self
             .function
-            .ir
-            .arguments
+            .parameters
             .iter()
-            .any(|argument| self.is_source_class(&TypeResolution::Handle(argument.ty)))
+            .any(|parameter| self.is_source_class(&TypeResolution::Handle(parameter.ty)))
         {
             return Err(ParseError {
                 message: String::from(
@@ -137,6 +136,39 @@ impl Parser<'_> {
         precedence: u8,
         operator_span: Span,
     ) -> Result<ExpressionResult, ParseError> {
+        let name = Operator::from_binary(operator).unwrap().name();
+        if self.has_reference_candidate(name) {
+            let (right, right_body) =
+                self.capture_block(|parser| parser.expression(precedence + 1))?;
+            if self.is_source_class(left.ty()) || self.is_source_class(right.ty()) {
+                let span = left.span().until(&right.span());
+                self.parameter_expansion_budget
+                    .charge_slice::<CapturedArgument>(2, span)?;
+                return self.call_with_captured_arguments(
+                    name,
+                    alloc::vec![
+                        CapturedArgument {
+                            value: left,
+                            body: crate::Block::new()
+                        },
+                        CapturedArgument {
+                            value: right,
+                            body: right_body
+                        }
+                    ],
+                    operator_span,
+                    span,
+                );
+            }
+            if matches!(
+                operator,
+                BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight
+            ) {
+                left = self.rvalue(left)?.into();
+            }
+            self.append_block(right_body);
+            return self.binary_value(operator, left, right).map(Into::into);
+        }
         if matches!(
             operator,
             BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight
@@ -164,6 +196,20 @@ impl Parser<'_> {
         operator_span: Span,
     ) -> Result<ExpressionResult, ParseError> {
         let operator = Operator::from_token(token).unwrap();
+        if self.has_reference_candidate(operator.name()) {
+            let span = operator_span.until(&operand.span());
+            self.parameter_expansion_budget
+                .charge_slice::<CapturedArgument>(1, span)?;
+            return self.call_with_captured_arguments(
+                operator.name(),
+                alloc::vec![CapturedArgument {
+                    value: operand,
+                    body: crate::Block::new()
+                }],
+                operator_span,
+                span,
+            );
+        }
         let value = self.rvalue(operand)?;
         let span = operator_span.until(&value.span);
         self.call_with_arguments(operator.name(), alloc::vec![value], operator_span, span)

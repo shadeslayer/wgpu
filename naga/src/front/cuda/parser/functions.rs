@@ -62,7 +62,7 @@ const UNARY_BUILTINS: [(&str, MathFunction, Scalar, Scalar); 9] = [
 ];
 
 #[derive(Clone, Copy, PartialEq)]
-struct MathBuiltin {
+pub(super) struct MathBuiltin {
     function: MathFunction,
     parameters: [Scalar; 2],
     result: Scalar,
@@ -156,7 +156,7 @@ struct FunctionHeader<'a> {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum FunctionCandidate {
+pub(super) enum FunctionCandidate {
     Defined(Handle<Function>),
     Current,
     Builtin(MathBuiltin),
@@ -497,7 +497,12 @@ impl<'a> Parser<'a> {
                     | FunctionCandidate::Unary { .. }
                     | FunctionCandidate::Sqrt
                     | FunctionCandidate::Constructor { .. }
-            ) && self.function.ir.arguments.len() == self.candidate_arity(candidate)
+            ) && self
+                .function
+                .parameters
+                .iter()
+                .all(|parameter| parameter.mode == ParameterMode::Value)
+                && self.function.ir.arguments.len() == self.candidate_arity(candidate)
                 && (0..self.candidate_arity(candidate)).all(|index| {
                     self.module.compare_types(
                         &self.candidate_type(FunctionCandidate::Current, index),
@@ -557,16 +562,7 @@ impl<'a> Parser<'a> {
         let previous = match self.global_declarations.get(header.name) {
             Some(&GlobalDeclaration::Functions(ref functions)) => {
                 functions.iter().copied().find(|&function| {
-                    self.module.functions[function]
-                        .arguments
-                        .iter()
-                        .map(|argument| argument.ty)
-                        .eq(self
-                            .function
-                            .ir
-                            .arguments
-                            .iter()
-                            .map(|argument| argument.ty))
+                    self.function_declarations[&function].parameters == self.function.parameters
                 })
             }
             _ => None,
@@ -614,6 +610,7 @@ impl<'a> Parser<'a> {
                 self.function_declarations.insert(
                     handle,
                     FunctionDeclaration {
+                        parameters: core::mem::take(&mut self.function.parameters),
                         has_host: header.has_host,
                         is_static: header.is_static,
                         inlining: header.inlining,
@@ -639,6 +636,21 @@ impl<'a> Parser<'a> {
         if self.function.ir.result.is_none() {
             crate::proc::ensure_block_returns(&mut self.function.ir.body);
         }
+        let parameter_state = if self.parameter_state_needed() {
+            self.prepare_parameter_bindings(header.name_span)?;
+            self.parameter_expansion_budget.charge_slice::<u32>(
+                self.function.expression_graph_depths.len(),
+                header.name_span,
+            )?;
+            self.parameter_expansion_budget
+                .charge_map_entry::<Handle<Function>, FunctionParameterState>(
+                    1,
+                    header.name_span,
+                )?;
+            Some(self.function.take_parameter_state())
+        } else {
+            None
+        };
         let function = core::mem::replace(
             &mut self.function,
             FunctionContext::new(FunctionKind::Kernel),
@@ -646,14 +658,19 @@ impl<'a> Parser<'a> {
         if let Some(previous) = previous {
             self.module.functions[previous] = function.ir;
             let declaration = self.function_declarations.get_mut(&previous).unwrap();
+            declaration.parameters = function.parameters;
             declaration.is_defined = true;
             declaration.calls = function.calls;
+            if let Some(state) = parameter_state {
+                self.parameter_states.insert(previous, state);
+            }
         } else {
             let handle = self.module.functions.append(function.ir, header.name_span);
             self.register_function(header.name, handle);
             self.function_declarations.insert(
                 handle,
                 FunctionDeclaration {
+                    parameters: function.parameters,
                     has_host: header.has_host,
                     is_static: header.is_static,
                     inlining: header.inlining,
@@ -661,6 +678,9 @@ impl<'a> Parser<'a> {
                     calls: function.calls,
                 },
             );
+            if let Some(state) = parameter_state {
+                self.parameter_states.insert(handle, state);
+            }
         }
         Ok(())
     }
@@ -707,20 +727,53 @@ impl<'a> Parser<'a> {
 
     pub(super) fn device_parameter(
         &mut self,
-        name: &'a str,
+        name: Option<&'a str>,
         span: Span,
         parameter_ty: &TypeResolution,
         is_const: bool,
+        mode: ParameterMode,
     ) -> Result<(), ParseError> {
         let ty = self.type_handle(parameter_ty, span);
+        self.parameter_expansion_budget
+            .charge_slice::<SourceParameter>(1, span)?;
+        self.function.parameters.push(SourceParameter { ty, mode });
+        let argument_ty = if matches!(mode, ParameterMode::Reference { .. }) {
+            self.module.types.insert(
+                Type {
+                    name: None,
+                    inner: TypeInner::Pointer {
+                        base: ty,
+                        space: AddressSpace::Function,
+                    },
+                },
+                span,
+            )
+        } else {
+            ty
+        };
         let index = self.function.ir.arguments.len() as u32;
         self.function.ir.arguments.push(FunctionArgument {
-            name: Some(String::from(name)),
-            ty,
+            name: name.map(String::from),
+            ty: argument_ty,
             binding: None,
         });
+        let Some(name) = name else {
+            return Ok(());
+        };
         let value = self.append(Expression::FunctionArgument(index), span)?;
-        self.initialize_parameter(name, span, parameter_ty, is_const, value)
+        if matches!(mode, ParameterMode::Reference { .. }) {
+            self.insert_symbol(
+                name,
+                Symbol::Variable {
+                    pointer: value,
+                    ty: parameter_ty.clone(),
+                    writable: !is_const,
+                },
+                span,
+            )
+        } else {
+            self.initialize_parameter(name, span, parameter_ty, is_const, value)
+        }
     }
 
     pub(super) fn call(&mut self, name: &str, span: Span) -> Result<ExpressionResult, ParseError> {
@@ -737,6 +790,20 @@ impl<'a> Parser<'a> {
             });
         }
         self.lexer.expect_span(Token::Paren('('))?;
+        if self.has_reference_candidate(name) {
+            let mut arguments = Vec::new();
+            if self.lexer.peek()?.0 != Token::Paren(')') {
+                loop {
+                    arguments.push(self.capture_call_argument()?);
+                    if self.lexer.peek()?.0 == Token::Paren(')') {
+                        break;
+                    }
+                    self.lexer.expect_span(Token::Separator(','))?;
+                }
+            }
+            let end = self.lexer.expect_span(Token::Paren(')'))?;
+            return self.call_with_captured_arguments(name, arguments, span, span.until(&end));
+        }
         let mut arguments = Vec::new();
         if self.lexer.peek()?.0 != Token::Paren(')') {
             loop {
@@ -763,7 +830,7 @@ impl<'a> Parser<'a> {
         self.lower_call(candidate, arguments, span)
     }
 
-    fn lower_call(
+    pub(super) fn lower_call(
         &mut self,
         candidate: FunctionCandidate,
         arguments: Vec<Value>,
@@ -1172,7 +1239,7 @@ impl<'a> Parser<'a> {
         self.function_candidates(name).next().is_some()
     }
 
-    fn function_candidates<'b>(
+    pub(super) fn function_candidates<'b>(
         &'b self,
         name: &str,
     ) -> impl Iterator<Item = FunctionCandidate> + Clone + 'b {
@@ -1231,7 +1298,7 @@ impl<'a> Parser<'a> {
             )
     }
 
-    fn candidate_arity(&self, candidate: FunctionCandidate) -> usize {
+    pub(super) fn candidate_arity(&self, candidate: FunctionCandidate) -> usize {
         match candidate {
             FunctionCandidate::Defined(handle) => self.module.functions[handle].arguments.len(),
             FunctionCandidate::Current => self.function.ir.arguments.len(),
@@ -1245,7 +1312,22 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn candidate_type(&self, candidate: FunctionCandidate, index: usize) -> TypeResolution {
+    pub(super) fn candidate_type(
+        &self,
+        candidate: FunctionCandidate,
+        index: usize,
+    ) -> TypeResolution {
+        match candidate {
+            FunctionCandidate::Defined(handle) => {
+                if let Some(declaration) = self.function_declarations.get(&handle) {
+                    return TypeResolution::Handle(declaration.parameters[index].ty);
+                }
+            }
+            FunctionCandidate::Current => {
+                return TypeResolution::Handle(self.function.parameters[index].ty)
+            }
+            _ => {}
+        }
         let argument = match candidate {
             FunctionCandidate::Defined(handle) => &self.module.functions[handle].arguments[index],
             FunctionCandidate::Current => &self.function.ir.arguments[index],
@@ -1262,24 +1344,49 @@ impl<'a> Parser<'a> {
         TypeResolution::Handle(argument.ty)
     }
 
+    pub(super) fn candidate_mode(
+        &self,
+        candidate: FunctionCandidate,
+        index: usize,
+    ) -> ParameterMode {
+        match candidate {
+            FunctionCandidate::Defined(handle) => self
+                .function_declarations
+                .get(&handle)
+                .map_or(ParameterMode::Value, |declaration| {
+                    declaration.parameters[index].mode
+                }),
+            FunctionCandidate::Current => self.function.parameters[index].mode,
+            _ => ParameterMode::Value,
+        }
+    }
+
+    fn candidate_conversion(
+        &self,
+        candidate: FunctionCandidate,
+        index: usize,
+        argument: &impl CallArgument,
+    ) -> Option<u8> {
+        let target = self.candidate_type(candidate, index);
+        let rank = conversion_rank(argument.ty(), &target, &self.module)?;
+        match self.candidate_mode(candidate, index) {
+            ParameterMode::Value | ParameterMode::Reference { is_const: true } => Some(rank),
+            ParameterMode::Reference { is_const: false } => {
+                (rank == 0 && argument.reference_writable() == Some(true)).then_some(rank)
+            }
+        }
+    }
+
     fn better_candidate(
         &self,
         left_candidate: FunctionCandidate,
         right_candidate: FunctionCandidate,
-        arguments: &[Value],
+        arguments: &[impl CallArgument],
     ) -> bool {
         let mut has_better_conversion = false;
         for (index, argument) in arguments.iter().enumerate() {
-            let left_rank = conversion_rank(
-                &argument.ty,
-                &self.candidate_type(left_candidate, index),
-                &self.module,
-            );
-            let right_rank = conversion_rank(
-                &argument.ty,
-                &self.candidate_type(right_candidate, index),
-                &self.module,
-            );
+            let left_rank = self.candidate_conversion(left_candidate, index, argument);
+            let right_rank = self.candidate_conversion(right_candidate, index, argument);
             let (Some(left_rank), Some(right_rank)) = (left_rank, right_rank) else {
                 return false;
             };
@@ -1287,14 +1394,32 @@ impl<'a> Parser<'a> {
                 return false;
             }
             has_better_conversion |= left_rank < right_rank;
+            if left_rank == right_rank {
+                if let (
+                    ParameterMode::Reference {
+                        is_const: left_const,
+                    },
+                    ParameterMode::Reference {
+                        is_const: right_const,
+                    },
+                ) = (
+                    self.candidate_mode(left_candidate, index),
+                    self.candidate_mode(right_candidate, index),
+                ) {
+                    if left_const && !right_const {
+                        return false;
+                    }
+                    has_better_conversion |= !left_const && right_const;
+                }
+            }
         }
         has_better_conversion
     }
 
-    fn resolve_overload(
+    pub(super) fn resolve_overload(
         &self,
         name: &str,
-        arguments: &[Value],
+        arguments: &[impl CallArgument],
         span: Span,
     ) -> Result<FunctionCandidate, ParseError> {
         let integral_fabs = self.integral_fabs_candidate(name, arguments);
@@ -1304,12 +1429,8 @@ impl<'a> Parser<'a> {
                 .filter(|&candidate| {
                     self.candidate_arity(candidate) == arguments.len()
                         && arguments.iter().enumerate().all(|(index, argument)| {
-                            conversion_rank(
-                                &argument.ty,
-                                &self.candidate_type(candidate, index),
-                                &self.module,
-                            )
-                            .is_some()
+                            self.candidate_conversion(candidate, index, argument)
+                                .is_some()
                         })
                 });
         let mut remaining_candidates = viable_candidates.clone();
@@ -1355,7 +1476,7 @@ impl<'a> Parser<'a> {
     fn integral_fabs_candidate(
         &self,
         name: &str,
-        arguments: &[Value],
+        arguments: &[impl CallArgument],
     ) -> Option<FunctionCandidate> {
         if name != "fabs"
             || arguments.len() != 1
@@ -1366,7 +1487,7 @@ impl<'a> Parser<'a> {
         {
             return None;
         }
-        let &TypeInner::Scalar(source) = arguments[0].ty.inner_with(&self.module.types) else {
+        let &TypeInner::Scalar(source) = arguments[0].ty().inner_with(&self.module.types) else {
             return None;
         };
         if ![Scalar::BOOL, Scalar::I32, Scalar::U32].contains(&source) {
@@ -1380,7 +1501,10 @@ impl<'a> Parser<'a> {
             ) && self.candidate_arity(candidate) == 1
                 && self
                     .module
-                    .compare_types(&self.candidate_type(candidate, 0), &arguments[0].ty)
+                    .compare_types(&self.candidate_type(candidate, 0), arguments[0].ty())
+                && self
+                    .candidate_conversion(candidate, 0, &arguments[0])
+                    .is_some()
         });
         (!exact_ordinary).then_some(FunctionCandidate::IntegralFabs(source))
     }

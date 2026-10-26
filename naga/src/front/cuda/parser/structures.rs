@@ -164,14 +164,15 @@ impl<'a> Parser<'a> {
             })
     }
 
-    pub(super) fn structure_value(
+    pub(super) fn aggregate_value(
         &mut self,
-        ty: Handle<Type>,
+        specifier: TypeSpecifier,
         span: Span,
     ) -> Result<Value, ParseError> {
-        let resolution = TypeResolution::Handle(ty);
+        let resolution = self.lower_type(specifier, span);
+        let ty = self.type_handle(&resolution, span);
         let pointer = self.temporary_pointer(&resolution, span)?;
-        self.aggregate_initializer(pointer, TypeSpecifier::Structure(ty), ty, None)?;
+        self.aggregate_initializer(pointer, specifier, ty, None)?;
         let span = self.lexer.span_from(span.to_range().unwrap().start);
         self.load_pointer(pointer, &resolution, span)
     }

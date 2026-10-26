@@ -16,6 +16,8 @@ mod functions;
 mod initializers;
 mod loops;
 mod operators;
+mod parameter_calls;
+mod parameter_expansion;
 mod reference_bindings;
 mod references;
 mod sqrtf;
@@ -29,6 +31,10 @@ mod updates;
 use crate::proc::TypeResolution;
 use context::{FunctionContext, FunctionKind};
 use function_declarations::{FunctionCall, FunctionDeclaration, IntrinsicDeclaration};
+use parameter_calls::{
+    CallArgument, CapturedArgument, DeferredCall, FunctionParameterState, ParameterMode,
+    SourceParameter,
+};
 use reference_bindings::{BoundAddress, BoundReference};
 use types::scalar_resolution;
 use types::{GlobalDeclaration, QualifiedType, TypeSpecifier};
@@ -224,6 +230,9 @@ pub(super) struct Parser<'a> {
     function: FunctionContext<'a>,
     function_declarations: FastHashMap<Handle<Function>, FunctionDeclaration>,
     intrinsic_declarations: Vec<IntrinsicDeclaration<'a>>,
+    parameter_states: FastHashMap<Handle<Function>, FunctionParameterState>,
+    kernel_parameter_state: Option<FunctionParameterState>,
+    parameter_expansion_budget: parameter_expansion::ExpansionBudget,
     kernel_context: Option<FunctionContext<'a>>,
     kernel_calls: Vec<FunctionCall>,
     sqrtf_function: Option<Handle<Function>>,
@@ -244,6 +253,9 @@ impl<'a> Parser<'a> {
             function: FunctionContext::new(FunctionKind::Kernel),
             function_declarations: FastHashMap::default(),
             intrinsic_declarations: Vec::new(),
+            parameter_states: FastHashMap::default(),
+            kernel_parameter_state: None,
+            parameter_expansion_budget: parameter_expansion::ExpansionBudget::default(),
             kernel_context: None,
             kernel_calls: Vec::new(),
             sqrtf_function: None,
@@ -293,6 +305,18 @@ impl<'a> Parser<'a> {
         }
         let pointer_span = self.lexer.peek()?.1;
         let is_pointer = self.lexer.next_if(Token::Operation('*'))?;
+        let mode = if self.lexer.next_if(Token::Operation('&'))? {
+            if self.function.kind == FunctionKind::Kernel {
+                return Err(ParseError {
+                    message: String::from("kernel reference parameters are unsupported"),
+                    span: pointer_span,
+                });
+            }
+            self.activate_parameter_expansion(pointer_span)?;
+            ParameterMode::Reference { is_const }
+        } else {
+            ParameterMode::Value
+        };
         if self.function.kind == FunctionKind::Kernel
             && !is_pointer
             && !matches!(specifier, TypeSpecifier::Scalar(_))
@@ -318,18 +342,12 @@ impl<'a> Parser<'a> {
                 Token::Separator(',') | Token::Paren(')')
             )
         {
-            let ty = self.type_handle(&ty, type_span);
-            self.function.ir.arguments.push(FunctionArgument {
-                name: None,
-                ty,
-                binding: None,
-            });
-            return Ok(());
+            return self.device_parameter(None, type_span, &ty, is_const, mode);
         }
         let (name, span) = self.identifier()?;
         self.check_name(name, span)?;
         if self.function.kind == FunctionKind::Device {
-            return self.device_parameter(name, span, &ty, is_const);
+            return self.device_parameter(Some(name), span, &ty, is_const, mode);
         }
         if !is_pointer {
             return self.value_parameter(parameter_index, name, span, &ty, is_const);
@@ -635,6 +653,19 @@ impl<'a> Parser<'a> {
             self.prepend_block(initializers);
         }
         self.kernel_calls = core::mem::take(&mut self.function.calls);
+        if self.parameter_state_needed() {
+            let span = self
+                .function
+                .ir
+                .body
+                .span_iter()
+                .next()
+                .map_or(Span::UNDEFINED, |(_, span)| *span);
+            self.prepare_parameter_bindings(span)?;
+            self.parameter_expansion_budget
+                .charge_slice::<u32>(self.function.expression_graph_depths.len(), span)?;
+            self.kernel_parameter_state = Some(self.function.take_parameter_state());
+        }
         self.module.entry_points[0].function = core::mem::take(&mut self.function.ir);
         Ok(())
     }
@@ -663,6 +694,13 @@ impl<'a> Parser<'a> {
         expression: Expression,
         span: Span,
     ) -> Result<Handle<Expression>, ParseError> {
+        if self.function.parameter_state_charged {
+            self.parameter_expansion_budget.charge_nodes(1, span)?;
+            self.parameter_expansion_budget
+                .charge_slice::<Expression>(1, span)?;
+            self.parameter_expansion_budget
+                .charge_slice::<u32>(1, span)?;
+        }
         let depth = match expression {
             Expression::Unary { expr: operand, .. }
             | Expression::As { expr: operand, .. }

@@ -288,11 +288,16 @@ impl Parser<'_> {
                     return Ok(value.into());
                 }
                 if let Some(target) = self.type_name(name) {
-                    if let TypeSpecifier::Structure(ty) = target.ty {
+                    if matches!(target.ty, TypeSpecifier::Structure(_)) {
                         if self.lexer.peek()?.0 != Token::Paren('{') {
                             return self.fail("structure values require a typed initializer list");
                         }
-                        return self.structure_value(ty, token.1).map(Into::into);
+                        return self.aggregate_value(target.ty, token.1).map(Into::into);
+                    }
+                    if matches!(target.ty, TypeSpecifier::Vector { .. })
+                        && self.lexer.peek()?.0 == Token::Paren('{')
+                    {
+                        return self.aggregate_value(target.ty, token.1).map(Into::into);
                     }
                     self.lexer.expect_span(Token::Paren('('))?;
                     let value = self.expression(0)?;
@@ -470,6 +475,36 @@ impl Parser<'_> {
         if !self.is_source_class(left.ty()) && !self.has_function_candidate(name) {
             return self
                 .builtin_logical(left, operator, |parser| parser.expression(precedence + 1))
+                .map(Into::into);
+        }
+        if self.has_reference_candidate(name) {
+            let (right, right_body) =
+                self.capture_block(|parser| parser.expression(precedence + 1))?;
+            if self.is_source_class(left.ty()) || self.is_source_class(right.ty()) {
+                let span = left.span().until(&right.span());
+                self.parameter_expansion_budget
+                    .charge_slice::<CapturedArgument>(2, span)?;
+                return self.call_with_captured_arguments(
+                    name,
+                    alloc::vec![
+                        CapturedArgument {
+                            value: left,
+                            body: crate::Block::new()
+                        },
+                        CapturedArgument {
+                            value: right,
+                            body: right_body
+                        }
+                    ],
+                    operator_span,
+                    span,
+                );
+            }
+            return self
+                .builtin_logical(left, operator, |parser| {
+                    parser.append_block(right_body);
+                    Ok(right)
+                })
                 .map(Into::into);
         }
         let left = self.rvalue(left)?;

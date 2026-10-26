@@ -328,10 +328,10 @@ fn cuda_operator_functions_class_prefix_address_and_dereference_are_value_calls(
 }
 
 #[test]
-fn cuda_operator_functions_do_not_enable_pointer_reference_or_member_signatures() {
+fn cuda_operator_functions_reject_pointer_signatures_reference_results_and_members() {
+    validate(&format!("{BOX} __device__ Box operator&(Box &value) {{ ++value.value; return value; }} __global__ void kernel(int *out) {{ Box value{{3}}; out[0] = (&value).value; }}"));
     for declaration in [
         "__device__ Box operator*(Box *value) { return value[0]; }",
-        "__device__ Box operator&(Box &value) { return value; }",
         "__device__ Box *operator&(Box value) { return 0; }",
         "__device__ Box &operator*(Box value) { return value; }",
         "__device__ Box operator/(Box value, int scale = 2) { return value; }",

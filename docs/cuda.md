@@ -124,7 +124,8 @@ __device__ float scale(float value, float factor) {
 
 Prototypes end with `;` and can omit parameter names. Compatible declarations
 can repeat before or after a definition; parameter names, aliases, and top-level
-parameter `const` do not distinguish signatures. The definition determines its
+by-value parameter `const` do not distinguish signatures. Reference parameters
+retain their referent's constness. The definition determines its
 parameter names and constness. Conflicting result types and duplicate definitions
 produce errors. These rules follow C++ [function declarations](https://eel.is/c++draft/dcl.fct).
 
@@ -145,9 +146,9 @@ implementation, including calls to previously declared device-only helpers; the 
 implementation is not checked or emitted. Host-only definitions remain unsupported.
 Repeated source declarations must agree on whether the helper also has `__host__`.
 
-The frontend evaluates arguments left to right, converts them to the parameter
-types, and copies them into per-call locals. Assignments affect only those copies;
-`const` parameters cannot be assigned. Return values convert to the declared
+The frontend evaluates arguments left to right. By-value arguments convert to the
+parameter types and are copied before later arguments execute. Assignments affect
+only those copies; `const` parameters cannot be assigned. Return values convert to the declared
 result type. Value-returning helpers must explicitly return on every supported
 path; a return inside a loop alone does not satisfy this conservative check.
 
@@ -161,13 +162,50 @@ Calls prefer exact argument types, then promotion from `bool` to `int`, then
 other scalar conversions. The selected overload must be no worse for every
 argument and better for at least one; otherwise the call is ambiguous.
 Return types, aliases, and top-level parameter `const` do not distinguish
-signatures. Each call uses only the overloads visible at that point in the source;
+by-value signatures. Mutable and const reference parameters distinguish overloads.
+When both candidates bind references, a mutable lvalue prefers `T&` over
+`const T&`. An equally ranked by-value candidate and reference candidate remain
+ambiguous. Each call uses only the overloads visible at that point in the source;
 later declarations do not change its selection. These rules follow
 C++ [conversion ranking](https://eel.is/c++draft/over.ics.rank) and
 [overload selection](https://eel.is/c++draft/over.match.best.general).
 
-Helpers have no resource bindings. Pointer and reference parameters, shared
-storage, and barriers in helper bodies remain unsupported. Kernel prototypes
+Helpers accept `T&` and `const T&` for the scalar, vector, and struct types above.
+A mutable reference requires a writable lvalue of exactly the same type. A const
+reference keeps a live alias to a same-type lvalue; a supported scalar conversion
+or typed temporary instead creates a private snapshot for that call. Arguments
+can refer to local, shared, or buffer storage, including overlapping objects:
+
+```cuda
+__device__ void combine(int &first, int &second) {
+    first = 5;
+    second += 2;
+    first += second;
+}
+__global__ void aliases(int *out) {
+    int value = 1;
+    combine(value, value);
+    out[0] = value; // 14
+}
+```
+
+Each reference argument's address is selected once, before later arguments
+execute. Binding an output-only parameter does not read the referenced value.
+Reference helpers are expanded into their callers to preserve live aliases across
+backends; nested calls, ordinary returns, and early returns keep their source
+behavior. This expansion does not make calls constant expressions. Formal
+references also retain unknown constant-expression provenance, even when an
+actual argument names fixed shared storage. Invalid unused definitions and
+discarded calls are still checked before expansion.
+
+Reference expansion has cumulative limits of 1,048,576 generated nodes,
+4,194,304 work steps, and 64 MiB of accounted additional owned payload. Generated
+expression depth is limited to 64 and generated control depth to 127, accounting
+for backend scopes. These limits are checked before copying generated payload;
+they do not describe an exact allocator or process memory limit.
+
+Helpers have no resource bindings. Pointer parameters, reference results,
+whole-array references, shared declarations, and barriers in helper bodies remain unsupported. Kernel prototypes
 remain unsupported.
 
 Both helpers and kernels accept `static` and standard `inline` in the function
@@ -186,7 +224,8 @@ Execution-space, function, return-type, and `const` specifiers may appear in any
 valid order; `unsigned` and `int` may be interleaved with those specifiers.
 Static variables and the `__inline_hint__` specifier remain unsupported.
 Top-level return `const`, including `const void`, does not change the result type.
-The frontend preserves ordinary function calls; `inline` does not force substitution.
+The frontend preserves ordinary value-only function calls; `inline` does not
+force substitution. Reference helpers require expansion even with `__noinline__`.
 
 ## Mathematical functions
 
@@ -415,9 +454,12 @@ In particular, three-component arrays have a 12-byte element stride and
 unsupported. Vector arithmetic requires a visible source-defined operator.
 Vector casts and parenthesized aggregate initialization remain unsupported. By-value kernel
 parameters require the scalar types described in the kernel interface.
+Typed vector temporaries such as `float2{1.0f, 2.0f}` use the same list
+initialization and narrowing rules as vector declarations.
 
 Nonmember binary operators `+`, `-`, `*`, `/`, `%`, `&`, `|`, `^`, `<<`, and `>>`
-take two parameters by value. Prefix unary operators `+`, `-`, `~`, `!`, `*`, and
+take two parameters, using the helper value and reference binding rules above.
+Prefix unary operators `+`, `-`, `~`, `!`, `*`, and
 `&` take one. At least one parameter must have a supported vector or struct type.
 For example:
 
@@ -440,12 +482,15 @@ from left to right. This is the frontend's chosen order, not a general CUDA
 guarantee: C++ distinguishes
 [operator-notation sequencing](https://timsong-cpp.github.io/cppwp/n4861/over.match.oper#2)
 from [explicit function calls](https://timsong-cpp.github.io/cppwp/n4861/expr.call#8).
-Shift expressions evaluate and copy the left operand before evaluating the right.
+Shift expressions evaluate the left operand before evaluating the right. A
+by-value parameter captures the left value, while a reference parameter captures
+its address and observes subsequent changes to the object.
 Source expressions must still obey the C++ rules for unsequenced side effects.
 Source-defined binary `operator&&` and `operator||` also take two parameters,
 with at least one supported vector or struct parameter. Both operands are
 evaluated once, from left to right, before the helper call; the left value is
-copied before right-hand side effects. These calls preserve the original operand
+copied before right-hand side effects when the selected parameter is by value;
+reference parameters retain live aliases. These calls preserve the original operand
 types for overload selection and can return any supported helper result, including
 `void`. Scalar-only `&&` and `||` retain Boolean results and short-circuiting,
 including when unrelated class overloads are visible. This follows the C++ rules
@@ -457,7 +502,7 @@ the declared helper; they do not require or produce a pointer. Actual pointer
 dereference and address operations remain unsupported outside the existing
 buffer interface.
 Overloaded comparisons, assignments, and updates remain
-unsupported, as do member operators, reference parameters and results, and templates.
+unsupported, as do member operators, reference results, and templates.
 
 Standalone named struct definitions are accepted at file and block scope:
 
@@ -536,7 +581,7 @@ References require initializers and use the existing block and loop scopes.
 Equals, direct-list, and copy-list initializers are accepted; a singleton list
 with a matching lvalue binds that object, while const temporary lists apply the
 existing narrowing checks. Each comma declarator needs its own `&`, as in
-`int &alias = value, copy = alias;`. Reference parameters, results, type aliases,
+`int &alias = value, copy = alias;`. Reference results, type aliases,
 array references, and reference members remain unsupported. Binding an unresolved
 reference to itself is also unsupported. Reference lowering has a per-function
 work limit of 65,536 units to bound generated address dispatch and projections.
@@ -607,10 +652,9 @@ Scalar lists contain at most one expression; extra scalar brace nesting is
 rejected, following the
 [nested-brace clarification](https://cplusplus.github.io/CWG/issues/cwg_closed.html#1501).
 Thus `int values[2]{{1}, {}};` is valid and `int value{{1}};` is not.
-List initialization is currently limited to declarations of these existing
-types. Designated initializers, braced temporaries, assignments, returns, and
-helper arguments remain unsupported. Shared-storage initializers also remain
-unsupported.
+Typed vector and struct temporaries also use these initialization rules.
+Bare initializer lists in assignments, returns, and helper arguments remain
+unsupported, as do designated initializers and shared-storage initializers.
 
 Supported expressions include indexed buffer reads, scalar locals,
 parentheses, arithmetic and comparisons with scalar conversions, and the logical operators

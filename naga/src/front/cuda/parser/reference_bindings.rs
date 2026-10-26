@@ -8,21 +8,21 @@ pub(super) enum AddressProjection {
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(super) struct BoundAddress {
-    root: Handle<Expression>,
-    projections: Vec<AddressProjection>,
+    pub(super) root: Handle<Expression>,
+    pub(super) projections: Vec<AddressProjection>,
 }
 
 #[derive(Clone, Debug)]
-struct BoundTarget {
+pub(super) struct BoundTarget {
     // Projected views retain source tags while addressing different subobjects.
-    selector: u32,
-    address: Handle<BoundAddress>,
+    pub(super) selector: u32,
+    pub(super) address: Handle<BoundAddress>,
 }
 
 #[derive(Clone, Debug)]
 pub(super) struct BoundReference {
-    selector: Option<Handle<Expression>>,
-    targets: Vec<BoundTarget>,
+    pub(super) selector: Option<Handle<Expression>>,
+    pub(super) targets: Vec<BoundTarget>,
 }
 
 impl<'a> Parser<'a> {
@@ -162,10 +162,17 @@ impl<'a> Parser<'a> {
             });
         }
         self.function.reference_binding_work += work as u32;
+        if self.function.parameter_state_charged {
+            self.parameter_expansion_budget.charge_work(work, span)?;
+            self.parameter_expansion_budget
+                .charge_nodes(work * 4, span)?;
+            self.parameter_expansion_budget
+                .charge_slice::<[u8; 128]>(work, span)?;
+        }
         Ok(())
     }
 
-    fn retain_bound_address(
+    pub(super) fn retain_bound_address(
         &mut self,
         address: BoundAddress,
         span: Span,
@@ -179,7 +186,7 @@ impl<'a> Parser<'a> {
         Ok(handle)
     }
 
-    fn retain_bound_reference(
+    pub(super) fn retain_bound_reference(
         &mut self,
         selector: Option<Handle<Expression>>,
         targets: Vec<BoundTarget>,
@@ -192,7 +199,7 @@ impl<'a> Parser<'a> {
             .append(BoundReference { selector, targets }, span))
     }
 
-    fn bound_reference_view(
+    pub(super) fn bound_reference_view(
         &mut self,
         handle: Handle<BoundReference>,
         span: Span,
@@ -242,6 +249,17 @@ impl<'a> Parser<'a> {
                     pointer = base;
                 }
                 Expression::LocalVariable(_) | Expression::GlobalVariable(_) => break,
+                Expression::FunctionArgument(index)
+                    if self
+                        .function
+                        .parameters
+                        .get(index as usize)
+                        .is_some_and(|parameter| {
+                            matches!(parameter.mode, ParameterMode::Reference { .. })
+                        }) =>
+                {
+                    break
+                }
                 _ => {
                     return Err(ParseError {
                         message: String::from("unsupported CUDA reference address"),
@@ -260,7 +278,7 @@ impl<'a> Parser<'a> {
         )
     }
 
-    fn bound_address_pointer(
+    pub(super) fn bound_address_pointer(
         &mut self,
         handle: Handle<BoundAddress>,
         span: Span,
@@ -380,7 +398,7 @@ impl<'a> Parser<'a> {
         self.project_bound_reference(handle, AddressProjection::Index(captured), span)
     }
 
-    fn freeze_reference(
+    pub(super) fn freeze_reference(
         &mut self,
         reference: ReferenceValue,
     ) -> Result<Handle<BoundReference>, ParseError> {

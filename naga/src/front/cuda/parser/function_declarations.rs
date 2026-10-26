@@ -14,6 +14,7 @@ pub(super) struct FunctionCall {
 }
 
 pub(super) struct FunctionDeclaration {
+    pub(super) parameters: Vec<SourceParameter>,
     pub(super) has_host: bool,
     pub(super) is_static: bool,
     pub(super) inlining: Option<Inlining>,

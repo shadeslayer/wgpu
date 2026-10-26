@@ -482,13 +482,13 @@ fn cuda_prototypes_keep_prototype_parameter_and_local_shadow_scopes_separate() {
 
 #[test]
 fn cuda_prototypes_reject_malformed_and_unsupported_declarators_with_utf8_spans() {
+    validate("/* λ */ __device__ int helper(int &); __global__ void kernel() {}");
     for declaration in [
         "__device__ int helper(int, );",
         "__device__ int helper(void, int);",
         "__device__ int helper(int value = 1);",
         "__device__ int helper(int, ...);",
         "__device__ int helper(int *);",
-        "__device__ int helper(int &);",
         "__device__ int helper(int values[2]);",
         "__device__ int *helper();",
         "__device__ double helper(double);",
