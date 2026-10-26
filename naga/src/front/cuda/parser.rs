@@ -64,6 +64,7 @@ enum Symbol {
     Type(QualifiedType),
     Member,
     PendingReference,
+    PendingPointer,
     Pointer(Handle<PointerValue>),
     Reference {
         binding: Handle<BoundReference>,

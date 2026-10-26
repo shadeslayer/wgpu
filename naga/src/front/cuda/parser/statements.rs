@@ -217,6 +217,18 @@ impl<'a> Parser<'a> {
             return self.fail("constexpr requires a scalar variable");
         }
         loop {
+            if self.lexer.next_if(Token::Operation('*'))? {
+                if is_constexpr {
+                    return self.fail("constexpr pointer declarations are unsupported");
+                }
+                let span = self.local_pointer_declaration(specifier, is_const)?;
+                self.function.initialized_declarations.push(span);
+                if self.lexer.next_if(Token::Separator(','))? {
+                    continue;
+                }
+                self.lexer.expect_span(Token::Separator(';'))?;
+                return Ok(());
+            }
             if self.lexer.next_if(Token::Operation('&'))? {
                 if is_constexpr {
                     return self.fail("constexpr reference declarations are unsupported");

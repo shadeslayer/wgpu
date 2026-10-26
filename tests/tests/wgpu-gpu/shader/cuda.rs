@@ -32,6 +32,7 @@ mod list_initialization;
 mod literals;
 mod local_arrays;
 mod local_declarators;
+mod local_pointers;
 mod logical_operators;
 mod multidimensional_arrays;
 mod multiply24;
@@ -83,6 +84,7 @@ pub fn all_tests(tests: &mut Vec<GpuTestInitializer>) {
         CUDA_LOGICAL_OPERATORS,
         CUDA_LOCAL_ARRAYS,
         CUDA_LOCAL_DECLARATORS,
+        CUDA_LOCAL_POINTERS,
         CUDA_MULTIDIMENSIONAL_ARRAYS,
         CUDA_MULTIPLY24,
         CUDA_OPERATOR_ADDITION,
@@ -287,6 +289,8 @@ static CUDA_LOGICAL_OPERATORS: GpuTestConfiguration = configuration(logical_oper
 static CUDA_LOCAL_ARRAYS: GpuTestConfiguration = configuration(local_arrays::cases);
 #[apply(gpu_test!)]
 static CUDA_LOCAL_DECLARATORS: GpuTestConfiguration = configuration(local_declarators::cases);
+#[apply(gpu_test!)]
+static CUDA_LOCAL_POINTERS: GpuTestConfiguration = configuration(local_pointers::cases);
 #[apply(gpu_test!)]
 static CUDA_MULTIDIMENSIONAL_ARRAYS: GpuTestConfiguration =
     configuration(multidimensional_arrays::cases);

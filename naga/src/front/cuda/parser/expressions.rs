@@ -341,6 +341,12 @@ impl Parser<'_> {
                     Symbol::Pointer(pointer) => {
                         return self.pointer_symbol_value(pointer, token.1);
                     }
+                    Symbol::PendingPointer => {
+                        return Err(ParseError {
+                            message: String::from("pointer initializer cannot use its own binding"),
+                            span: token.1,
+                        });
+                    }
                     Symbol::PendingReference => {
                         return Err(ParseError {
                             message: String::from(

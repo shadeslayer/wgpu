@@ -237,15 +237,25 @@ pointee `const` remains effective throughout the member chain. An array of
 structs or vectors can decay to its first element for member access.
 Overloaded `operator->` and pointer-to-member operators remain unsupported.
 
+Local pointer declarations require an initializer: `T *value = source`,
+`T *value{source}`, or `T *value = {source}`. They accept the same array decays,
+object addresses, pointer expressions, and pointee qualifications as helper
+arguments. Initializers evaluate once, so later changes to an index or condition
+do not retarget a pointer. Locals preserve live aliases in kernels and helpers,
+including mixed declaration lists and block or loop scopes. Pointee `const`
+prevents writes; optional top-level pointer `const` does not affect the pointee.
+Pointer reassignment, pointer updates, and `constexpr` pointer declarations
+remain unsupported.
+
 Single-dimensional helper array parameters, `T values[]` and `T values[N]`,
 adjust to `T*`. A written bound must be a positive integral constant expression;
 it does not constrain the argument's length. Pointer parameters and adjusted
 array parameters share overload signatures. Top-level parameter `const`, as in
 `T* const`, does not distinguish signatures; pointee `const` does.
 
-Discarding a bare pointer parameter, as in `(pointer, 4)`, does not read its
-value. Reading an unknown formal pointer through indirection, indexing,
-unary `+`, or offset arithmetic prevents a required constant expression under
+Discarding a bare pointer parameter or local, as in `(pointer, 4)`, does not read
+its value. Reading an unknown formal pointer or a local pointer through
+indirection, indexing, unary `+`, or offset arithmetic prevents a required constant expression under
 the frontend's C++20 constant-expression rules. Caller expansion does not make
 those expressions constant.
 Constant-address proofs currently cover shared storage; automatic local
@@ -263,7 +273,7 @@ they do not describe an exact allocator or process memory limit.
 Helpers have no resource bindings. Pointer and reference results,
 whole-array references, shared declarations, and barriers in helper bodies remain unsupported. Kernel prototypes
 remain unsupported.
-Pointer locals and members, pointer assignment and updates, null pointers,
+Pointer members, pointer assignment and updates, null pointers,
 pointer comparisons and differences, pointer casts, and general pointer
 declarators remain unsupported. Arrays selected from temporary struct values
 cannot supply borrowed pointers.

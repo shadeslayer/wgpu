@@ -267,7 +267,7 @@ impl Parser<'_> {
                     DeferredArgument::Reference(self.freeze_reference(reference)?)
                 }
                 ParameterMode::Pointer { is_const } => {
-                    let pointer = self.pointer_argument(argument.value, &target, is_const, span)?;
+                    let pointer = self.convert_pointer(argument.value, &target, is_const, span)?;
                     DeferredArgument::Pointer(self.boxed_pointer_value(pointer)?)
                 }
             };

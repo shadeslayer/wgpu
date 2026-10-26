@@ -479,10 +479,10 @@ fn cuda_pointer_parameters_reject_missing_definitions_and_call_cycles() {
 }
 
 #[test]
-fn cuda_pointer_parameters_reject_escaping_and_unimplemented_pointer_storage() {
+fn cuda_pointer_parameters_reject_escaping_and_unsupported_pointer_storage() {
     validate("__device__ int read(const int *value) { return value[0]; } __global__ void kernel(int *out) { int value = 3; out[0] = read(&value); }");
+    validate("__global__ void kernel() { int value = 3; int *local = &value; }");
     for source in [
-        "__global__ void kernel() { int value = 3; int *local = &value; }",
         "struct Record { int *value; }; __global__ void kernel() {}",
         "__device__ void change(int *value) { value = value + 1; } __global__ void kernel() {}",
         "__device__ void change(int *value) { ++value; } __global__ void kernel() {}",

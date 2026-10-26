@@ -281,11 +281,11 @@ fn cuda_inferred_arrays_still_require_nonempty_lists_and_supported_local_element
         "extern __shared__ int values[];",
         "double values[]{1.0f};",
         "void values[]{1};",
-        "int values[]{1}; int *pointer = values;",
         "int source[]{1}; int values[] = source;",
     ] {
         rejected(&format!("__global__ void kernel() {{ {body} }}"));
     }
+    validate("__global__ void kernel() { int values[]{1}; int *pointer = values; }");
 }
 
 #[test]

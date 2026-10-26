@@ -406,12 +406,12 @@ fn cuda_multidimensional_arrays_reject_incomplete_shapes_and_value_copies() {
         "matrix[0] = matrix[1];",
         "int row = matrix[0];",
         "consume(matrix[0]);",
-        "int *row = matrix[0];",
         "matrix[0][0][0];",
         "matrix[0][true];",
     ] {
         rejected(&format!("__device__ void consume(int value) {{}} __global__ void kernel() {{ int matrix[2][2]{{}}; {operation} }}"));
     }
+    validate("__device__ void consume(int value) {} __global__ void kernel() { int matrix[2][2]{}; int *row = matrix[0]; }");
     rejected("__device__ void consume(int matrix[2][2]) {} __global__ void kernel() {}");
     rejected("__global__ void kernel(int matrix[2][2]) {}");
     validate("__global__ void kernel() { int matrix[2][2]{}; matrix; matrix[0]; &matrix[0][0]; }");

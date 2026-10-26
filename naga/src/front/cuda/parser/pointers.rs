@@ -83,6 +83,44 @@ pub(super) trait PointerRemapper {
 }
 
 impl<'a> Parser<'a> {
+    pub(super) fn local_pointer_declaration(
+        &mut self,
+        specifier: TypeSpecifier,
+        is_const: bool,
+    ) -> Result<Span, ParseError> {
+        self.take_ident("const")?;
+        let (name, span) = self.identifier()?;
+        self.check_name(name, span)?;
+        self.insert_symbol(name, Symbol::PendingPointer, span)?;
+        let pointee = self.lower_type(specifier, span);
+        let pointee = self.type_handle(&pointee, span);
+        let ty = self.pointer_type(pointee, span);
+        let has_equals = self.lexer.next_if(Token::Operation('='))?;
+        let has_braces = self.lexer.next_if(Token::Paren('{'))?;
+        if !has_equals && !has_braces {
+            return self.fail("pointer declaration requires an initializer");
+        }
+        let value = self.expression(0)?;
+        if has_braces {
+            self.lexer.next_if(Token::Separator(','))?;
+            self.lexer.expect_span(Token::Paren('}'))?;
+        }
+        let value_span = value.span();
+        let mut pointer = self.convert_pointer(value, &ty, is_const, value_span)?;
+        pointer.span = span;
+        pointer.category = PointerValueCategory::Variable;
+        pointer.constant = ConstantValue {
+            literal: None,
+            is_discardable: true,
+        };
+        pointer.constant_address = None;
+        let pointer = self.retain_pointer_symbol(pointer)?;
+        self.function
+            .symbol_table
+            .add(name, Symbol::Pointer(pointer));
+        Ok(span)
+    }
+
     pub(super) fn boxed_pointer_value(
         &mut self,
         pointer: PointerValue,
@@ -479,7 +517,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    pub(super) fn pointer_argument(
+    pub(super) fn convert_pointer(
         &mut self,
         value: ExpressionValue,
         target: &TypeResolution,
@@ -489,7 +527,7 @@ impl<'a> Parser<'a> {
         let mut pointer = self.borrowed_pointer(value)?;
         if !self.module.compare_types(&pointer.ty, target) || (pointer.is_const && !is_const) {
             return Err(ParseError {
-                message: String::from("incompatible CUDA pointer argument"),
+                message: String::from("incompatible CUDA pointer type"),
                 span,
             });
         }

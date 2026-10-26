@@ -29,6 +29,7 @@ mod list_initialization;
 mod literals;
 mod local_arrays;
 mod local_declarators;
+mod local_pointers;
 mod logical_operators;
 mod loops;
 mod multidimensional_arrays;
