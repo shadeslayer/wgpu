@@ -255,13 +255,13 @@ fn cuda_void_helpers_reject_returned_values_and_invalid_parameters() {
         "__device__ void consume() { return true; } __global__ void kernel() {}",
         "__device__ int scalar() { return 1; } __device__ void consume() { return scalar(); } __global__ void kernel() {}",
         "__device__ void consume(void value) {} __global__ void kernel() {}",
-        "__device__ void consume(int *value) {} __global__ void kernel() {}",
         "__device__ void consume(const int value) { ++value; } __global__ void kernel() {}",
         "__device__ void consume(int value) {} __global__ void kernel(void value) {}",
         "__device__ void consume(int value) {} __device__ int scalar(int value) { if (value) return 1; } __global__ void kernel() {}",
     ] {
         assert_rejected(source);
     }
+    validate("__device__ void consume(int *value) {} __global__ void kernel() {}");
 }
 
 #[test]

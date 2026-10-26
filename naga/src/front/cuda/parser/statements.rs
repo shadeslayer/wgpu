@@ -442,7 +442,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn array_size(&mut self) -> Result<(NonZeroU32, Span), ParseError> {
+    pub(super) fn array_size(&mut self) -> Result<(NonZeroU32, Span), ParseError> {
         let (value, _) = self.capture_block(|parser| {
             let value = parser.expression(0)?;
             parser.rvalue(value)

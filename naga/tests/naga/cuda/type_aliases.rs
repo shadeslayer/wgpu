@@ -348,8 +348,10 @@ fn cuda_aliases_preserve_bool_resource_and_shared_storage_restrictions() {
         "using Flag = bool; __global__ void kernel(Flag value) {}",
         "typedef bool Flag; __global__ void kernel(Flag *out) {}",
         "using Flag = bool; __global__ void kernel() { __shared__ Flag flags[4]; }",
-        "using Element = int; __device__ int helper(Element *value) { return 1; } __global__ void kernel() {}",
-    ] { rejected(source); }
+    ] {
+        rejected(source);
+    }
+    validate("using Element = int; __device__ int helper(Element *value) { return 1; } __global__ void kernel() {}");
 }
 
 #[test]

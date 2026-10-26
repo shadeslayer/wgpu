@@ -1,6 +1,18 @@
 use super::*;
 
 impl Parser<'_> {
+    fn clone_mapped_expression(
+        &mut self,
+        expression: &MappedExpression,
+        span: Span,
+    ) -> Result<MappedExpression, ParseError> {
+        if matches!(*expression, MappedExpression::Pointer(_)) {
+            self.parameter_expansion_budget
+                .charge_slice::<PointerValue>(1, span)?;
+        }
+        Ok(expression.clone())
+    }
+
     pub(super) fn name_invocation_expression(
         &mut self,
         source: &Function,
@@ -35,7 +47,8 @@ impl Parser<'_> {
         self.parameter_expansion_budget
             .charge_slice::<Handle<Expression>>(1, invocation.span)?;
         invocation.mapped_handles.push(handle);
-        invocation.expressions[handle.index()] = Some(mapped.clone());
+        let cached = self.clone_mapped_expression(&mapped, invocation.span)?;
+        invocation.expressions[handle.index()] = Some(cached);
         Ok(mapped)
     }
 
@@ -60,7 +73,9 @@ impl Parser<'_> {
     ) -> Result<Handle<Expression>, ParseError> {
         match self.invocation_expression(invocation, handle)? {
             MappedExpression::Value(value) => Ok(value),
-            MappedExpression::Reference { .. } => Err(expansion_error(invocation.span)),
+            MappedExpression::Reference { .. } | MappedExpression::Pointer(_) => {
+                Err(expansion_error(invocation.span))
+            }
         }
     }
 
@@ -89,17 +104,34 @@ impl Parser<'_> {
         self.parameter_expansion_budget
             .charge_work(1, invocation.span)?;
         if let Some(ref mapped) = invocation.expressions[handle.index()] {
-            return Ok(mapped.clone());
+            return self.clone_mapped_expression(mapped, invocation.span);
         }
         let source = invocation.source;
         let span = source.expressions.get_span(handle);
         let expression = match source.expressions[handle] {
             Expression::FunctionArgument(index) => {
-                let mapped = invocation.arguments[index as usize].clone();
+                let mapped =
+                    self.clone_mapped_expression(&invocation.arguments[index as usize], span)?;
                 return self.cache_invocation_expression(invocation, handle, mapped);
             }
             Expression::LocalVariable(local) => {
-                Expression::LocalVariable(invocation.locals[local.index()])
+                if let Some(state) = invocation.source_state {
+                    if let Some(&access) = state.pointers.validation_addresses.get(&local) {
+                        let reference = self.remap_pointer_access(state, access, invocation)?;
+                        let ty = reference.ty.clone();
+                        let mapped = match reference.reference {
+                            Reference::Pointer(pointer) => MappedExpression::Value(pointer),
+                            _ => MappedExpression::Reference {
+                                binding: self.freeze_reference(reference)?,
+                                ty,
+                            },
+                        };
+                        return self.cache_invocation_expression(invocation, handle, mapped);
+                    }
+                }
+                Expression::LocalVariable(
+                    invocation.locals[local.index()].ok_or_else(|| expansion_error(span))?,
+                )
             }
             Expression::Literal(literal) => Expression::Literal(literal),
             Expression::Constant(constant) => Expression::Constant(constant),
@@ -131,6 +163,7 @@ impl Parser<'_> {
                         return self.cache_invocation_expression(invocation, handle, mapped);
                     }
                     MappedExpression::Value(base) => Expression::AccessIndex { base, index },
+                    MappedExpression::Pointer(_) => return Err(expansion_error(span)),
                 }
             }
             Expression::Access { base, index } => {
@@ -144,6 +177,7 @@ impl Parser<'_> {
                         return self.cache_invocation_expression(invocation, handle, mapped);
                     }
                     MappedExpression::Value(base) => Expression::Access { base, index },
+                    MappedExpression::Pointer(_) => return Err(expansion_error(span)),
                 }
             }
             Expression::Load { pointer } => {
@@ -164,6 +198,7 @@ impl Parser<'_> {
                         );
                     }
                     MappedExpression::Value(pointer) => Expression::Load { pointer },
+                    MappedExpression::Pointer(_) => return Err(expansion_error(span)),
                 }
             }
             Expression::Unary { op, expr } => Expression::Unary {

@@ -137,7 +137,7 @@ impl Parser<'_> {
         operator_span: Span,
     ) -> Result<ExpressionResult, ParseError> {
         let name = Operator::from_binary(operator).unwrap().name();
-        if self.has_reference_candidate(name) {
+        if self.has_indirect_candidate(name) {
             let (right, right_body) =
                 self.capture_block(|parser| parser.expression(precedence + 1))?;
             if self.is_source_class(left.ty()) || self.is_source_class(right.ty()) {
@@ -159,6 +159,9 @@ impl Parser<'_> {
                     operator_span,
                     span,
                 );
+            }
+            if self.is_pointer_operand(&left) || self.is_pointer_operand(&right) {
+                return self.pointer_binary(left, right, right_body, operator);
             }
             if matches!(
                 operator,
@@ -184,6 +187,9 @@ impl Parser<'_> {
             let name = Operator::from_binary(operator).unwrap().name();
             self.call_with_arguments(name, alloc::vec![left, right], operator_span, span)
         } else {
+            if self.is_pointer_operand(&left) || self.is_pointer_operand(&right) {
+                return self.pointer_binary(left, right, right_body, operator);
+            }
             self.append_block(right_body);
             self.binary_value(operator, left, right).map(Into::into)
         }
@@ -196,7 +202,10 @@ impl Parser<'_> {
         operator_span: Span,
     ) -> Result<ExpressionResult, ParseError> {
         let operator = Operator::from_token(token).unwrap();
-        if self.has_reference_candidate(operator.name()) {
+        if token == Token::Operation('&') {
+            return self.address_operator(operand, operator_span);
+        }
+        if self.has_indirect_candidate(operator.name()) {
             let span = operator_span.until(&operand.span());
             self.parameter_expansion_budget
                 .charge_slice::<CapturedArgument>(1, span)?;
@@ -213,5 +222,28 @@ impl Parser<'_> {
         let value = self.rvalue(operand)?;
         let span = operator_span.until(&value.span);
         self.call_with_arguments(operator.name(), alloc::vec![value], operator_span, span)
+    }
+
+    fn address_operator(
+        &mut self,
+        operand: ExpressionValue,
+        operator_span: Span,
+    ) -> Result<ExpressionResult, ParseError> {
+        let span = operator_span.until(&operand.span());
+        let argument = CapturedArgument {
+            value: operand,
+            body: crate::Block::new(),
+        };
+        let name = Operator::And.name();
+        if matches!(
+            self.select_overload(name, core::slice::from_ref(&argument)),
+            functions::OverloadResolution::NoViable
+        ) {
+            let pointer = self.address_of(argument.value, span)?;
+            return self.pointer_result(pointer);
+        }
+        self.parameter_expansion_budget
+            .charge_slice::<CapturedArgument>(1, span)?;
+        self.call_with_captured_arguments(name, alloc::vec![argument], operator_span, span)
     }
 }

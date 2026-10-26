@@ -178,6 +178,12 @@ pub(super) enum FunctionCandidate {
     },
 }
 
+pub(super) enum OverloadResolution {
+    Selected(FunctionCandidate),
+    NoViable,
+    Ambiguous,
+}
+
 fn conversion_rank(
     source: &TypeResolution,
     target: &TypeResolution,
@@ -760,6 +766,11 @@ impl<'a> Parser<'a> {
         let Some(name) = name else {
             return Ok(());
         };
+        if let ParameterMode::Pointer { is_const } = mode {
+            let pointer = self.parameter_pointer(index, parameter_ty, is_const, span)?;
+            let pointer = self.retain_pointer_symbol(pointer)?;
+            return self.insert_symbol(name, Symbol::Pointer(pointer), span);
+        }
         let value = self.append(Expression::FunctionArgument(index), span)?;
         if matches!(mode, ParameterMode::Reference { .. }) {
             self.insert_symbol(
@@ -790,7 +801,7 @@ impl<'a> Parser<'a> {
             });
         }
         self.lexer.expect_span(Token::Paren('('))?;
-        if self.has_reference_candidate(name) {
+        if self.has_indirect_candidate(name) {
             let mut arguments = Vec::new();
             if self.lexer.peek()?.0 != Token::Paren(')') {
                 loop {
@@ -1368,12 +1379,24 @@ impl<'a> Parser<'a> {
         argument: &impl CallArgument,
     ) -> Option<u8> {
         let target = self.candidate_type(candidate, index);
+        if let ParameterMode::Pointer { is_const } = self.candidate_mode(candidate, index) {
+            let parameter_calls::SourcePointerType {
+                pointee,
+                is_const: source_const,
+            } = argument.pointer_type(&self.module)?;
+            let TypeInner::Pointer { base, .. } = *target.inner_with(&self.module.types) else {
+                return None;
+            };
+            return (base == pointee && (!source_const || is_const))
+                .then_some(u8::from(is_const && !source_const));
+        }
         let rank = conversion_rank(argument.ty(), &target, &self.module)?;
         match self.candidate_mode(candidate, index) {
             ParameterMode::Value | ParameterMode::Reference { is_const: true } => Some(rank),
             ParameterMode::Reference { is_const: false } => {
                 (rank == 0 && argument.reference_writable() == Some(true)).then_some(rank)
             }
+            ParameterMode::Pointer { .. } => unreachable!(),
         }
     }
 
@@ -1422,6 +1445,53 @@ impl<'a> Parser<'a> {
         arguments: &[impl CallArgument],
         span: Span,
     ) -> Result<FunctionCandidate, ParseError> {
+        let best_candidate = match self.select_overload(name, arguments) {
+            OverloadResolution::Selected(candidate) => candidate,
+            OverloadResolution::NoViable => {
+                let argument_span = self
+                    .function_candidates(name)
+                    .filter(|&candidate| self.candidate_arity(candidate) == arguments.len())
+                    .find_map(|candidate| {
+                        arguments.iter().enumerate().find_map(|(index, argument)| {
+                            (matches!(
+                                self.candidate_mode(candidate, index),
+                                ParameterMode::Pointer { .. }
+                            ) && self
+                                .candidate_conversion(candidate, index, argument)
+                                .is_none())
+                            .then(|| argument.span())
+                        })
+                    });
+                return Err(ParseError {
+                    message: format!("no matching device helper overload `{name}`"),
+                    span: argument_span.unwrap_or(span),
+                });
+            }
+            OverloadResolution::Ambiguous => {
+                return Err(ParseError {
+                    message: format!("ambiguous device helper overload `{name}`"),
+                    span,
+                })
+            }
+        };
+        match best_candidate {
+            FunctionCandidate::Current => Err(ParseError {
+                message: String::from("recursive device helper calls are unsupported"),
+                span,
+            }),
+            FunctionCandidate::IntegralFabs(_) => Err(ParseError {
+                message: String::from("integral fabs requires unsupported double precision"),
+                span,
+            }),
+            _ => Ok(best_candidate),
+        }
+    }
+
+    pub(super) fn select_overload(
+        &self,
+        name: &str,
+        arguments: &[impl CallArgument],
+    ) -> OverloadResolution {
         let integral_fabs = self.integral_fabs_candidate(name, arguments);
         let mut viable_candidates =
             self.function_candidates(name)
@@ -1435,10 +1505,7 @@ impl<'a> Parser<'a> {
                 });
         let mut remaining_candidates = viable_candidates.clone();
         let Some(mut best_candidate) = remaining_candidates.next() else {
-            return Err(ParseError {
-                message: format!("no matching device helper overload `{name}`"),
-                span,
-            });
+            return OverloadResolution::NoViable;
         };
         for candidate in remaining_candidates {
             if self.better_candidate(candidate, best_candidate, arguments) {
@@ -1449,28 +1516,9 @@ impl<'a> Parser<'a> {
             candidate != best_candidate
                 && !self.better_candidate(best_candidate, candidate, arguments)
         }) {
-            return Err(ParseError {
-                message: format!("ambiguous device helper overload `{name}`"),
-                span,
-            });
+            return OverloadResolution::Ambiguous;
         }
-        match best_candidate {
-            FunctionCandidate::Defined(_)
-            | FunctionCandidate::Builtin(_)
-            | FunctionCandidate::Multiply24(_)
-            | FunctionCandidate::Bitcast { .. }
-            | FunctionCandidate::Unary { .. }
-            | FunctionCandidate::Sqrt
-            | FunctionCandidate::Constructor { .. } => Ok(best_candidate),
-            FunctionCandidate::Current => Err(ParseError {
-                message: String::from("recursive device helper calls are unsupported"),
-                span,
-            }),
-            FunctionCandidate::IntegralFabs(_) => Err(ParseError {
-                message: String::from("integral fabs requires unsupported double precision"),
-                span,
-            }),
-        }
+        OverloadResolution::Selected(best_candidate)
     }
 
     fn integral_fabs_candidate(

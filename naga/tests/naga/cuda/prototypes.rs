@@ -488,8 +488,6 @@ fn cuda_prototypes_reject_malformed_and_unsupported_declarators_with_utf8_spans(
         "__device__ int helper(void, int);",
         "__device__ int helper(int value = 1);",
         "__device__ int helper(int, ...);",
-        "__device__ int helper(int *);",
-        "__device__ int helper(int values[2]);",
         "__device__ int *helper();",
         "__device__ double helper(double);",
         "__host__ int helper(int);",
@@ -504,6 +502,8 @@ fn cuda_prototypes_reject_malformed_and_unsupported_declarators_with_utf8_spans(
         "/* λ */ __device__ int helper(int); __global__ void kernel() { return; absent(3); }";
     let error = rejected(source);
     assert_eq!(&source[error.span.to_range().unwrap()], "absent");
+    validate("__device__ int helper(int *); __global__ void kernel() {}");
+    validate("__device__ int helper(int values[2]); __global__ void kernel() {}");
 }
 
 #[cfg(all(feature = "wgsl-in", feature = "wgsl-out"))]

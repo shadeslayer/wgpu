@@ -595,3 +595,20 @@ fn cuda_constant_expressions_roundtrip_constants_lazy_branches_and_vector_layout
         naga::back::wgsl::WriterFlags::EXPLICIT_TYPES,
     );
 }
+
+#[test]
+fn cuda_constant_expressions_bound_borrowed_pointer_addresses() {
+    for expression in ["(&values, 4)", "(values + 3, 4)", "(*(&values[3] - 1), 4)"] {
+        let (module, _) = validate(&format!(
+            "__global__ void kernel(int *out) {{ __shared__ int values[3]; constexpr int Count = {expression}; int storage[Count]{{}}; out[0] = storage[3]; }}"
+        ));
+        assert_eq!(array_count(&module, "storage"), 4, "{expression}");
+    }
+    for expression in ["(values + 4 - 1, 4)", "(*(&values[3]), 4)"] {
+        rejected(&format!(
+            "__global__ void kernel(int *out) {{ __shared__ int values[3]; constexpr int Count = {expression}; int storage[Count]{{}}; out[0] = storage[3]; }}"
+        ));
+    }
+    validate("__global__ void kernel(int *out) { __shared__ int values[3]; values[2] = 7; out[0] = *(&values[3] - 1); }");
+    validate("__global__ void kernel(int *out) { __shared__ int values[3]; values[1] = 7; int count = 0; out[0] = *(++count, values + 1); }");
+}

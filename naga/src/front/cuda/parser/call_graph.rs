@@ -270,9 +270,11 @@ impl Parser<'_> {
             declaration
                 .parameters
                 .iter()
-                .any(|parameter| matches!(parameter.mode, ParameterMode::Reference { .. }))
-        }) {
-            let templates = self.lower_reference_parameters(&order)?;
+                .any(|parameter| parameter.mode.is_indirect())
+        }) || !self.parameter_states.is_empty()
+            || self.kernel_parameter_state.is_some()
+        {
+            let templates = self.lower_indirect_parameters(&order)?;
             order.retain(|function| !templates[function.index()]);
         }
         let span = order.first().map_or(Span::default(), |&function| {

@@ -377,7 +377,7 @@ fn cuda_nested_lists_preserve_narrowing_excess_and_vector_copy_rejections() {
 }
 
 #[test]
-fn cuda_multidimensional_arrays_reject_incomplete_shapes_and_array_value_escapes() {
+fn cuda_multidimensional_arrays_reject_incomplete_shapes_and_value_copies() {
     for declaration in [
         "int matrix[2][];",
         "int matrix[][]{{1}};",
@@ -403,13 +403,10 @@ fn cuda_multidimensional_arrays_reject_incomplete_shapes_and_array_value_escapes
         ));
     }
     for operation in [
-        "matrix;",
-        "matrix[0];",
         "matrix[0] = matrix[1];",
         "int row = matrix[0];",
         "consume(matrix[0]);",
         "int *row = matrix[0];",
-        "&matrix[0][0];",
         "matrix[0][0][0];",
         "matrix[0][true];",
     ] {
@@ -417,6 +414,7 @@ fn cuda_multidimensional_arrays_reject_incomplete_shapes_and_array_value_escapes
     }
     rejected("__device__ void consume(int matrix[2][2]) {} __global__ void kernel() {}");
     rejected("__global__ void kernel(int matrix[2][2]) {}");
+    validate("__global__ void kernel() { int matrix[2][2]{}; matrix; matrix[0]; &matrix[0][0]; }");
 }
 
 #[test]

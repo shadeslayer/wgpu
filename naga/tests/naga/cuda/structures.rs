@@ -361,7 +361,7 @@ fn cuda_structures_storage_pointers_preserve_resource_bindings_and_source_abi() 
         assert_eq!(storage_record(&module, binding).1, 80);
     }
     rejected("struct Record { int value; }; __global__ void kernel(Record value) {}");
-    rejected("struct Record { int value; }; __device__ void helper(Record *value) {} __global__ void kernel() {}");
+    validate("struct Record { int value; }; __device__ void helper(Record *value) {} __global__ void kernel() {}");
 }
 
 #[test]
@@ -411,7 +411,7 @@ fn cuda_structures_conditional_array_subscripts_are_explicitly_unsupported() {
 }
 
 #[test]
-fn cuda_structures_array_members_never_escape_as_standalone_values_or_decay() {
+fn cuda_structures_array_members_reject_value_copies_and_accept_borrowed_decay() {
     let prefix = "struct Record { int values[2][2]; };";
     for body in [
         "Record first{}, second{}; first.values = second.values;",
@@ -419,11 +419,11 @@ fn cuda_structures_array_members_never_escape_as_standalone_values_or_decay() {
         "Record first{}; Record second = first.values;",
         "Record first{}; int value = first.values;",
         "Record first{}; consume(first.values);",
-        "Record first{}; first.values + 1;",
     ] {
         rejected(&format!("{prefix} __device__ int consume(int value) {{ return value; }} __global__ void kernel() {{ {body} }}"));
     }
     validate("struct Record { int values[2]; }; __global__ void kernel(int *out) { Record values[2]{}; int index = 0; out[0] = (values[index++].values, 7); out[1] = index; }");
+    validate("struct Record { int values[2][2]; }; __global__ void kernel() { Record first{}; first.values + 1; }");
 }
 
 #[test]

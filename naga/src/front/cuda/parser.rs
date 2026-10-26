@@ -1,4 +1,4 @@
-use alloc::{format, string::String, vec::Vec};
+use alloc::{boxed::Box, format, string::String, vec::Vec};
 
 mod absolute_value;
 mod barriers;
@@ -18,6 +18,7 @@ mod loops;
 mod operators;
 mod parameter_calls;
 mod parameter_expansion;
+mod pointers;
 mod reference_bindings;
 mod references;
 mod sqrtf;
@@ -35,6 +36,7 @@ use parameter_calls::{
     CallArgument, CapturedArgument, DeferredCall, FunctionParameterState, ParameterMode,
     SourceParameter,
 };
+use pointers::{PointerAccess, PointerState, PointerValue};
 use reference_bindings::{BoundAddress, BoundReference};
 use types::scalar_resolution;
 use types::{GlobalDeclaration, QualifiedType, TypeSpecifier};
@@ -62,6 +64,7 @@ enum Symbol {
     Type(QualifiedType),
     Member,
     PendingReference,
+    Pointer(Handle<PointerValue>),
     Reference {
         binding: Handle<BoundReference>,
         ty: TypeResolution,
@@ -127,6 +130,7 @@ struct ReferenceValue {
 #[derive(Clone, Copy, Debug)]
 enum Reference {
     Pointer(Handle<Expression>),
+    PointerAccess(Handle<PointerAccess>),
     Bound(Handle<BoundReference>),
     Conditional(Handle<Option<ConditionalReference>>),
     Constant(Option<Handle<crate::Constant>>),
@@ -160,6 +164,7 @@ struct Value {
 enum ExpressionValue {
     Plain(Value),
     Reference(ReferenceValue),
+    Pointer(Box<PointerValue>),
 }
 
 impl ExpressionValue {
@@ -167,13 +172,7 @@ impl ExpressionValue {
         match *self {
             Self::Plain(ref value) => value.constant,
             Self::Reference(ref reference) => reference.constant,
-        }
-    }
-
-    const fn set_constant(&mut self, constant: ConstantValue) {
-        match *self {
-            Self::Plain(ref mut value) => value.constant = constant,
-            Self::Reference(ref mut reference) => reference.constant = constant,
+            Self::Pointer(ref pointer) => pointer.constant,
         }
     }
 
@@ -181,6 +180,7 @@ impl ExpressionValue {
         match *self {
             Self::Plain(ref value) => &value.ty,
             Self::Reference(ref reference) => &reference.ty,
+            Self::Pointer(ref pointer) => &pointer.ty,
         }
     }
 
@@ -188,6 +188,7 @@ impl ExpressionValue {
         match *self {
             Self::Plain(ref value) => value.span,
             Self::Reference(ref reference) => reference.span,
+            Self::Pointer(ref pointer) => pointer.span,
         }
     }
 }
@@ -305,6 +306,38 @@ impl<'a> Parser<'a> {
         }
         let pointer_span = self.lexer.peek()?.1;
         let is_pointer = self.lexer.next_if(Token::Operation('*'))?;
+        if is_pointer {
+            self.take_ident("const")?;
+        }
+        if self.function.kind == FunctionKind::Device && is_pointer {
+            if matches!(
+                self.lexer.peek()?.0,
+                Token::Operation('*' | '&') | Token::Paren('(')
+            ) {
+                return self
+                    .fail("nested pointer and pointer reference declarators are unsupported");
+            }
+            self.activate_parameter_expansion(pointer_span)?;
+            let base = self.type_handle(&ty, type_span);
+            let pointer_ty = self.pointer_type(base, pointer_span);
+            let name = if matches!(
+                self.lexer.peek()?.0,
+                Token::Separator(',') | Token::Paren(')')
+            ) {
+                None
+            } else {
+                let (name, span) = self.identifier()?;
+                self.check_name(name, span)?;
+                Some(name)
+            };
+            return self.device_parameter(
+                name,
+                type_span,
+                &pointer_ty,
+                false,
+                ParameterMode::Pointer { is_const },
+            );
+        }
         let mode = if self.lexer.next_if(Token::Operation('&'))? {
             if self.function.kind == FunctionKind::Kernel {
                 return Err(ParseError {
@@ -330,11 +363,8 @@ impl<'a> Parser<'a> {
                 span: type_span,
             });
         }
-        if self.function.kind == FunctionKind::Device && is_pointer {
-            return Err(ParseError {
-                message: String::from("device helper pointer parameters are unsupported"),
-                span: pointer_span,
-            });
+        if self.function.kind == FunctionKind::Device && self.lexer.peek()?.0 == Token::Paren('[') {
+            return self.array_parameter(None, type_span, &ty, is_const, mode);
         }
         if self.function.kind == FunctionKind::Device
             && matches!(
@@ -347,6 +377,9 @@ impl<'a> Parser<'a> {
         let (name, span) = self.identifier()?;
         self.check_name(name, span)?;
         if self.function.kind == FunctionKind::Device {
+            if self.lexer.peek()?.0 == Token::Paren('[') {
+                return self.array_parameter(Some(name), span, &ty, is_const, mode);
+            }
             return self.device_parameter(Some(name), span, &ty, is_const, mode);
         }
         if !is_pointer {
@@ -514,7 +547,7 @@ impl<'a> Parser<'a> {
                     ..
                 } => {
                     if self.lexer.peek()?.0 != Token::Paren('[') {
-                        return self.fail("array values require complete indexing");
+                        return Ok((base, element_ty, is_discardable));
                     }
                     element_ty = TypeResolution::Handle(nested_element);
                     count = Some(nested_count);

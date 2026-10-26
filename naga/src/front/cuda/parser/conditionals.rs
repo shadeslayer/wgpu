@@ -74,6 +74,17 @@ impl Parser<'_> {
                 )))
             }
             (ExpressionResult::Value(accept), ExpressionResult::Value(reject)) => {
+                if self.is_pointer_operand(&accept) || self.is_pointer_operand(&reject) {
+                    let pointer = self.select_pointer(
+                        condition,
+                        accept,
+                        accept_body,
+                        reject,
+                        reject_body,
+                        span,
+                    )?;
+                    return self.pointer_result(pointer);
+                }
                 let ty = if self.module.compare_types(accept.ty(), reject.ty()) {
                     accept.ty().clone()
                 } else {

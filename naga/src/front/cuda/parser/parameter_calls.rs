@@ -1,9 +1,17 @@
+use super::pointers::{PointerState, PointerValue};
 use super::*;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(super) enum ParameterMode {
     Value,
     Reference { is_const: bool },
+    Pointer { is_const: bool },
+}
+
+impl ParameterMode {
+    pub(super) const fn is_indirect(self) -> bool {
+        matches!(self, Self::Reference { .. } | Self::Pointer { .. })
+    }
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -16,6 +24,17 @@ pub(super) struct SourceParameter {
 pub(super) enum DeferredArgument {
     Value(Handle<Expression>),
     Reference(Handle<BoundReference>),
+    Pointer(Box<PointerValue>),
+}
+
+#[derive(Clone)]
+pub(super) enum MappedExpression {
+    Value(Handle<Expression>),
+    Reference {
+        binding: Handle<BoundReference>,
+        ty: TypeResolution,
+    },
+    Pointer(Box<PointerValue>),
 }
 
 #[derive(Clone)]
@@ -26,7 +45,7 @@ pub(super) struct DeferredCall {
     pub(super) span: Span,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct FunctionParameterState {
     pub(super) expression_graph_depths: Vec<u32>,
     pub(super) deferred_calls: FastHashMap<Handle<Expression>, DeferredCall>,
@@ -34,6 +53,7 @@ pub(super) struct FunctionParameterState {
     pub(super) bound_address_indices: FastHashMap<BoundAddress, Handle<BoundAddress>>,
     pub(super) bound_references: Arena<BoundReference>,
     pub(super) reference_binding_work: u32,
+    pub(super) pointers: PointerState,
 }
 
 pub(super) struct CapturedArgument {
@@ -41,16 +61,30 @@ pub(super) struct CapturedArgument {
     pub(super) body: crate::Block,
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct SourcePointerType {
+    pub(super) pointee: Handle<Type>,
+    pub(super) is_const: bool,
+}
+
 pub(super) trait CallArgument {
     fn ty(&self) -> &TypeResolution;
+    fn span(&self) -> Span;
     fn reference_writable(&self) -> Option<bool>;
+    fn pointer_type(&self, module: &Module) -> Option<SourcePointerType>;
 }
 
 impl CallArgument for Value {
     fn ty(&self) -> &TypeResolution {
         &self.ty
     }
+    fn span(&self) -> Span {
+        self.span
+    }
     fn reference_writable(&self) -> Option<bool> {
+        None
+    }
+    fn pointer_type(&self, _module: &Module) -> Option<SourcePointerType> {
         None
     }
 }
@@ -59,9 +93,33 @@ impl CallArgument for CapturedArgument {
     fn ty(&self) -> &TypeResolution {
         self.value.ty()
     }
+    fn span(&self) -> Span {
+        self.value.span()
+    }
     fn reference_writable(&self) -> Option<bool> {
         match self.value {
             ExpressionValue::Reference(ref reference) => Some(reference.writable),
+            ExpressionValue::Plain(_) | ExpressionValue::Pointer(_) => None,
+        }
+    }
+    fn pointer_type(&self, module: &Module) -> Option<SourcePointerType> {
+        match self.value {
+            ExpressionValue::Pointer(ref pointer) => match *pointer.ty.inner_with(&module.types) {
+                TypeInner::Pointer { base, .. } => Some(SourcePointerType {
+                    pointee: base,
+                    is_const: pointer.is_const,
+                }),
+                _ => None,
+            },
+            ExpressionValue::Reference(ref reference) => {
+                match *reference.ty.inner_with(&module.types) {
+                    TypeInner::Array { base, .. } => Some(SourcePointerType {
+                        pointee: base,
+                        is_const: !reference.writable,
+                    }),
+                    _ => None,
+                }
+            }
             ExpressionValue::Plain(_) => None,
         }
     }
@@ -114,11 +172,12 @@ impl Parser<'_> {
 
     pub(super) fn parameter_state_needed(&self) -> bool {
         !self.function.deferred_calls.is_empty()
+            || !self.function.pointers.is_empty()
             || self
                 .function
                 .parameters
                 .iter()
-                .any(|parameter| matches!(parameter.mode, ParameterMode::Reference { .. }))
+                .any(|parameter| parameter.mode.is_indirect())
     }
 
     pub(super) fn capture_call_argument(&mut self) -> Result<CapturedArgument, ParseError> {
@@ -130,14 +189,10 @@ impl Parser<'_> {
         Ok(CapturedArgument { value, body })
     }
 
-    pub(super) fn has_reference_candidate(&self, name: &str) -> bool {
+    pub(super) fn has_indirect_candidate(&self, name: &str) -> bool {
         self.function_candidates(name).any(|candidate| {
-            (0..self.candidate_arity(candidate)).any(|index| {
-                matches!(
-                    self.candidate_mode(candidate, index),
-                    ParameterMode::Reference { .. }
-                )
-            })
+            (0..self.candidate_arity(candidate))
+                .any(|index| self.candidate_mode(candidate, index).is_indirect())
         })
     }
 
@@ -149,13 +204,9 @@ impl Parser<'_> {
         span: Span,
     ) -> Result<ExpressionResult, ParseError> {
         let candidate = self.resolve_overload(name, &arguments, name_span)?;
-        let has_references = (0..arguments.len()).any(|index| {
-            matches!(
-                self.candidate_mode(candidate, index),
-                ParameterMode::Reference { .. }
-            )
-        });
-        if !has_references {
+        let has_indirect_parameters =
+            (0..arguments.len()).any(|index| self.candidate_mode(candidate, index).is_indirect());
+        if !has_indirect_parameters {
             self.parameter_expansion_budget
                 .charge_slice::<Value>(arguments.len(), span)?;
             let mut values = Vec::with_capacity(arguments.len());
@@ -215,6 +266,10 @@ impl Parser<'_> {
                     }
                     DeferredArgument::Reference(self.freeze_reference(reference)?)
                 }
+                ParameterMode::Pointer { is_const } => {
+                    let pointer = self.pointer_argument(argument.value, &target, is_const, span)?;
+                    DeferredArgument::Pointer(self.boxed_pointer_value(pointer)?)
+                }
             };
             bound_arguments.push(argument);
         }
@@ -266,6 +321,7 @@ impl FunctionContext<'_> {
             bound_address_indices: core::mem::take(&mut self.bound_address_indices),
             bound_references: core::mem::take(&mut self.bound_references),
             reference_binding_work: core::mem::take(&mut self.reference_binding_work),
+            pointers: core::mem::take(&mut self.pointers),
         }
     }
 
@@ -276,6 +332,7 @@ impl FunctionContext<'_> {
         self.bound_address_indices = state.bound_address_indices;
         self.bound_references = state.bound_references;
         self.reference_binding_work = state.reference_binding_work;
+        self.pointers = state.pointers;
         self.parameter_state_charged = true;
     }
 }

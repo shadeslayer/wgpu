@@ -370,10 +370,10 @@ fn cuda_local_arrays_reject_unsupported_declarators_and_initializers() {
         "int value = values[0][0];",
         "consume(values);",
         "int *pointer = values;",
-        "&values[0];",
     ] {
         rejected(&format!("__device__ void consume(int value) {{}} __global__ void kernel() {{ int values[2]{{}}; {operation} }}"));
     }
+    validate("__global__ void kernel() { int values[2]{}; &values[0]; }");
 }
 
 #[test]

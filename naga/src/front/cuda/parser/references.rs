@@ -36,6 +36,10 @@ impl Parser<'_> {
         };
         let span = value.span().until(&field_span);
         match value {
+            ExpressionValue::Pointer(pointer) => Err(ParseError {
+                message: String::from("pointer fields require dereferencing the pointer"),
+                span: pointer.span,
+            }),
             ExpressionValue::Plain(value) => {
                 let handle = self.append(
                     Expression::AccessIndex {
@@ -62,6 +66,15 @@ impl Parser<'_> {
         &mut self,
         value: ExpressionValue,
     ) -> Result<ExpressionValue, ParseError> {
+        if matches!(value, ExpressionValue::Pointer(_)) || self.function.address_operand {
+            return self.pointer_index(value);
+        }
+        if !matches!(
+            *value.ty().inner_with(&self.module.types),
+            TypeInner::Array { .. }
+        ) {
+            return self.pointer_index(value);
+        }
         let (element_ty, count) = match *value.ty().inner_with(&self.module.types) {
             TypeInner::Array { base, size, .. } => (
                 TypeResolution::Handle(base),
@@ -122,6 +135,21 @@ impl Parser<'_> {
                     Reference::Bound(handle) => {
                         Reference::Bound(self.project_bound_index(handle, index.handle, span)?)
                     }
+                    Reference::PointerAccess(access) => {
+                        let captured = self.freeze_reference_index(index.handle, index.span)?;
+                        return self
+                            .project_pointer_access(
+                                access,
+                                reference_bindings::AddressProjection::Index(captured),
+                                &element_ty,
+                                ConstantValue {
+                                    literal: None,
+                                    is_discardable: discardable,
+                                },
+                                span,
+                            )
+                            .map(ExpressionValue::Reference);
+                    }
                     Reference::Conditional(_) | Reference::Constant(_) => {
                         return self.fail("unsupported array reference");
                     }
@@ -134,6 +162,7 @@ impl Parser<'_> {
                 };
                 Ok(ExpressionValue::Reference(reference))
             }
+            ExpressionValue::Pointer(_) => unreachable!(),
         }
     }
 
@@ -145,6 +174,18 @@ impl Parser<'_> {
         span: Span,
     ) -> Result<ReferenceValue, ParseError> {
         match reference.reference {
+            Reference::PointerAccess(access) => {
+                return self.project_pointer_access(
+                    access,
+                    reference_bindings::AddressProjection::Field(index),
+                    ty,
+                    ConstantValue {
+                        literal: None,
+                        ..reference.constant
+                    },
+                    span,
+                );
+            }
             Reference::Pointer(base) => {
                 reference.reference =
                     Reference::Pointer(self.append(Expression::AccessIndex { base, index }, span)?);
@@ -218,7 +259,10 @@ impl Parser<'_> {
 
     pub(super) fn reference_depth(&self, reference: &ReferenceValue) -> u32 {
         match reference.reference {
-            Reference::Pointer(_) | Reference::Bound(_) | Reference::Constant(_) => 0,
+            Reference::Pointer(_)
+            | Reference::PointerAccess(_)
+            | Reference::Bound(_)
+            | Reference::Constant(_) => 0,
             Reference::Conditional(handle) => {
                 self.function.conditional_references[handle]
                     .as_ref()
@@ -239,6 +283,14 @@ impl Parser<'_> {
             });
         }
         let reference = match expression {
+            ExpressionValue::Pointer(pointer) => {
+                return Err(ParseError {
+                    message: String::from(
+                        "CUDA pointer values require a borrowed pointer operation",
+                    ),
+                    span: pointer.span,
+                })
+            }
             ExpressionValue::Plain(value) => return Ok(value),
             ExpressionValue::Reference(reference) => reference,
         };
@@ -276,6 +328,10 @@ impl Parser<'_> {
     fn read_reference(&mut self, reference: ReferenceValue) -> Result<Value, ParseError> {
         let span = reference.span;
         let handle = match reference.reference {
+            Reference::PointerAccess(access) => {
+                let pointer = self.validation_pointer(access, span)?;
+                self.append(Expression::Load { pointer }, span)?
+            }
             Reference::Pointer(pointer) => self.append(Expression::Load { pointer }, span)?,
             Reference::Constant(Some(handle)) => self.append(Expression::Constant(handle), span)?,
             Reference::Constant(None) => {
@@ -328,6 +384,10 @@ impl Parser<'_> {
         ) -> Result<(), ParseError>,
     ) -> Result<(), ParseError> {
         let handle = match reference.reference {
+            Reference::PointerAccess(access) => {
+                let pointer = self.validation_pointer(access, reference.span)?;
+                return action(self, pointer, &reference.ty, reference.span);
+            }
             Reference::Pointer(pointer) => {
                 return action(self, pointer, &reference.ty, reference.span);
             }
@@ -369,6 +429,16 @@ impl Parser<'_> {
         action: &mut impl FnMut(&mut Self, ReferenceValue) -> Result<(), ParseError>,
     ) -> Result<(), ParseError> {
         let handle = match reference.reference {
+            Reference::PointerAccess(access) => {
+                let pointer = self.validation_pointer(access, reference.span)?;
+                return action(
+                    self,
+                    ReferenceValue {
+                        reference: Reference::Pointer(pointer),
+                        ..reference
+                    },
+                );
+            }
             Reference::Pointer(_) | Reference::Constant(_) => {
                 return action(self, reference);
             }

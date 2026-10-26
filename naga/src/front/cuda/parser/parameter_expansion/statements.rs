@@ -1,5 +1,21 @@
 use super::*;
 
+fn deferred_call_marker(body: &crate::Block) -> Option<Handle<Expression>> {
+    match body[..] {
+        [Statement::Emit(ref range)]
+        | [Statement::Emit(ref range), Statement::Return { value: None }] => {
+            let mut handles = range.clone();
+            let marker = handles.next();
+            if handles.next().is_none() {
+                marker
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
 pub(super) fn has_only_tail_returns(
     body: &crate::Block,
     budget: &mut ExpansionBudget,
@@ -245,7 +261,7 @@ impl Parser<'_> {
         body: &crate::Block,
         invocation: &mut Invocation<'_>,
         depth: u32,
-        tail_returns_only: bool,
+        return_mode: ReturnMode,
     ) -> Result<bool, ParseError> {
         if depth > 127 {
             return Err(limit_error(invocation.span));
@@ -262,8 +278,27 @@ impl Parser<'_> {
                     self.flush_emitter();
                 }
                 Statement::Block(ref body) => {
+                    let source_call = invocation.source_state.and_then(|state| {
+                        deferred_call_marker(body)
+                            .and_then(|marker| state.deferred_calls.get(&marker))
+                    });
+                    if let Some(call) = source_call {
+                        self.clone_parameter_call(call, invocation, depth)?;
+                        if let Some((&Statement::Return { value: None }, return_span)) =
+                            body.span_iter().nth(1)
+                        {
+                            self.clone_parameter_return(
+                                invocation,
+                                None,
+                                return_mode,
+                                *return_span,
+                            )?;
+                            has_return = true;
+                        }
+                        continue;
+                    }
                     let (returned, body) = self.capture_block(|parser| {
-                        parser.clone_parameter_block(body, invocation, depth + 1, tail_returns_only)
+                        parser.clone_parameter_block(body, invocation, depth + 1, return_mode)
                     })?;
                     has_return |= returned;
                     self.generated_statement(Statement::Block(body), span)?;
@@ -274,22 +309,19 @@ impl Parser<'_> {
                     ref reject,
                 } => {
                     let condition = self.invocation_value(invocation, condition)?;
+                    let checkpoint = invocation.mapped_handles.len();
                     let (accept_return, accept) = self.capture_block(|parser| {
-                        parser.clone_parameter_block(
-                            accept,
-                            invocation,
-                            depth + 1,
-                            tail_returns_only,
-                        )
+                        parser.clone_parameter_block(accept, invocation, depth + 1, return_mode)
                     })?;
+                    if invocation.source_state.is_some() {
+                        self.restore_invocation_expressions(invocation, checkpoint)?;
+                    }
                     let (reject_return, reject) = self.capture_block(|parser| {
-                        parser.clone_parameter_block(
-                            reject,
-                            invocation,
-                            depth + 1,
-                            tail_returns_only,
-                        )
+                        parser.clone_parameter_block(reject, invocation, depth + 1, return_mode)
                     })?;
+                    if invocation.source_state.is_some() {
+                        self.restore_invocation_expressions(invocation, checkpoint)?;
+                    }
                     has_return |= accept_return || reject_return;
                     self.generated_statement(
                         Statement::If {
@@ -321,7 +353,7 @@ impl Parser<'_> {
                                     &following_case.body,
                                     invocation,
                                     depth + 3,
-                                    tail_returns_only,
+                                    return_mode,
                                 )?;
                                 if !following_case.fall_through {
                                     break;
@@ -354,22 +386,29 @@ impl Parser<'_> {
                     ref continuing,
                     break_if,
                 } => {
+                    let checkpoint = invocation.mapped_handles.len();
                     let (body_return, body) = self.capture_block(|parser| {
-                        parser.clone_parameter_block(body, invocation, depth + 1, tail_returns_only)
+                        parser.clone_parameter_block(body, invocation, depth + 1, return_mode)
                     })?;
+                    if invocation.source_state.is_some() {
+                        self.restore_invocation_expressions(invocation, checkpoint)?;
+                    }
                     let ((continuing_return, break_if), continuing) =
                         self.capture_block(|parser| {
                             let returned = parser.clone_parameter_block(
                                 continuing,
                                 invocation,
                                 depth + 2,
-                                tail_returns_only,
+                                return_mode,
                             )?;
                             let condition = break_if
                                 .map(|condition| parser.invocation_value(invocation, condition))
                                 .transpose()?;
                             Ok((returned, condition))
                         })?;
+                    if invocation.source_state.is_some() {
+                        self.restore_invocation_expressions(invocation, checkpoint)?;
+                    }
                     self.generated_statement(
                         Statement::Loop {
                             body,
@@ -408,6 +447,7 @@ impl Parser<'_> {
                                 },
                             )?;
                         }
+                        MappedExpression::Pointer(_) => return Err(expansion_error(span)),
                     }
                 }
                 Statement::Call {
@@ -449,17 +489,7 @@ impl Parser<'_> {
                 }
                 Statement::Return { value } => {
                     has_return = true;
-                    if let Some(value) = value {
-                        let value = self.invocation_value(invocation, value)?;
-                        let pointer = invocation.result.ok_or_else(|| expansion_error(span))?;
-                        self.generated_statement(Statement::Store { pointer, value }, span)?;
-                    }
-                    if !tail_returns_only {
-                        let pointer = invocation.returned.ok_or_else(|| expansion_error(span))?;
-                        let value = self.append(Expression::Literal(Literal::Bool(true)), span)?;
-                        self.generated_statement(Statement::Store { pointer, value }, span)?;
-                        self.generated_statement(Statement::Break, span)?;
-                    }
+                    self.clone_parameter_return(invocation, value, return_mode, span)?;
                 }
                 Statement::Break => self.generated_statement(Statement::Break, span)?,
                 Statement::Continue => self.generated_statement(Statement::Continue, span)?,
@@ -473,5 +503,82 @@ impl Parser<'_> {
             }
         }
         Ok(has_return)
+    }
+
+    fn clone_parameter_return(
+        &mut self,
+        invocation: &mut Invocation<'_>,
+        value: Option<Handle<Expression>>,
+        return_mode: ReturnMode,
+        span: Span,
+    ) -> Result<(), ParseError> {
+        let value = value
+            .map(|value| self.invocation_value(invocation, value))
+            .transpose()?;
+        match return_mode {
+            ReturnMode::Preserve => self.generated_statement(Statement::Return { value }, span),
+            ReturnMode::Inline { tail_only } => {
+                if let Some(value) = value {
+                    let pointer = invocation.result.ok_or_else(|| expansion_error(span))?;
+                    self.generated_statement(Statement::Store { pointer, value }, span)?;
+                }
+                if !tail_only {
+                    let pointer = invocation.returned.ok_or_else(|| expansion_error(span))?;
+                    let value = self.append(Expression::Literal(Literal::Bool(true)), span)?;
+                    self.generated_statement(Statement::Store { pointer, value }, span)?;
+                    self.generated_statement(Statement::Break, span)?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn clone_parameter_call(
+        &mut self,
+        call: &DeferredCall,
+        invocation: &mut Invocation<'_>,
+        depth: u32,
+    ) -> Result<(), ParseError> {
+        let state = invocation
+            .source_state
+            .ok_or_else(|| expansion_error(call.span))?;
+        self.parameter_expansion_budget
+            .charge_slice::<DeferredArgument>(call.arguments.len(), call.span)?;
+        let mut arguments = Vec::with_capacity(call.arguments.len());
+        for (index, argument) in call.arguments.iter().enumerate() {
+            arguments.push(match *argument {
+                DeferredArgument::Value(value) => {
+                    DeferredArgument::Value(self.invocation_value(invocation, value)?)
+                }
+                DeferredArgument::Pointer(ref pointer) => {
+                    let pointer = self.remap_pointer_value(state, pointer, invocation)?;
+                    DeferredArgument::Pointer(self.boxed_pointer_value(pointer)?)
+                }
+                DeferredArgument::Reference(binding) => {
+                    let parameter = &self.module.functions[call.function].arguments[index];
+                    let TypeInner::Pointer { base, .. } = self.module.types[parameter.ty].inner
+                    else {
+                        return Err(expansion_error(call.span));
+                    };
+                    let ty = TypeResolution::Handle(base);
+                    let reference =
+                        self.remap_bound_reference(state, binding, &ty, invocation, call.span)?;
+                    DeferredArgument::Reference(self.freeze_reference(reference)?)
+                }
+            });
+        }
+        let result_pointer = call
+            .result_pointer
+            .map(|pointer| self.invocation_value(invocation, pointer))
+            .transpose()?;
+        self.inline_parameter_call(
+            DeferredCall {
+                function: call.function,
+                arguments,
+                result_pointer,
+                span: call.span,
+            },
+            depth,
+        )
     }
 }

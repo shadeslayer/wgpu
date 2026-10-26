@@ -198,15 +198,65 @@ references also retain unknown constant-expression provenance, even when an
 actual argument names fixed shared storage. Invalid unused definitions and
 discarded calls are still checked before expansion.
 
-Reference expansion has cumulative limits of 1,048,576 generated nodes,
+Helpers also accept `T*` and `const T*`, including `T const*`, for the same
+scalar, vector, and struct types. Pointer arguments borrow local, shared, or
+buffer storage. Fixed arrays decay to their first element; `&object` and
+`&array[index]` borrow an existing lvalue. Pointee types must match exactly,
+and conversion may add `const` but cannot remove it:
+
+```cuda
+__device__ void add_next(int *destination, const int *source) {
+    destination[0] += source[1];
+}
+__global__ void update(int *out) {
+    int values[3]{2, 3, 5};
+    add_next(out, values + 1);
+}
+```
+
+Pointers preserve live aliases, including overlapping arguments and forwarding
+through reference parameters. Selecting an argument's address happens once,
+before later arguments execute, without reading the pointee. Pointer helpers
+use the same caller expansion as reference helpers.
+
+Borrowed expressions support `*pointer`, unary `+pointer`, `pointer + index`,
+`index + pointer`, `pointer - index`, and both subscript orders. Indices must
+have integral types; `bool` promotes to `int`. Parentheses and comma expressions
+preserve pointer values, and conditional expressions select compatible views,
+adding pointee `const` when either arm requires it. Offsets retain the original
+array or individual object's extent. Forming a one-past address does not access
+storage, so `*(&values[3] - 1)` can read the final element of a three-element
+array. Accesses must remain within the original object and the existing 32-bit
+buffer-index domain.
+
+Single-dimensional helper array parameters, `T values[]` and `T values[N]`,
+adjust to `T*`. A written bound must be a positive integral constant expression;
+it does not constrain the argument's length. Pointer parameters and adjusted
+array parameters share overload signatures. Top-level parameter `const`, as in
+`T* const`, does not distinguish signatures; pointee `const` does.
+
+Discarding a bare pointer parameter, as in `(pointer, 4)`, does not read its
+value. Reading an unknown formal pointer through indirection, indexing,
+unary `+`, or offset arithmetic prevents a required constant expression under
+the frontend's C++20 constant-expression rules. Caller expansion does not make
+those expressions constant.
+Constant-address evaluation through a named reference currently uses a
+one-element extent. Runtime pointer forwarding retains the original array
+extent, including neighboring elements.
+
+Indirect parameter expansion has cumulative limits of 1,048,576 generated nodes,
 4,194,304 work steps, and 64 MiB of accounted additional owned payload. Generated
 expression depth is limited to 64 and generated control depth to 127, accounting
 for backend scopes. These limits are checked before copying generated payload;
 they do not describe an exact allocator or process memory limit.
 
-Helpers have no resource bindings. Pointer parameters, reference results,
+Helpers have no resource bindings. Pointer and reference results,
 whole-array references, shared declarations, and barriers in helper bodies remain unsupported. Kernel prototypes
 remain unsupported.
+Pointer locals and members, pointer assignment and updates, null pointers,
+pointer comparisons and differences, pointer casts, and general pointer
+declarators remain unsupported. Arrays selected from temporary struct values
+cannot supply borrowed pointers.
 
 Both helpers and kernels accept `static` and standard `inline` in the function
 header. `static` cannot be combined with the direct `extern "C"` prefix.
@@ -225,7 +275,7 @@ valid order; `unsigned` and `int` may be interleaved with those specifiers.
 Static variables and the `__inline_hint__` specifier remain unsupported.
 Top-level return `const`, including `const void`, does not change the result type.
 The frontend preserves ordinary value-only function calls; `inline` does not
-force substitution. Reference helpers require expansion even with `__noinline__`.
+force substitution. Indirect parameter helpers require expansion even with `__noinline__`.
 
 ## Mathematical functions
 
@@ -458,9 +508,10 @@ Typed vector temporaries such as `float2{1.0f, 2.0f}` use the same list
 initialization and narrowing rules as vector declarations.
 
 Nonmember binary operators `+`, `-`, `*`, `/`, `%`, `&`, `|`, `^`, `<<`, and `>>`
-take two parameters, using the helper value and reference binding rules above.
+take two parameters, using the helper value, reference, and pointer binding rules above.
 Prefix unary operators `+`, `-`, `~`, `!`, `*`, and
-`&` take one. At least one parameter must have a supported vector or struct type.
+`&` take one. At least one parameter must have a supported vector or struct type;
+a pointer to such a type alone does not satisfy this requirement.
 For example:
 
 ```cuda
@@ -498,9 +549,9 @@ for [operator calls](https://eel.is/c++draft/over.match.oper),
 [logical AND](https://eel.is/c++draft/expr.log.and), and
 [logical OR](https://eel.is/c++draft/expr.log.or).
 Overloaded unary `*` and `&` accept class values, including temporaries, and call
-the declared helper; they do not require or produce a pointer. Actual pointer
-dereference and address operations remain unsupported outside the existing
-buffer interface.
+the declared helper. Unary `&` uses the builtin address operation when no source
+overload is viable; an ambiguous overload remains an error. An explicit
+`operator&(...)` call requires a viable source overload.
 Overloaded comparisons, assignments, and updates remain
 unsupported, as do member operators, reference results, and templates.
 
@@ -618,8 +669,9 @@ bound must be explicit. Initializers accept nested lists and brace elision;
 `int matrix[][2]{{1}, 2, 3, 4};` has three rows: `(1, 0)`, `(2, 3)`, and `(4, 0)`.
 Each row's omitted elements become zero before the next row's initializer runs.
 Index every dimension to access a scalar or vector element, as in
-`matrix[1][0]`. Array-to-pointer conversions and whole-array or row copies remain
-unsupported. Constant-address checks require each index to fit its own dimension.
+`matrix[1][0]`. Borrowing a row preserves its own extent; whole-array and row
+copies remain unsupported. Multidimensional helper array parameter declarators
+remain unsupported. Constant-address checks require each index to fit its own dimension.
 
 Local scalars, vectors, and fixed arrays accept direct-list and copy-list
 initialization, including partial lists and a trailing comma:
@@ -844,7 +896,7 @@ allowed. Synchronization does not extend across workgroups.
 
 Unsupported syntax produces a parse error with a source span. This includes
 includes and other preprocessing forms outside the subset above, host code and launch syntax,
-general pointer operations,
+pointer operations outside the borrowed subset above,
 dynamic shared memory, atomics, other synchronization primitives, templates,
 double precision, and inline PTX. No CUDA runtime ABI or NVIDIA device code is
 generated.

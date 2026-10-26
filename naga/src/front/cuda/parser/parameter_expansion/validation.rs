@@ -204,6 +204,64 @@ impl ExpansionBudget {
 }
 
 impl Parser<'_> {
+    pub(super) fn inventory_parameter_state(
+        &mut self,
+        state: &FunctionParameterState,
+        span: Span,
+    ) -> Result<(), ParseError> {
+        let budget = &mut self.parameter_expansion_budget;
+        budget.charge_bytes(size_of::<FunctionParameterState>(), span)?;
+        budget.charge_slice::<u32>(state.expression_graph_depths.len(), span)?;
+        budget.charge_work(state.expression_graph_depths.len(), span)?;
+        budget.charge_map_entry::<Handle<Expression>, DeferredCall>(
+            state.deferred_calls.len(),
+            span,
+        )?;
+        budget.charge_work(state.deferred_calls.len(), span)?;
+        for call in state.deferred_calls.values() {
+            budget.charge_slice::<DeferredArgument>(call.arguments.len(), span)?;
+            budget.charge_work(call.arguments.len(), span)?;
+            for argument in &call.arguments {
+                if matches!(*argument, DeferredArgument::Pointer(_)) {
+                    budget.charge_slice::<PointerValue>(1, span)?;
+                }
+            }
+        }
+        budget.charge_nodes(
+            state.bound_addresses.len() + state.bound_references.len(),
+            span,
+        )?;
+        budget.charge_slice::<(BoundAddress, Span)>(state.bound_addresses.len(), span)?;
+        budget.charge_work(state.bound_addresses.len(), span)?;
+        for (_, address) in state.bound_addresses.iter() {
+            budget.charge_slice::<reference_bindings::AddressProjection>(
+                address.projections.len(),
+                span,
+            )?;
+            budget.charge_work(address.projections.len(), span)?;
+        }
+        budget.charge_map_entry::<BoundAddress, Handle<BoundAddress>>(
+            state.bound_address_indices.len(),
+            span,
+        )?;
+        budget.charge_work(state.bound_address_indices.len(), span)?;
+        for address in state.bound_address_indices.keys() {
+            budget.charge_slice::<reference_bindings::AddressProjection>(
+                address.projections.len(),
+                span,
+            )?;
+            budget.charge_work(address.projections.len(), span)?;
+        }
+        budget.charge_slice::<(BoundReference, Span)>(state.bound_references.len(), span)?;
+        budget.charge_work(state.bound_references.len(), span)?;
+        for (_, reference) in state.bound_references.iter() {
+            budget
+                .charge_slice::<reference_bindings::BoundTarget>(reference.targets.len(), span)?;
+            budget.charge_work(reference.targets.len(), span)?;
+        }
+        self.inventory_pointer_state(&state.pointers, span)
+    }
+
     pub(super) fn validate_parameter_templates(
         &mut self,
         order: &[Handle<Function>],
@@ -211,6 +269,24 @@ impl Parser<'_> {
         let span = order.first().map_or(Span::default(), |&function| {
             self.module.functions.get_span(function)
         });
+        for &handle in order {
+            if let Some(state) = self.parameter_states.remove(&handle) {
+                let function = core::mem::take(&mut self.module.functions[handle]);
+                self.validate_pointer_state(
+                    &state,
+                    &function,
+                    self.module.functions.get_span(handle),
+                )?;
+                self.module.functions[handle] = function;
+                self.parameter_states.insert(handle, state);
+            }
+        }
+        if let Some(state) = self.kernel_parameter_state.take() {
+            let function = core::mem::take(&mut self.module.entry_points[0].function);
+            self.validate_pointer_state(&state, &function, span)?;
+            self.module.entry_points[0].function = function;
+            self.kernel_parameter_state = Some(state);
+        }
         self.parameter_expansion_budget
             .inventory_module(&self.module, span)?;
         let mut validation = self.module.clone();

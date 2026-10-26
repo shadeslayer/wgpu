@@ -17,7 +17,7 @@ impl Parser<'_> {
             self.discard_result(result)?;
             result = self.expression_result(0)?;
             if let ExpressionResult::Value(ref mut value) = result {
-                value.set_constant(value.constant().after(earlier));
+                self.sequence_value(value, earlier)?;
             }
         }
         Ok(result)
@@ -180,15 +180,18 @@ impl Parser<'_> {
         }
         if matches!(token.0, Token::Operation('-' | '+' | '!' | '~' | '*' | '&')) {
             self.lexer.next()?;
-            let value = self.expression(UNARY_PRECEDENCE)?;
+            let value = if token.0 == Token::Operation('&') {
+                self.address_operand()?
+            } else {
+                self.expression(UNARY_PRECEDENCE)?
+            };
             if self.is_source_class(value.ty()) {
                 return self.unary_operator(token.0, value, token.1);
             }
-            if matches!(token.0, Token::Operation('*' | '&')) {
-                return Err(ParseError {
-                    message: String::from("builtin pointer operators are unsupported"),
-                    span: token.1,
-                });
+            if matches!(token.0, Token::Operation('*' | '&'))
+                || (token.0 == Token::Operation('+') && self.is_pointer_operand(&value))
+            {
+                return self.pointer_operator(token.0, value, token.1);
             }
             if token.0 == Token::Operation('!') {
                 let value = self.truthy(value)?;
@@ -335,6 +338,9 @@ impl Parser<'_> {
                     span: token.1,
                 })?;
                 let (pointer, ty, writable, span, constant) = match symbol {
+                    Symbol::Pointer(pointer) => {
+                        return self.pointer_symbol_value(pointer, token.1);
+                    }
                     Symbol::PendingReference => {
                         return Err(ParseError {
                             message: String::from(
@@ -376,6 +382,11 @@ impl Parser<'_> {
                         ty,
                         writable,
                     } => {
+                        if self.function.address_operand
+                            || self.lexer.peek()?.0 != Token::Paren('[')
+                        {
+                            return self.borrowed_array_value(pointer, writable, token.1);
+                        }
                         let (pointer, ty, is_discardable) =
                             self.array_element(pointer, ty, token.1)?;
                         (
@@ -433,6 +444,14 @@ impl Parser<'_> {
         }
     }
 
+    fn address_operand(&mut self) -> Result<ExpressionValue, ParseError> {
+        let parent = self.function.address_operand;
+        self.function.address_operand = true;
+        let value = self.expression(UNARY_PRECEDENCE);
+        self.function.address_operand = parent;
+        value
+    }
+
     pub(super) fn truthy(&mut self, value: ExpressionValue) -> Result<Value, ParseError> {
         let value = self.rvalue(value)?;
         let scalar = self.require_scalar_type(&value.ty, value.span)?;
@@ -477,7 +496,7 @@ impl Parser<'_> {
                 .builtin_logical(left, operator, |parser| parser.expression(precedence + 1))
                 .map(Into::into);
         }
-        if self.has_reference_candidate(name) {
+        if self.has_indirect_candidate(name) {
             let (right, right_body) =
                 self.capture_block(|parser| parser.expression(precedence + 1))?;
             if self.is_source_class(left.ty()) || self.is_source_class(right.ty()) {

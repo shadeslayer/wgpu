@@ -120,9 +120,16 @@ fn cuda_operator_functions_share_names_without_inventing_other_arities() {
         rejected(&format!(
             "{BOX} {unary} __global__ void kernel() {{ Box value{{1}}; value {symbol} value; }}"
         ));
-        rejected(&format!(
-            "{BOX} {binary} __global__ void kernel() {{ Box value{{1}}; {symbol}value; }}"
-        ));
+        let unary_expression =
+            format!("{BOX} {binary} __global__ void kernel() {{ Box value{{1}}; {symbol}value; }}");
+        if symbol == "&" {
+            validate(&unary_expression);
+            rejected(&format!(
+                "{BOX} {binary} __global__ void kernel() {{ Box value{{1}}; operator&(value); }}"
+            ));
+        } else {
+            rejected(&unary_expression);
+        }
     }
 }
 
@@ -227,9 +234,8 @@ fn cuda_operator_functions_do_not_change_scalar_builtin_operations() {
     source.push_str("__global__ void kernel(unsigned *out, int input) { constexpr int Count = 1 + 2 * 3; int values[Count]{}; out[0] = input + 3; out[1] = input - 3; out[2] = input * 3; out[3] = input / 3; out[4] = input % 3; out[5] = input & 3; out[6] = input | 3; out[7] = input ^ 3; out[8] = input << 2; out[9] = input >> 2; out[10] = +input; out[11] = -input; out[12] = ~input; out[13] = !input; out[14] = true + true; out[15] = 0xffffffffu + 1u; out[16] = values[6]; }");
     let (module, _) = validate(&source);
     assert!(calls(&module.entry_points[0].function).is_empty());
-    for symbol in ["*", "&"] {
-        rejected(&format!("{BOX} __device__ Box operator{symbol}(Box value) {{ return value; }} __global__ void kernel(int input) {{ {symbol}input; }}"));
-    }
+    rejected(&format!("{BOX} __device__ Box operator*(Box value) {{ return value; }} __global__ void kernel(int input) {{ *input; }}"));
+    validate(&format!("{BOX} __device__ Box operator&(Box value) {{ return value; }} __global__ void kernel(int input) {{ &input; }}"));
 }
 
 #[test]
@@ -328,7 +334,7 @@ fn cuda_operator_functions_class_prefix_address_and_dereference_are_value_calls(
 }
 
 #[test]
-fn cuda_operator_functions_reject_pointer_signatures_reference_results_and_members() {
+fn cuda_operator_functions_reject_reference_results_and_invalid_operator_signatures() {
     validate(&format!("{BOX} __device__ Box operator&(Box &value) {{ ++value.value; return value; }} __global__ void kernel(int *out) {{ Box value{{3}}; out[0] = (&value).value; }}"));
     for declaration in [
         "__device__ Box operator*(Box *value) { return value[0]; }",
@@ -342,6 +348,7 @@ fn cuda_operator_functions_reject_pointer_signatures_reference_results_and_membe
         ));
     }
     rejected("struct Box { int value; __device__ int operator*() { return value; } }; __global__ void kernel() {}");
+    validate(&format!("{BOX} __device__ Box operator+(Box *first, Box second) {{ return second; }} __global__ void kernel() {{ Box value{{3}}; operator+(&value, value); }}"));
 }
 
 #[test]

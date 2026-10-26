@@ -258,12 +258,14 @@ fn cuda_vector_resources_keep_general_pointer_and_kernel_value_forms_unsupported
         "__global__ void bad(float3 &value) {}",
         "__global__ void bad(float3 value[2]) {}",
         "__global__ void bad(double2 *value) {}",
-        "__device__ float3 bad(float3 *input) { return input[0]; } __global__ void kernel() {}",
         "__global__ void bad(const float3 *input, float3 *output) { output = input; }",
-        "__global__ void bad(float3 *output) { output + 1; }",
     ] {
         rejected(source);
     }
+    validate(
+        "__device__ float3 bad(float3 *input) { return input[0]; } __global__ void kernel() {}",
+    );
+    validate("__global__ void bad(float3 *output) { output + 1; }");
 }
 
 #[test]

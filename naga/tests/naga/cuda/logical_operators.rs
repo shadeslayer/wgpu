@@ -237,8 +237,8 @@ fn cuda_logical_operators_require_two_parameters_and_a_source_class() {
         ] {
             rejected(&format!("{BOX} __device__ int operator{symbol}({parameters}) {{ return 1; }} __global__ void kernel() {{}}"));
         }
+        validate(&format!("{BOX} __device__ int operator{symbol}(Box *left, Box right) {{ return 1; }} __global__ void kernel() {{}}"));
         for declaration in [
-            format!("__device__ int operator{symbol}(Box *left, Box right) {{ return 1; }}"),
             format!("__device__ int operator{symbol}(Box left, int right = 2) {{ return 1; }}"),
             format!("__global__ void operator{symbol}(Box left, Box right) {{}}"),
         ] {

@@ -8,6 +8,10 @@ impl Parser<'_> {
                 message: String::from("cannot modify a const value"),
                 span: reference.span,
             }),
+            ExpressionValue::Pointer(pointer) => Err(ParseError {
+                message: String::from("pointer reassignment and increment are unsupported"),
+                span: pointer.span,
+            }),
             ExpressionValue::Plain(value) => Err(ParseError {
                 message: String::from("update requires a modifiable lvalue"),
                 span: value.span,

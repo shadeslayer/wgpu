@@ -259,7 +259,6 @@ fn cuda_operator_addition_does_not_enable_neighboring_operator_syntax() {
     }
     for declaration in [
         "__global__ void operator+(int2 left, int2 right) {}",
-        "__device__ int2 operator+(int2 *left, int2 right) { return right; }",
         "__device__ int2 operator+(int2 left, int right = 2) { return left; }",
         "__device__ int2 operator+=(int2 left, int2 right) { return left; }",
     ] {
@@ -274,6 +273,7 @@ fn cuda_operator_addition_does_not_enable_neighboring_operator_syntax() {
     ] {
         validate(&format!("{declaration} __global__ void kernel() {{}}"));
     }
+    validate("__device__ int2 operator+(int2 *left, int2 right) { return right; } __global__ void kernel() {}");
 }
 
 #[test]

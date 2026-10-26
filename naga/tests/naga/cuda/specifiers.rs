@@ -354,10 +354,12 @@ fn cuda_recognized_inlining_hints_are_not_available_as_names() {
 
 #[test]
 fn cuda_function_specifiers_preserve_unsupported_signatures_and_bodies() {
+    validate(
+        "static __device__ int helper(int *value) { return value[0]; } __global__ void kernel() {}",
+    );
     for source in [
         "static __host__ int helper() { return 1; } __global__ void kernel() {}",
         "__host__ __forceinline__ int helper() { return 1; } __global__ void kernel() {}",
-        "static __device__ int helper(int *value) { return value[0]; } __global__ void kernel() {}",
         "static __device__ int *helper(int value) { return value; } __global__ void kernel() {}",
         "__device__ __forceinline__ int helper(int value) { return helper(value); } __global__ void kernel() {}",
         "static __device__ int helper(int value) { return value; } static __device__ int helper(int other) { return other; } __global__ void kernel() {}",

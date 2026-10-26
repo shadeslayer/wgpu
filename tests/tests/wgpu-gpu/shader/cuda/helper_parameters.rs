@@ -3,7 +3,12 @@ use super::{module_case, ShaderBuffer, ShaderTest};
 const SENTINEL: u32 = 0xdead_beef;
 
 pub(super) fn cases() -> Vec<ShaderTest> {
-    vec![live_aliases(), argument_capture(), address_spaces()]
+    vec![
+        live_aliases(),
+        argument_capture(),
+        address_spaces(),
+        pointer_branch_captures(),
+    ]
 }
 
 fn live_aliases() -> ShaderTest {
@@ -144,6 +149,59 @@ __device__ unsigned position(unsigned &destination) { destination = threadIdx.x 
                 1,
                 wgpu::BufferBindingType::Storage { read_only: true },
                 &[1, 10, 20, 2, 11, 21, 3, 12, 22, 4, 13, 23, SENTINEL, SENTINEL, SENTINEL, SENTINEL, SENTINEL, SENTINEL, SENTINEL, SENTINEL],
+            ),
+        ],
+        0,
+        [1, 1, 1],
+    )
+}
+
+fn pointer_branch_captures() -> ShaderTest {
+    let expected = [5, 5, 19, 11, SENTINEL, SENTINEL, SENTINEL, SENTINEL];
+    module_case(
+        "saved pointer references across branches and selected fields",
+        r#"struct Record { int first; int second; };
+
+__device__ int read_saved(int *values, bool choose) {
+    int &saved = values[1];
+    if (choose) {
+        return saved;
+    } else {
+        return saved;
+    }
+}
+
+__device__ int read_value(const int *value) { return *value; }
+
+__device__ int choose_field(Record *values, bool choose) {
+    Record &saved = values[1];
+    int &selected = choose ? saved.first : saved.second;
+    return read_value(&selected);
+}
+
+__global__ void pointer_branch_captures(unsigned *out, const unsigned *selection) {
+    int values[3]{3, 5, 7};
+    out[0] = unsigned(read_saved(values, bool(selection[0])));
+    out[1] = unsigned(read_saved(values, bool(selection[1])));
+    Record records[2]{{3, 5}, {11, 19}};
+    out[2] = unsigned(choose_field(records, bool(selection[0])));
+    out[3] = unsigned(choose_field(records, bool(selection[1])));
+}
+"#,
+        [1, 1, 1],
+        &expected,
+    )
+    .module_buffers(
+        vec![
+            ShaderBuffer::new(
+                0,
+                wgpu::BufferBindingType::Storage { read_only: false },
+                &[SENTINEL; 8],
+            ),
+            ShaderBuffer::new(
+                1,
+                wgpu::BufferBindingType::Storage { read_only: true },
+                &[0, 1, SENTINEL, SENTINEL],
             ),
         ],
         0,

@@ -211,7 +211,7 @@ impl<'a> Parser<'a> {
         Ok(self.function.bound_references[handle].clone())
     }
 
-    fn freeze_reference_index(
+    pub(super) fn freeze_reference_index(
         &mut self,
         index: Handle<Expression>,
         span: Span,
@@ -313,7 +313,7 @@ impl<'a> Parser<'a> {
         Ok(pointer)
     }
 
-    fn with_bound_target(
+    pub(super) fn with_bound_target(
         &mut self,
         handle: Handle<BoundReference>,
         span: Span,
@@ -405,6 +405,11 @@ impl<'a> Parser<'a> {
         let span = reference.span;
         self.charge_reference_binding(1, span)?;
         match reference.reference {
+            Reference::PointerAccess(access) => {
+                let pointer = self.validation_pointer(access, span)?;
+                let address = self.freeze_pointer_address(pointer, span)?;
+                self.retain_bound_reference(None, alloc::vec![BoundTarget { selector: address.index() as u32, address }], span)
+            }
             Reference::Bound(handle) => Ok(handle),
             Reference::Pointer(pointer) => {
                 let address = self.freeze_pointer_address(pointer, span)?;
@@ -445,7 +450,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn reference_has_static_address(
+    pub(super) fn reference_has_static_address(
         &mut self,
         reference: &ReferenceValue,
     ) -> Result<bool, ParseError> {
@@ -454,6 +459,7 @@ impl<'a> Parser<'a> {
             return Ok(false);
         }
         match reference.reference {
+            Reference::PointerAccess(_) => Ok(reference.constant.is_discardable),
             Reference::Bound(_) => Ok(true),
             Reference::Constant(_) => Ok(false),
             Reference::Pointer(mut pointer) => loop {

@@ -532,11 +532,11 @@ fn cuda_overloads_preserve_kernel_bindings_and_workgroup_configuration() {
 fn cuda_overloads_reject_malformed_and_unsupported_signatures_with_safe_spans() {
     for source in [
         "// λ\n__device__ int choose(int value) { return value; } __device__ float choose(float value,) { return value; } __global__ void kernel() {}",
-        "__device__ int choose(int value) { return value; } __device__ float choose(float *value) { return value[0]; } __global__ void kernel() {}",
         "extern \"C\" __device__ int choose(int value) { return value; } __global__ void kernel() {}",
         "__device__ int choose(int value) { return value; } __device__ float choose(float value) { return value; } __global__ void kernel() { choose(1,); }",
     ] { rejected(source); }
     validate("__device__ int choose(int value) { return value; } __device__ float choose(float value); __global__ void kernel() {}");
+    validate("__device__ int choose(int value) { return value; } __device__ float choose(float *value) { return value[0]; } __global__ void kernel() {}");
 }
 
 #[cfg(all(feature = "wgsl-in", feature = "wgsl-out"))]
