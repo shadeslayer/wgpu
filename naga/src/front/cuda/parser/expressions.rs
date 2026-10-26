@@ -127,25 +127,25 @@ impl Parser<'_> {
     fn primary(&mut self) -> Result<ExpressionResult, ParseError> {
         let mut value = self.primary_inner()?;
         loop {
-            if self.lexer.next_if(Token::Separator('.'))? {
-                let (field, span) = self.identifier()?;
-                value = ExpressionResult::Value(self.field(value.require_value()?, field, span)?);
-            } else if self.lexer.peek()?.0 == Token::Paren('[') {
-                value = ExpressionResult::Value(self.array_index(value.require_value()?)?);
-            } else if let operator @ (Token::IncrementOperation | Token::DecrementOperation) =
-                self.lexer.peek()?.0
-            {
-                let operand = value.require_value()?;
-                let span = operand.span().until(&self.lexer.peek()?.1);
-                self.lexer.next()?;
-                value = ExpressionResult::Value(self.update(
-                    operand,
-                    operator == Token::IncrementOperation,
-                    true,
-                    span,
-                )?);
-            } else {
-                break;
+            match self.lexer.peek()?.0 {
+                Token::Separator('.') | Token::Arrow => {
+                    value = self.member_access(value)?;
+                }
+                Token::Paren('[') => {
+                    value = ExpressionResult::Value(self.array_index(value.require_value()?)?);
+                }
+                operator @ (Token::IncrementOperation | Token::DecrementOperation) => {
+                    let operand = value.require_value()?;
+                    let span = operand.span().until(&self.lexer.peek()?.1);
+                    self.lexer.next()?;
+                    value = ExpressionResult::Value(self.update(
+                        operand,
+                        operator == Token::IncrementOperation,
+                        true,
+                        span,
+                    )?);
+                }
+                _ => break,
             }
         }
         Ok(value)

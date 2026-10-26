@@ -229,6 +229,14 @@ storage, so `*(&values[3] - 1)` can read the final element of a three-element
 array. Accesses must remain within the original object and the existing 32-bit
 buffer-index domain.
 
+Pointer member access, `pointer->field`, uses the same dereference and field
+rules as `(*pointer).field`. It supports struct fields and individual numeric
+vector components, including chained fields, array subscripts, assignments,
+updates, and reference arguments. The pointer operand is evaluated once, and
+pointee `const` remains effective throughout the member chain. An array of
+structs or vectors can decay to its first element for member access.
+Overloaded `operator->` and pointer-to-member operators remain unsupported.
+
 Single-dimensional helper array parameters, `T values[]` and `T values[N]`,
 adjust to `T*`. A written bound must be a positive integral constant expression;
 it does not constrain the argument's length. Pointer parameters and adjusted
@@ -240,6 +248,8 @@ value. Reading an unknown formal pointer through indirection, indexing,
 unary `+`, or offset arithmetic prevents a required constant expression under
 the frontend's C++20 constant-expression rules. Caller expansion does not make
 those expressions constant.
+Constant-address proofs currently cover shared storage; automatic local
+addresses cannot establish a required constant expression.
 Constant-address evaluation through a named reference currently uses a
 one-element extent. Runtime pointer forwarding retains the original array
 extent, including neighboring elements.

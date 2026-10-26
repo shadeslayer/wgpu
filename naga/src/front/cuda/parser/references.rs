@@ -1,6 +1,22 @@
 use super::*;
 
 impl Parser<'_> {
+    pub(super) fn member_access(
+        &mut self,
+        value: ExpressionResult,
+    ) -> Result<ExpressionResult, ParseError> {
+        let arrow = self.lexer.next()?.0 == Token::Arrow;
+        let (field, span) = self.identifier()?;
+        let value = value.require_value()?;
+        let value = if arrow {
+            let pointer = self.borrowed_pointer(value)?;
+            ExpressionValue::Reference(self.pointer_reference(pointer)?)
+        } else {
+            value
+        };
+        self.field(value, field, span).map(ExpressionResult::Value)
+    }
+
     pub(super) fn field(
         &mut self,
         value: ExpressionValue,

@@ -1,6 +1,7 @@
 #![cfg(feature = "cuda-in")]
 
 mod adversarial;
+mod arrow_members;
 mod barriers;
 mod bitcasts;
 mod comma;

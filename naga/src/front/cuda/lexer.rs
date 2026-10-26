@@ -17,6 +17,7 @@ pub(super) enum Token<'a> {
     AssignmentOperation(char),
     IncrementOperation,
     DecrementOperation,
+    Arrow,
     Trivia,
     End,
 }
@@ -177,6 +178,7 @@ impl<'a> Lexer<'a> {
             Token::AssignmentOperation(character) => format!("expected `{character}=`"),
             Token::IncrementOperation => String::from("expected `++`"),
             Token::DecrementOperation => String::from("expected `--`"),
+            Token::Arrow => String::from("expected `->`"),
             Token::End => String::from("expected end of source"),
             _ => format!("expected {expected:?}"),
         };
@@ -278,10 +280,10 @@ fn consume_token(input: &str) -> Result<(Token<'_>, &str), ParseError> {
             }),
         };
     }
-    if input.starts_with("->") {
+    if input.starts_with("->*") {
         return Err(ParseError {
             message: String::from("unsupported CUDA operator"),
-            span: Span::from(0..2),
+            span: Span::from(0..3),
         });
     }
     let rest = &input[character.len_utf8()..];
@@ -301,14 +303,20 @@ fn consume_token(input: &str) -> Result<(Token<'_>, &str), ParseError> {
                 (Token::Paren(character), rest)
             }
         }
-        '+' | '-' => {
-            if let Some(rest) = rest.strip_prefix(character) {
-                let token = if character == '+' {
-                    Token::IncrementOperation
-                } else {
-                    Token::DecrementOperation
-                };
-                (token, rest)
+        '-' => {
+            if let Some(rest) = rest.strip_prefix('>') {
+                (Token::Arrow, rest)
+            } else if let Some(rest) = rest.strip_prefix('-') {
+                (Token::DecrementOperation, rest)
+            } else if let Some(rest) = rest.strip_prefix('=') {
+                (Token::AssignmentOperation(character), rest)
+            } else {
+                (Token::Operation(character), rest)
+            }
+        }
+        '+' => {
+            if let Some(rest) = rest.strip_prefix('+') {
+                (Token::IncrementOperation, rest)
             } else if let Some(rest) = rest.strip_prefix('=') {
                 (Token::AssignmentOperation(character), rest)
             } else {
@@ -514,7 +522,7 @@ mod tests {
     fn cuda_scanner_errors_rebase_after_multibyte_trivia() {
         for (tail, expected) in [
             ("漢", "漢"),
-            ("->field", "->"),
+            ("->*field", "->*"),
             ("/* unterminated", "/* unterminated"),
             ("\"unterminated", "\"unterminated"),
             ("\"x\\q\"", "\"x\\"),
@@ -706,11 +714,123 @@ mod tests {
     }
 
     #[test]
-    fn cuda_arrow_operator_remains_unsupported() {
-        let source = "pointer->field";
-        let error = lex(source).unwrap_err();
+    fn cuda_arrow_tokens_preserve_spans_and_checkpoints() {
+        for source in ["pointer->field", "pointer /* 漢 */ -> /* gap */ field"] {
+            let mut lexer = Lexer::new(source).unwrap();
+            assert_eq!(lexer.next().unwrap().0, Token::Word("pointer"));
+            let before = lexer.input;
+            let last_end = lexer.last_end_offset;
+            let arrow = lexer.peek().unwrap();
+            assert_eq!(arrow.0, Token::Arrow);
+            assert_eq!(&source[arrow.1.to_range().unwrap()], "->");
+            assert_eq!(lexer.peek().unwrap(), arrow);
+            assert_eq!(lexer.input, before);
+            assert_eq!(lexer.last_end_offset, last_end);
+            let checkpoint = lexer.clone();
+            assert!(!lexer.next_if(Token::Operation('-')).unwrap());
+            assert_eq!(lexer.expect_span(Token::Arrow).unwrap(), arrow.1);
+            assert_eq!(lexer.next().unwrap().0, Token::Word("field"));
+            assert_eq!(lexer.next().unwrap().0, Token::End);
+            lexer = checkpoint;
+            assert_eq!(lexer.next().unwrap(), arrow);
+            assert_eq!(lexer.next().unwrap().0, Token::Word("field"));
+        }
+    }
+
+    #[test]
+    fn cuda_arrow_tokens_use_maximal_munch() {
+        let source = "-> -- -= - > ---> ->>";
+        let tokens = lex(source).unwrap();
+        assert_eq!(
+            tokens
+                .iter()
+                .map(|token| token.0)
+                .collect::<alloc::vec::Vec<_>>(),
+            [
+                Token::Arrow,
+                Token::DecrementOperation,
+                Token::AssignmentOperation('-'),
+                Token::Operation('-'),
+                Token::Paren('>'),
+                Token::DecrementOperation,
+                Token::Arrow,
+                Token::Arrow,
+                Token::Paren('>'),
+                Token::End,
+            ]
+        );
+        for (token, spelling) in tokens
+            .iter()
+            .zip(["->", "--", "-=", "-", ">", "--", "->", "->", ">", ""])
+        {
+            assert_eq!(&source[token.1.to_range().unwrap()], spelling);
+        }
+    }
+
+    #[test]
+    fn cuda_arrow_tokens_do_not_join_across_trivia() {
+        for separator in [" ", "/**/", "/* 漢 */", "// split\n"] {
+            let source = alloc::format!("pointer -{separator}>field");
+            let tokens = lex(&source).unwrap();
+            assert_eq!(
+                tokens
+                    .iter()
+                    .map(|token| token.0)
+                    .collect::<alloc::vec::Vec<_>>(),
+                [
+                    Token::Word("pointer"),
+                    Token::Operation('-'),
+                    Token::Paren('>'),
+                    Token::Word("field"),
+                    Token::End,
+                ]
+            );
+            assert_eq!(&source[tokens[1].1.to_range().unwrap()], "-");
+            assert_eq!(&source[tokens[2].1.to_range().unwrap()], ">");
+        }
+    }
+
+    #[test]
+    fn cuda_arrow_tokens_preserve_prepared_macro_boundaries() {
+        let source = "#define FIELD(pointer) pointer->field\n/* 漢 */ FIELD(value)";
+        let prepared = super::super::preprocess::prepare(source).unwrap().unwrap();
+        let mut lexer = Lexer::from_prepared(source, &prepared);
+        assert_eq!(lexer.next().unwrap().0, Token::Word("value"));
+        let arrow = lexer.peek().unwrap();
+        assert_eq!(arrow.0, Token::Arrow);
+        assert_eq!(&source[arrow.1.to_range().unwrap()], "FIELD(value)");
+        let checkpoint = lexer.clone();
+        assert_eq!(lexer.next().unwrap(), arrow);
+        assert_eq!(lexer.next().unwrap().0, Token::Word("field"));
+        lexer = checkpoint;
+        assert_eq!(lexer.expect_span(Token::Arrow).unwrap(), arrow.1);
+        assert_eq!(lexer.next().unwrap().0, Token::Word("field"));
+        assert_eq!(lexer.next().unwrap().0, Token::End);
+
+        let source = "#define MINUS -\npointer MINUS>field";
+        let prepared = super::super::preprocess::prepare(source).unwrap().unwrap();
+        let mut lexer = Lexer::from_prepared(source, &prepared);
+        assert_eq!(lexer.next().unwrap().0, Token::Word("pointer"));
+        assert_eq!(lexer.next().unwrap().0, Token::Operation('-'));
+        assert_eq!(lexer.next().unwrap().0, Token::Paren('>'));
+        assert_eq!(lexer.next().unwrap().0, Token::Word("field"));
+        assert_eq!(lexer.next().unwrap().0, Token::End);
+    }
+
+    #[test]
+    fn cuda_pointer_to_member_operator_remains_unsupported() {
+        for source in ["pointer->*field", "pointer /* 漢 */ ->*field"] {
+            let error = lex(source).unwrap_err();
+            assert_eq!(error.message, "unsupported CUDA operator");
+            assert_eq!(&source[error.span.to_range().unwrap()], "->*");
+        }
+        let source = "#define MEMBER ->*\npointer MEMBER field";
+        let prepared = super::super::preprocess::prepare(source).unwrap().unwrap();
+        let mut lexer = Lexer::from_prepared(source, &prepared);
+        assert_eq!(lexer.next().unwrap().0, Token::Word("pointer"));
+        let error = lexer.next().unwrap_err();
         assert_eq!(error.message, "unsupported CUDA operator");
-        assert_eq!(&source[error.span.to_range().unwrap()], "->");
+        assert_eq!(&source[error.span.to_range().unwrap()], "MEMBER");
     }
 
     #[test]
